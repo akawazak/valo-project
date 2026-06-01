@@ -6,7 +6,7 @@ ValoVault is a premium desktop application that allows you to create, save, and 
 
 ## Download
 
-**[Download ValoVault v0.4.0 for Windows (64-bit)](https://github.com/akawazak/valo-project/releases/download/v0.4.0/ValoVault-Setup-x64.msi)**
+**[Download ValoVault v0.4.0 for Windows (64-bit)](https://github.com/akawazak/valo-project/releases/download/v0.4.0/ValoVault_0.4.0_x64_en-US.msi)**
 
 See all releases: [github.com/akawazak/valo-project/releases](https://github.com/akawazak/valo-project/releases)
 
