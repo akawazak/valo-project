@@ -181,6 +181,200 @@ a { color: inherit; text-decoration: none; }
   min-width: 0;
 }
 
+.account-dropdown {
+  position: relative;
+  min-width: 0;
+  max-width: 220px;
+}
+
+.account-dropdown-trigger,
+.account-dropdown-add,
+.theme-toggle-btn {
+  min-height: 34px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(17, 27, 35, 0.78);
+  color: #a8bac6;
+  padding: 0.48rem 0.75rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+  cursor: pointer;
+  transition: filter 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.account-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  max-width: 220px;
+}
+
+.account-dropdown-trigger.has-account {
+  border-color: rgba(255, 64, 87, 0.35);
+}
+
+.account-dropdown-trigger.open,
+.account-dropdown-trigger:hover {
+  filter: brightness(1.12);
+  border-color: rgba(255, 64, 87, 0.45);
+  box-shadow: 0 0 20px rgba(255, 64, 87, 0.1);
+}
+
+.account-dropdown-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #eaf2f0;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 0.72rem;
+}
+
+.account-dropdown-chevron {
+  flex-shrink: 0;
+  color: #718393;
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.account-dropdown-trigger.open .account-dropdown-chevron {
+  transform: rotate(180deg);
+}
+
+.account-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 1200;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 2rem));
+  border: 1px solid rgba(255, 64, 87, 0.25);
+  background: rgba(10, 16, 22, 0.98);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+  backdrop-filter: blur(12px);
+  padding: 0.35rem;
+}
+
+.account-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 4px;
+}
+
+.account-dropdown-item.active {
+  background: rgba(255, 64, 87, 0.08);
+}
+
+.account-dropdown-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: transparent;
+  color: #eaf2f0;
+  padding: 0.55rem 0.5rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-dropdown-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-dropdown-select small {
+  color: #718393;
+  flex-shrink: 0;
+}
+
+.account-dropdown-select:hover {
+  color: #fff;
+}
+
+.account-dropdown-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #718393;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.account-dropdown-remove:hover {
+  color: #fff;
+  background: rgba(255, 70, 85, 0.25);
+}
+
+.account-dropdown-empty {
+  padding: 0.65rem 0.5rem;
+  color: #718393;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+}
+
+.account-dropdown-add {
+  width: 100%;
+  margin-top: 0.25rem;
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  color: #fff;
+}
+
+.account-dropdown-add:hover {
+  filter: brightness(1.12);
+}
+
+.topbar-version {
+  color: #718393;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.topbar-update-btn {
+  min-height: 34px;
+  border: 1px solid rgba(255, 196, 64, 0.45);
+  background: rgba(255, 196, 64, 0.12);
+  color: #ffd978;
+  padding: 0.48rem 0.75rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.topbar-update-btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.topbar-update-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .account-pill,
 .no-account-pill,
 .connect-account-btn,
@@ -1299,7 +1493,8 @@ a { color: inherit; text-decoration: none; }
   .app-main-content { padding-inline: 0.85rem; }
   .store-grid, .accessory-grid, .spray-slot-grid { grid-template-columns: 1fr; }
   .topbar-inner { padding: 0.75rem 0; }
-  .account-pill { max-width: 140px; }
+  .account-dropdown { max-width: 160px; }
+  .account-dropdown-trigger { max-width: 160px; }
 }
 
 /* ── Bootstrap overrides (minimal) ── */

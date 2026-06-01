@@ -1,64 +1,82 @@
-name: 'publish'
+name: release
 
 on:
   push:
-    branches:
-      - release
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   publish-tauri:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: 'windows-latest'
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: setup node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
 
-      - name: setup go
+      - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: 'backend/go.mod'
+          go-version-file: backend/go.mod
 
-      - name: backend build
-        working-directory: ./backend
+      - name: Build backend sidecar
+        working-directory: backend
         run: go build -o ./tmp/valovault-backend-x86_64-pc-windows-msvc.exe .
 
-      - name: install Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: install frontend dependencies
+      - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install # change this to npm, pnpm or bun depending on which one you use.
-
-      - name: install relic
-        run: go install github.com/sassoftware/relic/v8@latest
+        run: npm install
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
-          projectPath: ./frontend
-          tagName: v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
-          releaseName: 'v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
+          projectPath: frontend
+          tagName: v__VERSION__
+          releaseName: ValoVault v__VERSION__
+          releaseBody: |
+            ## ValoVault v__VERSION__
+
+            ### Download
+            - **Portable (recommended):** `ValoVault-Portable-x64.zip` — extract anywhere and run `ValoVault.exe`
+            - **Installer:** `ValoVault_*_x64-setup.exe` — per-user install, no admin required
+
+            ### Auto-update
+            Installed copies check for updates automatically on launch.
+          releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+
+      - name: Package portable build
+        shell: pwsh
+        run: |
+          $release = "frontend/src-tauri/target/release"
+          $portable = "$release/ValoVault-Portable"
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+
+          $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend' } | Select-Object -First 1
+          if (-not $exe) { throw "App executable not found in $release" }
+
+          Copy-Item $exe.FullName "$portable/ValoVault.exe" -Force
+          Copy-Item "$release/valovault-backend-x86_64-pc-windows-msvc.exe" "$portable/" -Force
+          if (Test-Path "$release/resources") {
+            Copy-Item "$release/resources" "$portable/resources" -Recurse -Force
+          }
+
+          Compress-Archive -Path "$portable/*" -DestinationPath "ValoVault-Portable-x64.zip" -Force
+
+      - name: Upload portable zip
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.tauri.outputs.releaseTag }}" "ValoVault-Portable-x64.zip" --repo akawazak/valo-project --clobber

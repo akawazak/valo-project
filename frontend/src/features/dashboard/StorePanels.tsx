@@ -333,7 +333,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     <h4 className="mb-2 text-danger">⚠ Riot Session Expired</h4>
                     <p className="text-muted small max-w-lg mb-0">
                         The session tokens for <strong>{activeAccount.gameName}#{activeAccount.tagLine}</strong> have expired.
-                        Riot Games requires re-authentication every few hours. Please click <strong>+ Account</strong> in the top bar to reconnect.
+                        Riot Games requires re-authentication every few hours. Open the account menu in the top bar to reconnect.
                     </p>
                 </div>
             )}
