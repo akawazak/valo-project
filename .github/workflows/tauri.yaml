@@ -63,11 +63,12 @@ jobs:
           $portable = "$release/ValoVault-Portable"
           New-Item -ItemType Directory -Force -Path $portable | Out-Null
 
-          $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend' } | Select-Object -First 1
+          $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } | Select-Object -First 1
           if (-not $exe) { throw "App executable not found in $release" }
 
           Copy-Item $exe.FullName "$portable/ValoVault.exe" -Force
-          Copy-Item "$release/valovault-backend-x86_64-pc-windows-msvc.exe" "$portable/" -Force
+          Copy-Item "backend/tmp/valovault-backend-x86_64-pc-windows-msvc.exe" "$portable/" -Force
+          Get-ChildItem "$release" -Filter "*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination $portable -Force
           if (Test-Path "$release/resources") {
             Copy-Item "$release/resources" "$portable/resources" -Recurse -Force
           }
