@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { applyLoadout } from '@/services/api';
+import { applyLoadout, ApplyLoadoutRequest } from '@/services/api';
 import { LocalClientError } from '@/lib/errors';
-import { LoadoutItemV1 } from '@/lib/types';
 
 export function useLoadout() {
     const [showToast, setShowToast] = useState(false);
@@ -9,9 +8,9 @@ export function useLoadout() {
     const [showErrorModal, setShowErrorModal] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
 
-    const handleApplyLoadout = async (loadout: Record<string, LoadoutItemV1>, presetName: string) => {
+    const handleApplyLoadout = async (request: ApplyLoadoutRequest, presetName: string) => {
         try {
-            await applyLoadout(loadout);
+            await applyLoadout(request);
             setToastMessage(`Successfully applied ${presetName}.`);
             setShowToast(true);
         } catch (error) {
@@ -43,6 +42,8 @@ export function useLoadout() {
         handleCloseErrorModal,
         handleCloseToast,
         setShowErrorModal,
-        setErrorMessage
+        setErrorMessage,
+        setShowToast,
+        setToastMessage
     };
 }

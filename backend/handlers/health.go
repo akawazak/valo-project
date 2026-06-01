@@ -5,11 +5,25 @@ import (
 )
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.Val.GetHelp(); err != nil {
-		h.Ticker.Stop()
+	h.mu.RLock()
+	val := h.Val
+	ticker := h.Ticker
+	h.mu.RUnlock()
+
+	if val == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if _, err := val.GetHelp(); err != nil {
+		if ticker != nil {
+			ticker.Stop()
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	h.Ticker.Start()
+	if ticker != nil {
+		ticker.Start()
+	}
 	w.WriteHeader(http.StatusOK)
 }

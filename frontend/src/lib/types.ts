@@ -5,6 +5,16 @@ export interface Agent {
     isBaseContent: boolean;
 }
 
+export interface IdentityV1 {
+    playerCardId: string;
+    playerTitleId: string;
+}
+
+export interface SpraySlot {
+    equipSlotId: string;
+    sprayId: string;
+}
+
 export interface Preset {
     uuid: string;
     parentUuid?: string;
@@ -12,6 +22,8 @@ export interface Preset {
     name: string;
     loadout: Record<string, LoadoutItemV1>; // {[weaponId]: LoadoutItem}
     agents?: string[];
+    identity?: IdentityV1;
+    sprays?: SpraySlot[];
 }
 
 export function isVariant(p: Preset | undefined | null) {
@@ -93,4 +105,90 @@ export interface ContentTier {
     displayName: string;
     rank: number;
     displayIcon: string;
+    highlightColor?: string;
+}
+
+export interface StorefrontReward {
+    ItemTypeID: string;
+    ItemID: string;
+    Quantity: number;
+}
+
+export interface StorefrontOffer {
+    OfferID: string;
+    IsDirectPurchase?: boolean;
+    Cost?: Record<string, number>;
+    Rewards?: StorefrontReward[];
+}
+
+export interface AccessoryStoreOffer {
+    Offer: StorefrontOffer;
+    ContractID?: string;
+}
+
+export interface StorefrontBonusOffer {
+    BonusOfferID?: string;
+    Offer: StorefrontOffer;
+    DiscountPercent?: number;
+    DiscountCosts?: Record<string, number>;
+}
+
+export interface StorefrontBundleItem {
+    Item: StorefrontReward;
+    BasePrice: number;
+    DiscountedPrice?: number;
+}
+
+export interface StorefrontFeaturedBundle {
+    Bundle?: { Items?: StorefrontBundleItem[]; DataAssetID?: string; DurationRemainingInSeconds?: number };
+    Bundles?: Array<{ Items?: StorefrontBundleItem[]; DurationRemainingInSeconds?: number; DataAssetID?: string }>;
+}
+
+export interface BundleInfo {
+    uuid: string;
+    displayName: string;
+    displayIcon: string;
+    displayIcon2: string;
+    description: string;
+}
+
+export interface StorefrontResponse {
+    SkinsPanelLayout?: {
+        SingleItemOffers?: string[];
+        SingleItemStoreOffers?: StorefrontOffer[];
+        SingleItemOffersRemainingDurationInSeconds?: number;
+    };
+    BonusStore?: {
+        BonusStoreOffers?: StorefrontBonusOffer[];
+        BonusStoreRemainingDurationInSeconds?: number;
+    };
+    FeaturedBundle?: StorefrontFeaturedBundle;
+    AccessoryStore?: {
+        AccessoryStoreOffers?: AccessoryStoreOffer[];
+        StorefrontID?: string;
+    };
+}
+
+export interface SprayAsset {
+    uuid: string;
+    displayName: string;
+    displayIcon: string;
+    fullIcon?: string;
+    fullTransparentIcon?: string;
+}
+
+export interface PlayerCardAsset {
+    uuid: string;
+    displayName: string;
+    displayIcon: string;
+    smallArt: string;
+    wideArt: string;
+    largeArt: string;
+}
+
+export interface PlayerTitleAsset {
+    uuid: string;
+    displayName: string;
+    titleText: string;
+    isHiddenIfNotOwned: boolean;
 }

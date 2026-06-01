@@ -170,7 +170,22 @@ func (t *Ticker) Start() {
 
 			selectedVariant := variants[rand.IntN(variantAmount)]
 			maps.Copy(selectedPreset.Loadout, selectedVariant.Loadout)
-			if err := presets.Apply(t.Val, selectedPreset.Loadout); err != nil {
+
+			var identity *presets.IdentityV1
+			if selectedVariant.Identity != nil {
+				identity = selectedVariant.Identity
+			} else if selectedPreset.Identity != nil {
+				identity = selectedPreset.Identity
+			}
+
+			var sprays []presets.SpraySlotV1
+			if len(selectedVariant.Sprays) > 0 {
+				sprays = selectedVariant.Sprays
+			} else if len(selectedPreset.Sprays) > 0 {
+				sprays = selectedPreset.Sprays
+			}
+
+			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays); err != nil {
 				slog.Error("error when applying", "err", err)
 				continue
 			}

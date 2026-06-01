@@ -1,66 +1,92 @@
 # ValoVault
 
-ValoVault is a desktop application that allows you to create, save, and apply your favorite weapon skin loadouts in VALORANT and automatically apply them to the selected agents.
+ValoVault is a premium desktop application that allows you to create, save, and apply your favorite weapon skin loadouts in VALORANT, automatically apply them to selected agents, and view your Riot Storefront (Daily Offers, Night Market, Bundles, and Wallet) without opening the game client.
 
 <img width="1666" height="937" alt="image" src="https://github.com/user-attachments/assets/f617d5d8-93b8-46e2-965e-d466f1fdad79" />
 
-https://github.com/user-attachments/assets/fbc5b524-1eb1-44cd-af85-d98b92b07e6f
+---
 
-## Features
+## ✨ Features
 
--   **Create Presets:** Save your favorite combinations of weapon skins as presets.
--   **Apply Presets:** Quickly apply a saved preset to your current loadout.
--   **Agent-Specific Presets:** Assign different presets to your favorite agents.
--   **Auto-Apply (Optional):** Enable the "Auto Select Agent" feature to automatically apply a preset when you lock in an agent in-game.
+### 🎒 Skin Loadout & Presets (Core)
+- **Create Presets:** Save your favorite combinations of weapon skins and gun buddies as custom presets.
+- **Apply Presets:** Quickly apply any saved preset to your current loadout with a single click.
+- **Agent-Specific Presets:** Assign different presets to your favorite agents.
+- **Auto-Apply (Optional):** Enable "Auto Select Agent" to automatically apply a preset when you lock in an agent in-game.
 
-## How to Use
+### 🛒 Riot Storefront Viewer (New!)
+- **Daily Offers:** View your 4 daily weapon skin offers with authentic Content Tier colored rarity cards, custom glowing borders, and tier rarity icons.
+- **Night Market Container:** A beautiful, fully styled neon cyan and pink Night Market panel with discount calculations, countdown timer, and original-vs-discounted prices.
+- **Featured Bundles:** View high-resolution promotional bundle banners and their included items (skins, cards, buddies, sprays) with their precise discounted bundle pricing.
+- **Wallet Balances:** Live display of your active Valorant Points (VP) and Radianite Points (RP) directly inside the store header.
+- **Ownership Badging:** A distinct, glowing green `OWNED` badge shows up automatically on any skin or bundle item you already own.
 
-Showcase: [YouTube](https://www.youtube.com/watch?v=IBO6WpkKm04)
+### 👥 Premium Multi-Account Panel (New!)
+- **Dynamic Navigation Sidebar:** A glassy, high-fidelity dark left-hand navigation sidebar that organizes and separates your settings.
+- **Instant Account Switcher:** Keep multiple Riot accounts connected and hot-swap between them seamlessly. Switching accounts updates the storefront, wallet, and presets instantly without jarred page reloads.
+- **Secure Local Storage:** Authentication tokens and accounts are stored securely in local app storage.
+- **Session Expiry Alerts:** Graceful `401 Session Expired` alerts tell you when it's time to reconnect, avoiding raw API errors.
+- **Account Disconnect Dialog:** A premium custom delete dialog with a "Don't ask again" option to speed up workflow.
 
-1.  **Download:** Get the latest version of ValoVault from the [GitHub Releases](https://github.com/truearken/valovault/releases) page. Download the `.msi` installer for Windows.
-2.  **Install:** Run the downloaded installer.
-3.  **Launch Valorant:** Open Valorant and log in.
-4.  **Launch ValoVault:** Open the ValoVault application. The app will automatically connect to your Valorant client.
+---
 
-## Technology Stack
+## 💖 Credits & Acknowledgements
 
-ValoVault is built with a [**Go**](https://go.dev/) backend and a web-based frontend wrapped in a native desktop application using [**Tauri**](https://tauri.app/) and [**Next.js**](https://nextjs.org/) (using [**React**](https://react.dev/)).
+ValoVault was built by combining, upgrading, and expanding two outstanding open-source projects. We express our deep appreciation to the original authors:
 
-## For Developers
+1. **[truearken/valovault](https://github.com/truearken/valovault)**  
+   The wonderful foundation for the preset manager, Go client-binding bridge, and Tauri desktop integration.
 
-Interested in contributing? Here's how to get the development environment set up.
+2. **[victorxia18/valorant-shop-checker](https://github.com/victorxia18/valorant-shop-checker)**  
+   Inspiration and basic patterns for the Riot OAuth token paste-redirect authentication flow and fetching the raw daily storefront. *(Note: All premium features including multi-account registries, live wallet balances, content tier rarity styles, Night Market container, and session-state management were built entirely from scratch for ValoVault).*
+
+---
+
+## 🚀 Setting Up Your Own Repository
+
+To dump this upgraded codebase into your own new GitHub repository:
+
+1. Create a new empty repository on [GitHub](https://github.com/new).
+2. Open your terminal in the `valovault` root directory.
+3. Update your git remote to point to your new repository:
+   ```sh
+   git remote set-url origin <YOUR_NEW_GITHUB_REPO_URL>
+   ```
+4. Push your changes:
+   ```sh
+   git add .
+   git commit -m "feat: upgrade ValoVault with premium storefront and multi-account sidebar"
+   git push -u origin main
+   ```
+
+---
+
+## 🛠️ Developer Setup
 
 ### Prerequisites
-
--   [Go](https://go.dev/doc/install)
--   [Node.js](https://nodejs.org/en/download)
--   [Tauri](https://tauri.app/start/prerequisites/)
+- [Go](https://go.dev/doc/install)
+- [Node.js](https://nodejs.org/en/download)
+- [Tauri](https://tauri.app/start/prerequisites/)
 
 ### Setup & Running
 
-1.  **Clone the repository:**
-    ```sh
-    git clone https://github.com/truearken/valovault.git
-    cd valovault
-    ```
+1. **Install frontend dependencies:**
+   ```sh
+   cd frontend
+   npm install
+   ```
 
-2.  **Install frontend dependencies:**
-    ```sh
-    cd frontend
-    npm install
-    ```
+2. **Run the Go Backend:**
+   Open a terminal in the `backend/` directory:
+   ```sh
+   go run .
+   ```
+   *(Or `air` if you have live-reloading configured)*.
 
-3.  **Run the backend:**
-    Open a new terminal in the root directory.
-    ```sh
-    cd backend && air
-    ```
-    This uses [air](https://github.com/air-verse/air) for live reloading the Go server. 
-    If not installed yet install it or run it nativily with `go run .`.
+3. **Run the Frontend (with Tauri):**
+   Open a terminal in the `frontend/` directory:
+   ```sh
+   npx tauri dev
+   ```
+   This compiles the backend, runs the Next.js development server on `http://localhost:3000`, and launches the native desktop app.
 
-4.  **Run the frontend (with Tauri):**
-    Open another terminal in the root directory.
-    ```sh
-    cd frontend && npx tauri dev
-    ```
-    This will start the Next.js development server and launch the Tauri application.

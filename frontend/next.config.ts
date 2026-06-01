@@ -1,14 +1,17 @@
 import type { NextConfig } from "next";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const isProd = process.env.NODE_ENV === 'production';
-const internalHost = process.env.TAURI_DEV_HOST || 'localhost';
+const projectRoot = dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
     output: 'export',
     images: {
         unoptimized: true,
     },
-    assetPrefix: isProd ? undefined : `http://${internalHost}:3000`,
+    turbopack: {
+        root: projectRoot,
+    },
 };
 
 export default nextConfig;

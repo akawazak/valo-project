@@ -18,25 +18,30 @@ import (
 func main() {
 	initLogger()
 
-	var val *valclient.ValClient
-	var err error
-	slog.Info("waiting for valorant to start")
-	for {
-		val, err = valclient.NewClient()
-		if err == nil {
-			slog.Info("valorant started")
-			break
+	h := handlers.NewHandler(nil)
+
+	go func() {
+		slog.Info("waiting for valorant to start locally")
+		for {
+			val, err := valclient.NewClient()
+			if err == nil {
+				slog.Info("valorant started locally")
+				h.SetLocalClient(val)
+
+				ticker := tick.NewTicker(val)
+				h.SetTicker(ticker)
+				go ticker.Start()
+				break
+			}
+			time.Sleep(5 * time.Second)
 		}
-		time.Sleep(5 * time.Second)
-	}
+	}()
 
 	settings, err := settings.Get()
 	if err != nil {
 		log.Fatalf("unable to get settings: %v", err)
 	}
 	slog.Info("found settings", "settings", settings)
-
-	h := handlers.NewHandler(val)
 
 	mux := http.NewServeMux()
 
@@ -47,14 +52,18 @@ func main() {
 	mux.HandleFunc("GET /v1/owned-skins", h.GetOwnedSkins)
 	mux.HandleFunc("GET /v1/owned-gun-buddies", h.GetOwnedGunBuddies)
 	mux.HandleFunc("GET /v1/owned-agents", h.GetOwnedAgents)
+	mux.HandleFunc("GET /v1/owned-sprays", h.GetOwnedSprays)
+	mux.HandleFunc("GET /v1/owned-cards", h.GetOwnedCards)
+	mux.HandleFunc("GET /v1/owned-titles", h.GetOwnedTitles)
 	mux.HandleFunc("GET /v1/player-loadout", h.GetPlayerLoadout)
 	mux.HandleFunc("POST /v1/apply-loadout", h.PostApplyLoadout)
 	mux.HandleFunc("GET /v1/settings", h.GetSettings)
 	mux.HandleFunc("POST /v1/settings", h.PostSettings)
 
-	ticker := tick.NewTicker(val)
-	h.SetTicker(ticker)
-	go ticker.Start()
+	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
+	mux.HandleFunc("POST /v1/auth/token", h.PostAuthToken)
+	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
+	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
 
 	slog.Info("starting server")
 	if err := http.ListenAndServe(":31719", logMiddleware(corsMiddleware(mux))); err != nil {
@@ -93,18 +102,16 @@ func logMiddleware(next http.Handler) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origins := []string{"http://localhost:3000", "tauri://localhost"}
 		origin := r.Header.Get("Origin")
-		for _, o := range origins {
-			if origin == o {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-				if r.Method == "OPTIONS" {
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				break
+		if origin == "tauri://localhost" ||
+			strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:") {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
 			}
 		}
 		next.ServeHTTP(w, r)

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Preset, LoadoutItemV1 } from '@/lib/types';
+import { Preset, LoadoutItemV1, SpraySlot } from '@/lib/types';
 import { getPlayerLoadout, savePresets } from '@/services/api';
+import { importPreset } from '@/lib/presetShare';
 
 const DEFAULT_PRESET_ID = 'default-preset';
 
@@ -75,10 +76,14 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
             case NamingMode.New:
                 newPreset.loadout = defaultPreset.loadout;
                 newPreset.agents = [];
+                newPreset.identity = defaultPreset.identity;
+                newPreset.sprays = defaultPreset.sprays;
                 break;
             case NamingMode.SaveAsNew:
                 newPreset.loadout = currentLoadout;
                 newPreset.agents = editingPreset?.agents || originalPreset?.agents || [];
+                newPreset.identity = editingPreset?.identity || originalPreset?.identity;
+                newPreset.sprays = editingPreset?.sprays || originalPreset?.sprays || [];
                 break;
             case NamingMode.Variant: {
                 newPreset.parentUuid = editingPreset?.uuid || originalPreset?.uuid || dropdownPreset?.uuid;
@@ -256,6 +261,53 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
         return presets.find(p => p.uuid == preset.parentUuid)
     }
 
+    const handleIdentityChange = (cardId: string, titleId: string) => {
+        if (editingPreset) {
+            setEditingPreset({ 
+                ...editingPreset, 
+                identity: { playerCardId: cardId, playerTitleId: titleId } 
+            });
+        } else if (selectedPreset) {
+            setIsEditing(true);
+            setOriginalPreset(selectedPreset);
+            setEditingPreset({ 
+                ...selectedPreset, 
+                identity: { playerCardId: cardId, playerTitleId: titleId } 
+            });
+            setSelectedPreset(null);
+        }
+    };
+
+    const handleSpraysChange = (sprays: SpraySlot[]) => {
+        if (editingPreset) {
+            setEditingPreset({ ...editingPreset, sprays });
+        } else if (selectedPreset) {
+            setIsEditing(true);
+            setOriginalPreset(selectedPreset);
+            setEditingPreset({ ...selectedPreset, sprays });
+            setSelectedPreset(null);
+        }
+    };
+
+    const handleImportPresetAction = async (presetCode: string) => {
+        try {
+            const imported = importPreset(presetCode);
+            const newPreset: Preset = {
+                ...imported,
+                uuid: crypto.randomUUID()
+            };
+            const updatedPresets = [...presets.filter(p => p.uuid !== DEFAULT_PRESET_ID), newPreset];
+            setPresets(updatedPresets);
+            await savePresets(updatedPresets);
+            setSelectedPreset(newPreset);
+            setCurrentLoadout(newPreset.loadout);
+            return true;
+        } catch (e) {
+            console.error(e);
+            throw e;
+        }
+    };
+
     return {
         presets,
         selectedPreset,
@@ -282,6 +334,9 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
         handleTogglePreset,
         handleAgentAssignment,
         handleItemChange,
+        handleIdentityChange,
+        handleSpraysChange,
+        handleImportPresetAction,
         defaultPreset,
         NamingMode
     };

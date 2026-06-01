@@ -1,0 +1,17 @@
+# Build artifacts
+backend/*.exe
+backend/bin/
+backend/tmp/
+
+# Logs
+backend/log*.txt
+*.log
+
+# Scratch / backup files
+*-v2.tsx
+*-v2.css
+/PresetList.tsx
+
+# Agent session files
+MEMORY.md
+memory/

@@ -4,6 +4,7 @@ import (
 	"backend/presets"
 	"backend/tick"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync"
 
@@ -13,7 +14,7 @@ import (
 type Handler struct {
 	Val    *valclient.ValClient
 	Ticker *tick.Ticker
-	mu     sync.RWMutex
+	mu     sync.RWMutex // also used by remote.go
 }
 
 func NewHandler(Val *valclient.ValClient) *Handler {
@@ -39,13 +40,18 @@ type OwnedSkinsResponse struct {
 }
 
 func (h *Handler) GetOwnedSkins(w http.ResponseWriter, r *http.Request) {
-	ownedSkins, err := h.Val.GetOwnedItems(valclient.ITEM_TYPE_SKINS)
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedSkins, err := val.GetOwnedItems(valclient.ITEM_TYPE_SKINS)
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
 
-	chromas, err := h.Val.GetOwnedItems(valclient.ITEM_TYPE_SKIN_VARIANTS)
+	chromas, err := val.GetOwnedItems(valclient.ITEM_TYPE_SKIN_VARIANTS)
 	if err != nil {
 		h.returnError(w, err)
 		return
@@ -74,7 +80,12 @@ type OwnedGunBuddiesResponse struct {
 }
 
 func (h *Handler) GetOwnedGunBuddies(w http.ResponseWriter, r *http.Request) {
-	ownedBuddies, err := h.Val.GetOwnedItems(valclient.ITEM_TYPE_GUN_BUDDIES)
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedBuddies, err := val.GetOwnedItems(valclient.ITEM_TYPE_GUN_BUDDIES)
 	if err != nil {
 		h.returnError(w, err)
 		return
@@ -102,7 +113,12 @@ type OwnedAgentsResponse struct {
 }
 
 func (h *Handler) GetOwnedAgents(w http.ResponseWriter, r *http.Request) {
-	ownedAgents, err := h.Val.GetOwnedItems(valclient.ITEM_TYPE_AGENTS)
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedAgents, err := val.GetOwnedItems(valclient.ITEM_TYPE_AGENTS)
 	if err != nil {
 		h.returnError(w, err)
 		return
@@ -117,14 +133,31 @@ func (h *Handler) GetOwnedAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
-	loadout, err := h.Val.GetPlayerLoadout()
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	loadout, err := val.GetPlayerLoadout()
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
 
-	resp := new(presets.PresetV1)
-	resp.Loadout = make(map[string]presets.LoadoutItemV1)
+	type SpraySlotResp struct {
+		EquipSlotID string `json:"equipSlotId"`
+		SprayID     string `json:"sprayId"`
+	}
+
+	type PlayerLoadoutResp struct {
+		Loadout map[string]presets.LoadoutItemV1 `json:"loadout"`
+		Sprays  []SpraySlotResp                 `json:"sprays"`
+	}
+
+	resp := &PlayerLoadoutResp{
+		Loadout: make(map[string]presets.LoadoutItemV1),
+		Sprays:  make([]SpraySlotResp, 0),
+	}
 
 	for _, g := range loadout.Guns {
 		resp.Loadout[g.ID] = presets.LoadoutItemV1{
@@ -136,22 +169,128 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	for _, expr := range loadout.ActiveExpressions {
+		if expr.AssetID != "" {
+			resp.Sprays = append(resp.Sprays, SpraySlotResp{
+				EquipSlotID: expr.TypeID,
+				SprayID:     expr.AssetID,
+			})
+		}
+	}
+
 	h.returnAny(w, resp)
 }
 
+type ApplyLoadoutRequest struct {
+	Loadout  map[string]presets.LoadoutItemV1 `json:"loadout"`
+	Identity *presets.IdentityV1              `json:"identity,omitempty"`
+	Sprays   []presets.SpraySlotV1            `json:"sprays,omitempty"`
+}
+
 func (h *Handler) PostApplyLoadout(w http.ResponseWriter, r *http.Request) {
-	var requestLoadout map[string]presets.LoadoutItemV1
-	if err := json.NewDecoder(r.Body).Decode(&requestLoadout); err != nil {
+	val, err := h.getClient(r)
+	if err != nil {
 		h.returnError(w, err)
 		return
 	}
 
-	if err := presets.Apply(h.Val, requestLoadout); err != nil {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
 		h.returnError(w, err)
 		return
+	}
+
+	var req ApplyLoadoutRequest
+	if err := json.Unmarshal(bodyBytes, &req); err == nil && req.Loadout != nil {
+		if err := presets.Apply(val, req.Loadout, req.Identity, req.Sprays); err != nil {
+			h.returnError(w, err)
+			return
+		}
+	} else {
+		var oldLoadout map[string]presets.LoadoutItemV1
+		if err := json.Unmarshal(bodyBytes, &oldLoadout); err != nil {
+			h.returnError(w, err)
+			return
+		}
+		if err := presets.Apply(val, oldLoadout, nil, nil); err != nil {
+			h.returnError(w, err)
+			return
+		}
 	}
 
 	h.returnAny(w, nil)
+}
+
+type OwnedSpraysResponse struct {
+	SprayIds []string `json:"sprayIds"`
+}
+
+func (h *Handler) GetOwnedSprays(w http.ResponseWriter, r *http.Request) {
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedSprays, err := val.GetOwnedItems(valclient.ITEM_TYPE_SPRAYS)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+
+	sprayIds := make([]string, 0, len(ownedSprays.Entitlements))
+	for _, entitlement := range ownedSprays.Entitlements {
+		sprayIds = append(sprayIds, entitlement.ItemID)
+	}
+
+	h.returnAny(w, &OwnedSpraysResponse{SprayIds: sprayIds})
+}
+
+type OwnedCardsResponse struct {
+	CardIds []string `json:"cardIds"`
+}
+
+func (h *Handler) GetOwnedCards(w http.ResponseWriter, r *http.Request) {
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedCards, err := val.GetOwnedItems(valclient.ITEM_TYPE_CARDS)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+
+	cardIds := make([]string, 0, len(ownedCards.Entitlements))
+	for _, entitlement := range ownedCards.Entitlements {
+		cardIds = append(cardIds, entitlement.ItemID)
+	}
+
+	h.returnAny(w, &OwnedCardsResponse{CardIds: cardIds})
+}
+
+type OwnedTitlesResponse struct {
+	TitleIds []string `json:"titleIds"`
+}
+
+func (h *Handler) GetOwnedTitles(w http.ResponseWriter, r *http.Request) {
+	val, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	ownedTitles, err := val.GetOwnedItems(valclient.ITEM_TYPE_TITLES)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+
+	titleIds := make([]string, 0, len(ownedTitles.Entitlements))
+	for _, entitlement := range ownedTitles.Entitlements {
+		titleIds = append(titleIds, entitlement.ItemID)
+	}
+
+	h.returnAny(w, &OwnedTitlesResponse{TitleIds: titleIds})
 }
 
 func (h *Handler) returnError(w http.ResponseWriter, err error) {

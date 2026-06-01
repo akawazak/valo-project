@@ -4,9 +4,20 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/truearken/valclient/valclient"
 )
+
+type IdentityV1 struct {
+	PlayerCardID  string `json:"playerCardId"`
+	PlayerTitleID string `json:"playerTitleId"`
+}
+
+type SpraySlotV1 struct {
+	EquipSlotID string `json:"equipSlotId"`
+	SprayID     string `json:"sprayId"`
+}
 
 type PresetV1 struct {
 	Uuid       string                   `json:"uuid"`
@@ -15,6 +26,8 @@ type PresetV1 struct {
 	Name       string                   `json:"name"`
 	Loadout    map[string]LoadoutItemV1 `json:"loadout"`
 	Agents     []string                 `json:"agents"`
+	Identity   *IdentityV1              `json:"identity,omitempty"`
+	Sprays     []SpraySlotV1            `json:"sprays,omitempty"`
 }
 
 type LoadoutItemV1 struct {
@@ -66,7 +79,7 @@ func SaveRaw(bytes []byte) error {
 	return nil
 }
 
-func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1) error {
+func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identity *IdentityV1, sprays []SpraySlotV1) error {
 	loadout, err := val.GetPlayerLoadout()
 	if err != nil {
 		return err
@@ -106,6 +119,40 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1) error 
 		}
 	}
 
+	if identity != nil {
+		if loadout.Identity == nil {
+			loadout.Identity = &valclient.Identity{}
+		}
+		if identity.PlayerCardID != "" {
+			loadout.Identity.PlayerCardID = identity.PlayerCardID
+		}
+		if identity.PlayerTitleID != "" {
+			loadout.Identity.PlayerTitleID = identity.PlayerTitleID
+		}
+	}
+
+	if len(sprays) > 0 {
+		for _, sp := range sprays {
+			if sp.SprayID == "" || sp.EquipSlotID == "" {
+				continue
+			}
+			found := false
+			for _, expr := range loadout.ActiveExpressions {
+				if strings.EqualFold(expr.TypeID, sp.EquipSlotID) {
+					expr.AssetID = sp.SprayID
+					found = true
+					break
+				}
+			}
+			if !found {
+				loadout.ActiveExpressions = append(loadout.ActiveExpressions, &valclient.ActiveExpressions{
+					TypeID:  sp.EquipSlotID,
+					AssetID: sp.SprayID,
+				})
+			}
+		}
+	}
+
 	if _, err := val.SetPlayerLoadout(&valclient.SetPlayerLoadoutRequest{
 		Guns:              loadout.Guns,
 		ActiveExpressions: loadout.ActiveExpressions,
@@ -129,3 +176,4 @@ func getPath() (string, error) {
 	}
 	return filepath.Join(valovaultDir, "presets_v1.json"), nil
 }
+
