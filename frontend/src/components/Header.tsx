@@ -59,7 +59,7 @@ export default function Header() {
     return (
         <nav className="navbar navbar-expand-lg sticky-top bg-body-tertiary">
             <div className="container d-flex align-items-center">
-                <a href="https://github.com/truearken/valovault" target="_blank" rel="noopener noreferrer" className="d-flex align-items-center me-2">
+                <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noopener noreferrer" className="d-flex align-items-center me-2">
                     <Image src="/github-logo.svg" alt="GitHub" width={24} height={24} />
                 </a>
                 <span className="navbar-brand me-2">ValoVault</span>

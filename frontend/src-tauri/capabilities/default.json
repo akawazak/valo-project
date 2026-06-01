@@ -14,7 +14,7 @@
           "url": "http://localhost:31719/v1/*"
         },
         {
-          "url": "https://api.github.com/repos/truearken/valovault/*"
+          "url": "https://api.github.com/repos/akawazak/valo-project/*"
         },
         {
           "url": "https://valorant-api.com/v1/*"

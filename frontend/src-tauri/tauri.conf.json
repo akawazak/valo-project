@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ValoVault",
-  "version": "0.3.5",
-  "identifier": "me.truearken",
+  "version": "0.4.0",
+  "identifier": "com.akawazak.valovault",
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
@@ -25,11 +25,9 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "msi",
-    "windows": {
-      "signCommand": "relic sign --file %1 --key azure --config relic.conf"
-    },
+    "windows": {},
     "externalBin": [
       "..\\..\\backend\\tmp\\valovault-backend"
     ],
@@ -45,7 +43,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDRDBCMDlDNUIzNEMyRDEKUldUUndqUmJuTERRakJBVXFOS0F3RTdyTy9EbTU2SXRKY0kvbE1vczlwSkhNV0pBRGtJUTBOMWQK",
       "endpoints": [
-        "https://github.com/truearken/valovault/releases/latest/download/latest.json"
+        "https://github.com/akawazak/valo-project/releases/latest/download/latest.json"
       ]
     }
   }
