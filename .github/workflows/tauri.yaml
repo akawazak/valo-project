@@ -51,6 +51,18 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      - name: Disable updater signing if private key is missing
+        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY == '' }}
+        shell: pwsh
+        run: |
+          $configPath = "frontend/src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          if ($config.bundle -and $config.bundle.createUpdaterArtifacts) {
+            $config.bundle.createUpdaterArtifacts = $false
+            $config | ConvertTo-Json -Depth 100 | Out-File $configPath -Encoding utf8
+            Write-Host "Disabled tauri updater signing because TAURI_SIGNING_PRIVATE_KEY secret is not set."
+          }
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
