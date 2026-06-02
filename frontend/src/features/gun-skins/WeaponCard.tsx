@@ -2,7 +2,6 @@ import Image from 'next/image';
 import { useData } from '@/context/DataContext';
 import { LoadoutItemV1, Weapon } from '@/lib/types';
 
-
 type WeaponCardProps = {
     weapon: Weapon;
     onClick: () => void;
@@ -25,7 +24,7 @@ export default function WeaponCard({ weapon, onClick, onEditClick, onBuddyEditCl
 
     if (!item) {
         const defaultSkin = weapon.skins.find(w => w.uuid === weapon.defaultSkinUuid)!;
-        item = {skinId: defaultSkin.uuid, chromaId: defaultSkin.chromas[0].uuid, skinLevelId: defaultSkin.levels[0].uuid}
+        item = { skinId: defaultSkin.uuid, chromaId: defaultSkin.chromas[0].uuid, skinLevelId: defaultSkin.levels[0].uuid };
     }
 
     const skin = weapon.skins.find(w => w.uuid === item.skinId)!;
@@ -47,51 +46,61 @@ export default function WeaponCard({ weapon, onClick, onEditClick, onBuddyEditCl
     const buddy = ownedBuddies.find(b => b.levels[0].uuid === item.charmLevelID);
 
     const handleEditClick = (e: React.MouseEvent) => {
-        e.stopPropagation(); // Prevent card's onClick from firing
+        e.stopPropagation();
         onEditClick();
     };
-
     const handleBuddyEditClick = (e: React.MouseEvent) => {
         e.stopPropagation();
         onBuddyEditClick();
     };
-
     const handleResetSkinClick = (e: React.MouseEvent) => {
         e.stopPropagation();
         onHandleResetSkinClick();
-    }
+    };
 
     return (
-        <div className="card h-100 card-hover" onClick={onClick} style={{ cursor: 'pointer', opacity: selectedItem ? 1 : 0.5 }} title={displayName}>
-            <div className="card-body d-flex flex-column justify-content-center align-items-center p-2 position-relative">
+        <div
+            className={`weapon-card card-hover${selectedItem ? '' : ' dimmed'}`}
+            onClick={onClick}
+            title={displayName}
+            style={{ cursor: 'pointer' }}
+        >
+            <div className="weapon-card-body">
                 {weapon.category !== 'EEquippableCategory::Melee' && (
                     <button
-                        className="btn d-flex justify-content-center align-items-center"
-                        style={{ position: 'absolute', bottom: '0.25rem', left: '0.25rem', zIndex: 1, width: '32px', height: '32px', border: '1px solid var(--bs-border-color)', borderRadius: '0.25rem' }}
+                        className="weapon-card-buddy-btn"
                         onClick={handleBuddyEditClick}
-                        title="Select Buddy">
+                        title="Select Buddy"
+                    >
                         {buddy ? (
-                            <Image src={buddy.levels[0].displayIcon} alt={buddy.displayName} width={32} height={32} style={{ objectFit: 'contain' }} unoptimized />
+                            <Image src={buddy.levels[0].displayIcon} alt={buddy.displayName} width={22} height={22} style={{ objectFit: 'contain' }} unoptimized />
                         ) : (
-                            "🔗"
+                            '🔗'
                         )}
                     </button>
                 )}
-                {selectedItem && parentItem && 
+                {selectedItem && parentItem && (
                     <button
-                        className="btn d-flex justify-content-center align-items-center"
-                        style={{ position: 'absolute', top: '0.25rem', right: '0.25rem', zIndex: 1, width: '32px', height: '32px', border: '1px solid var(--bs-border-color)', borderRadius: '0.25rem' }}
+                        className="weapon-card-reset-btn"
                         onClick={handleResetSkinClick}
-                        title="Reset">
+                        title="Reset to parent"
+                    >
                         ⟲
                     </button>
-                }
-                <Image src={displayIcon} alt={displayName} className="card-img-top" width={100} height={100} style={{ objectFit: 'contain' }} unoptimized />
+                )}
+                <Image
+                    src={displayIcon}
+                    alt={displayName}
+                    width={100}
+                    height={70}
+                    style={{ objectFit: 'contain', maxWidth: '100%', height: 'auto' }}
+                    unoptimized
+                />
             </div>
-            <div className="card-footer d-flex justify-content-between align-items-center p-1" style={{ gap: '0.5rem' }}>
-                <small className="text-muted text-truncate" style={{ minWidth: 0 }}>{displayName}</small>
+            <div className="weapon-card-footer">
+                <span className="weapon-card-name">{displayName}</span>
                 {canEdit && (
-                    <button className="btn btn-sm btn-secondary py-0" onClick={handleEditClick}>
+                    <button className="weapon-card-edit-btn" onClick={handleEditClick} title="Edit">
                         Edit
                     </button>
                 )}

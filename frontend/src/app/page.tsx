@@ -238,11 +238,9 @@ export default function Home() {
 
     if (isLoading || dataContextLoading) {
         return (
-            <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
-                <div className="spinner-border text-danger" role="status" style={{ width: '3rem', height: '3rem' }}>
-                    <span className="visually-hidden">Loading...</span>
-                </div>
-                <p className="mt-3 text-muted">{loadingMessage}</p>
+            <div className="loading-screen">
+                <div className="loading-spinner" role="status" aria-label="Loading" />
+                <p className="loading-text">{loadingMessage}</p>
             </div>
         );
     }
@@ -273,16 +271,17 @@ export default function Home() {
                     {activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setShowAddAccount(true)} />
                     ) : (
-                        <div className="row h-100 m-0">
-                            <div className="col-md-8 mb-3 scrollable-col pe-md-3">
-                                <div className="preset-panel mb-3">
-                                    <div className="section-row mb-3" style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: '0.75rem' }}>
+                        <div className="skins-layout">
+                            {/* Main column */}
+                            <div className="skins-main-col">
+                                <div className="glass-panel">
+                                    <div className="section-header">
                                         <div>
                                             <div className="tactical-kicker">// ARSENAL</div>
-                                            <h2 className="tactical-title mb-0" style={{ fontSize: '1.4rem' }}>Weapon Skins</h2>
+                                            <h2 className="section-title">Weapon Skins</h2>
                                         </div>
                                     </div>
-                                    <p className="text-muted small mb-3">Select a weapon to see available skins.</p>
+                                    <p className="text-muted small mb-3">Select a weapon to change its skin.</p>
                                     <WeaponGrid
                                         onSkinSelectAction={handleSkinSelect}
                                         onBuddySelectAction={handleBuddySelect}
@@ -317,12 +316,13 @@ export default function Home() {
                                 )}
                             </div>
 
-                            <div className="col-md-4 scrollable-col ps-md-3">
-                                <div className="preset-panel">
-                                    <div className="d-flex justify-content-between align-items-center mb-3">
+                            {/* Sidebar */}
+                            <div className="skins-side-col">
+                                <div className="glass-panel">
+                                    <div className="section-header" style={{ marginBottom: '0.75rem' }}>
                                         <div>
                                             <div className="tactical-kicker">// LOADOUTS</div>
-                                            <h2 className="tactical-title mb-0" style={{ fontSize: '1.2rem' }}>Presets</h2>
+                                            <h2 className="section-title">Presets</h2>
                                         </div>
                                         <button
                                             className="btn-tactical btn-tactical-danger"
