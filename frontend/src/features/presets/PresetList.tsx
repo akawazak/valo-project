@@ -63,7 +63,7 @@ export default function PresetList({
                 </div>
             </button>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0.75rem 0' }}>
+            <div className="d-flex justify-content-between align-items-center my-3">
                 <span className="tactical-kicker">Saved Presets</span>
                 <button type="button" className="btn-tactical" onClick={onImportPresetClick}>
                     Import Code

@@ -30,6 +30,18 @@
   --font-sans:      'Inter', -apple-system, system-ui, sans-serif;
   --font-mono:      'JetBrains Mono', 'Fira Code', monospace;
   --transition:     0.18s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Bootstrap Variable Mappings */
+  --bs-body-bg: var(--bg-base);
+  --bs-body-color: var(--text-primary);
+  --bs-border-color: var(--border);
+  --bs-border-color-translucent: var(--border);
+  --bs-primary: var(--accent);
+  --bs-secondary: var(--text-secondary);
+  --bs-success: var(--green);
+  --bs-danger: var(--accent);
+  --bs-warning: var(--yellow);
+  --bs-info: var(--purple);
 }
 
 /* ── Reset & Base ── */
@@ -1630,3 +1642,118 @@ html, body, body > div:first-child, div#__next, div#__next > div {
   border-color: var(--border-accent) !important;
   color: #fff !important;
 }
+
+/* ── Bootstrap Button overrides & additions ── */
+.btn-info {
+  background: rgba(167, 139, 250, 0.08) !important;
+  border: 1px solid rgba(167, 139, 250, 0.3) !important;
+  color: var(--purple) !important;
+}
+.btn-info:hover {
+  background: var(--purple) !important;
+  color: #fff !important;
+  border-color: var(--purple) !important;
+}
+.btn-sm {
+  padding: 0.25rem 0.5rem !important;
+  font-size: 0.75rem !important;
+}
+.btn-sm.py-0 {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* ── Card internal button resets ── */
+.card-body .btn {
+  padding: 0 !important;
+  min-height: auto !important;
+  line-height: 1 !important;
+}
+
+/* ── Bootstrap Modal Overrides ── */
+.modal {
+  background: rgba(0, 0, 0, 0.6) !important;
+  backdrop-filter: blur(8px);
+}
+.modal-content {
+  background: rgba(12, 19, 24, 0.95) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(0,0,0,0.5) !important;
+  color: var(--text-primary) !important;
+  backdrop-filter: blur(20px);
+}
+.modal-header {
+  border-bottom: 1px solid var(--border) !important;
+  padding: 1.25rem 1.5rem !important;
+}
+.modal-title {
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+}
+.modal-body {
+  padding: 1.5rem !important;
+  font-size: 0.9rem !important;
+  color: var(--text-secondary);
+}
+.modal-footer {
+  border-top: 1px solid var(--border) !important;
+  padding: 1rem 1.5rem !important;
+  gap: 0.5rem;
+}
+.btn-close {
+  filter: invert(1) grayscale(1) brightness(2) !important;
+  opacity: 0.7 !important;
+  transition: opacity var(--transition);
+}
+.btn-close:hover {
+  opacity: 1 !important;
+}
+
+/* ── Loading Spinner Override ── */
+.bg-dark {
+  background-color: var(--bg-base) !important;
+}
+.text-white {
+  color: var(--text-primary) !important;
+}
+.spinner-border.text-danger {
+  border-right-color: transparent !important;
+  color: var(--accent) !important;
+}
+
+/* ── Form Styling ── */
+.form-control {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.form-control:focus {
+  background: var(--bg-overlay) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(255, 64, 85, 0.12) !important;
+}
+.form-label {
+  color: var(--text-secondary) !important;
+  font-weight: 500 !important;
+}
+
+/* ── Footer Overrides ── */
+.footer.fixed-bottom {
+  background: rgba(6, 11, 15, 0.92);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.5rem !important;
+  z-index: 100;
+}
+.footer.fixed-bottom .container {
+  max-width: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+

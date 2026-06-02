@@ -36,6 +36,7 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
             const parentItem = parent[weapon.uuid];
             onSkinSelectAction(weapon.uuid, parentItem.skinId, parentItem.skinLevelId, parentItem.chromaId);
         }
+
         const skin = weapon.skins.find(s => s.uuid === itemToEdit.skinId);
         if (skin) {
             setSelectedWeapon(weapon);
@@ -51,7 +52,7 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
 
     const handleResetSkinClick = (weapon: Weapon) => {
         onSkinResetAction(weapon.uuid);
-    };
+    }
 
     const handleCloseBuddyModal = () => {
         setShowBuddyModal(false);
@@ -65,7 +66,9 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
         handleCloseBuddyModal();
     };
 
-    const handleCloseSkinListModal = () => setShowSkinListModal(false);
+    const handleCloseSkinListModal = () => {
+        setShowSkinListModal(false);
+    };
 
     const handleSkinSelectInList = (skin: Skin) => {
         setSelectedSkin(skin);
@@ -73,7 +76,9 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
         setShowLevelAndChromaModal(true);
     };
 
-    const handleCloseLevelAndChromaModal = () => setShowLevelAndChromaModal(false);
+    const handleCloseLevelAndChromaModal = () => {
+        setShowLevelAndChromaModal(false);
+    };
 
     const handleLevelAndChromaSelect = (skinId: string, levelId: string, chromaId: string) => {
         onSkinSelectAction(selectedWeapon!.uuid, skinId, levelId, chromaId);
@@ -81,25 +86,26 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
     };
 
     if (loading) {
-        return <div className="loading-text" style={{ padding: '1rem' }}>Loading game data…</div>;
+        return <div>Loading game data...</div>;
     }
 
     return (
         <div>
-            <div className="weapon-grid">
+            <div className="row row-cols-2 row-cols-md-4 row-cols-lg-5 g-3">
                 {weapons.map((weapon) => (
-                    <WeaponCard
-                        key={weapon.uuid}
-                        weapon={weapon}
-                        ownedLevelIDs={ownedLevelIDs}
-                        ownedChromaIDs={ownedChromaIDs}
-                        onClick={() => handleWeaponClick(weapon)}
-                        onEditClick={() => handleEditSkinClick(weapon)}
-                        onBuddyEditClick={() => handleBuddyEditClick(weapon)}
-                        onHandleResetSkinClick={() => handleResetSkinClick(weapon)}
-                        selectedItem={currentLoadout[weapon.uuid]}
-                        parentItem={parent ? parent[weapon.uuid] : undefined}
-                    />
+                    <div key={weapon.uuid} className="col">
+                        <WeaponCard
+                            weapon={weapon}
+                            ownedLevelIDs={ownedLevelIDs}
+                            ownedChromaIDs={ownedChromaIDs}
+                            onClick={() => handleWeaponClick(weapon)}
+                            onEditClick={() => handleEditSkinClick(weapon)}
+                            onBuddyEditClick={() => handleBuddyEditClick(weapon)}
+                            onHandleResetSkinClick={() => handleResetSkinClick(weapon)}
+                            selectedItem={currentLoadout[weapon.uuid]}
+                            parentItem={parent ? parent[weapon.uuid] : undefined}
+                        />
+                    </div>
                 ))}
             </div>
 
