@@ -7,17 +7,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish-tauri:
+  build:
+    name: ${{ matrix.settings.name }}
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         settings:
-          - platform: 'windows-latest'
+          - name: 'Windows'
+            platform: 'windows-latest'
             go-target: './tmp/valovault-backend-x86_64-pc-windows-msvc.exe'
             tauri-args: '--bundles nsis'
-          - platform: 'ubuntu-22.04'
+          - name: 'Linux'
+            platform: 'ubuntu-22.04'
             go-target: './tmp/valovault-backend-x86_64-unknown-linux-gnu'
             tauri-args: '--bundles deb,appimage'
     runs-on: ${{ matrix.settings.platform }}
@@ -62,7 +65,7 @@ jobs:
           if ($config.bundle -and $config.bundle.createUpdaterArtifacts) {
             $config.bundle.createUpdaterArtifacts = $false
             $config | ConvertTo-Json -Depth 100 | Out-File $configPath -Encoding utf8
-            Write-Host "Disabled tauri updater signing because TAURI_SIGNING_PRIVATE_KEY secret is not set."
+            Write-Host "Disabled updater signing (no TAURI_SIGNING_PRIVATE_KEY secret set)."
           }
 
       - uses: tauri-apps/tauri-action@v0
@@ -115,4 +118,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ steps.tauri.outputs.releaseTag }}" "ValoVault-Portable-x64.zip" --repo akawazak/valo-project --clobber
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag -or $tag -eq "main") {
+            Write-Host "No version tag found, skipping portable upload."
+            exit 0
+          }
+          gh release upload "$tag" "ValoVault-Portable-x64.zip" --repo akawazak/valo-project --clobber
