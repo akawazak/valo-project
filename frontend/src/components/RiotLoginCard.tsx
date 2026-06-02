@@ -3,16 +3,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import * as api from "@/services/api";
-
-export interface RiotAccount {
-    puuid: string;
-    accessToken: string;
-    entitlementsToken: string;
-    expiresAt?: number;
-    region: string;
-    gameName: string;
-    tagLine: string;
-}
+import { RiotAccount } from "@/lib/types";
 
 interface RiotLoginCardProps {
     onLoginSuccess: (account?: RiotAccount) => void;

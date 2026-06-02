@@ -441,6 +441,19 @@ a { color: inherit; text-decoration: none; }
   color: #fff;
 }
 
+.topbar-update-ready {
+  color: #7bf7c0;
+  border: 1px solid rgba(123, 247, 192, 0.24);
+  background: rgba(123, 247, 192, 0.08);
+  padding: 0.48rem 0.7rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+}
+
 .connect-account-btn:hover,
 .theme-toggle-btn:hover,
 .account-pill:hover {

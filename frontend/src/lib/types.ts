@@ -5,6 +5,16 @@ export interface Agent {
     isBaseContent: boolean;
 }
 
+export interface RiotAccount {
+    puuid: string;
+    accessToken: string;
+    entitlementsToken: string;
+    expiresAt?: number;
+    region: string;
+    gameName: string;
+    tagLine: string;
+}
+
 export interface IdentityV1 {
     playerCardId: string;
     playerTitleId: string;

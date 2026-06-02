@@ -1,22 +1,23 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot } from '@/lib/types';
-import { getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays } from '@/services/api';
-
-export interface RiotAccount {
-    puuid: string;
-    accessToken: string;
-    entitlementsToken: string;
-    expiresAt?: number;
-    region: string;
-    gameName: string;
-    tagLine: string;
-}
+import { Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount } from '@/lib/types';
+import { getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts } from '@/services/api';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
     return Date.now() >= account.expiresAt - 60_000;
+}
+
+function mergeAccounts(localAccounts: RiotAccount[], persistedAccounts: RiotAccount[]) {
+    const merged = new Map<string, RiotAccount>();
+    for (const account of persistedAccounts) {
+        merged.set(account.puuid, account);
+    }
+    for (const account of localAccounts) {
+        merged.set(account.puuid, account);
+    }
+    return Array.from(merged.values());
 }
 
 export function getStoredAccounts(): RiotAccount[] {
@@ -29,20 +30,19 @@ export function getStoredAccounts(): RiotAccount[] {
 
 export function saveStoredAccounts(accounts: RiotAccount[]) {
     localStorage.setItem("riot_accounts", JSON.stringify(accounts));
+    void savePersistedAccounts(accounts);
 }
 
 export function activateAccount(account: RiotAccount) {
+    localStorage.setItem("riot_puuid", account.puuid);
+    localStorage.setItem("riot_region", account.region);
     if (isAccountExpired(account)) {
         localStorage.removeItem("riot_access_token");
         localStorage.removeItem("riot_entitlements");
-        localStorage.removeItem("riot_puuid");
-        localStorage.removeItem("riot_region");
-        return;
+    } else {
+        localStorage.setItem("riot_access_token", account.accessToken);
+        localStorage.setItem("riot_entitlements", account.entitlementsToken);
     }
-    localStorage.setItem("riot_access_token", account.accessToken);
-    localStorage.setItem("riot_entitlements", account.entitlementsToken);
-    localStorage.setItem("riot_puuid", account.puuid);
-    localStorage.setItem("riot_region", account.region);
 }
 
 interface DataContextType {
@@ -118,20 +118,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // Refresh local lists of accounts and active selection
     const refreshAccountsList = useCallback(() => {
         const stored = getStoredAccounts();
-        const usable = stored.filter(account => !isAccountExpired(account));
-        if (usable.length !== stored.length) {
-            saveStoredAccounts(usable);
-            setIsTokenExpired(true);
-        }
-        setAccounts(usable);
+        setAccounts(stored);
         const puuid = localStorage.getItem("riot_puuid");
-        const found = usable.find(a => a.puuid === puuid) || usable[0] || null;
-        if (found) activateAccount(found);
-        if (!found) {
+        const found = stored.find(a => a.puuid === puuid) || stored[0] || null;
+        if (found) {
+            activateAccount(found);
+            setIsTokenExpired(isAccountExpired(found));
+        } else {
             localStorage.removeItem("riot_access_token");
             localStorage.removeItem("riot_entitlements");
             localStorage.removeItem("riot_puuid");
             localStorage.removeItem("riot_region");
+            setIsTokenExpired(false);
         }
         setActiveAccount(found);
     }, []);
@@ -260,19 +258,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     // Account state handlers — NO page reloads, use refresh signals instead
     const handleSwitchAccount = useCallback((acc: RiotAccount) => {
-        if (isAccountExpired(acc)) {
-            const updated = getStoredAccounts().filter(account => account.puuid !== acc.puuid);
-            saveStoredAccounts(updated);
-            setAccounts(updated);
-            setActiveAccount(updated[0] ?? null);
-            setIsTokenExpired(true);
-            return;
-        }
-        setIsTokenExpired(false);
         activateAccount(acc);
         setActiveAccount(acc);
-        // Bump the storefront refresh key so StorePanels re-fetches silently
-        setStorefrontRefreshKey(k => k + 1);
+        if (isAccountExpired(acc)) {
+            setIsTokenExpired(true);
+        } else {
+            setIsTokenExpired(false);
+            // Bump the storefront refresh key so StorePanels re-fetches silently
+            setStorefrontRefreshKey(k => k + 1);
+        }
     }, []);
 
     const handleDeleteAccount = useCallback((puuid: string) => {
@@ -317,6 +311,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refreshAccountsList();
         loadStaticData();
     }, [loadStaticData, refreshAccountsList]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const hydrateAccounts = async () => {
+            const persisted = await getPersistedAccounts();
+            if (cancelled || persisted.length === 0) return;
+
+            const merged = mergeAccounts(getStoredAccounts(), persisted);
+            saveStoredAccounts(merged);
+            refreshAccountsList();
+        };
+
+        hydrateAccounts();
+        return () => {
+            cancelled = true;
+        };
+    }, [refreshAccountsList]);
 
     // Health check and user inventory loading
     useEffect(() => {

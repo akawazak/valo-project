@@ -329,12 +329,19 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             </div>
 
             {isTokenExpired && activeAccount && (
-                <div className="alert alert-danger p-4 mb-4 text-center rounded-3 bg-opacity-10 border-danger d-flex flex-column align-items-center justify-content-center">
-                    <h4 className="mb-2 text-danger">⚠ Riot Session Expired</h4>
-                    <p className="text-muted small max-w-lg mb-0">
-                        The session tokens for <strong>{activeAccount.gameName}#{activeAccount.tagLine}</strong> have expired.
-                        Riot Games requires re-authentication every few hours. Open the account menu in the top bar to reconnect.
-                    </p>
+                <div className="alert alert-danger p-4 mb-4 text-center rounded-3 bg-opacity-10 border-danger d-flex flex-column align-items-center justify-content-center gap-3">
+                    <div className="d-flex flex-column align-items-center">
+                        <h4 className="mb-2 text-danger">⚠ Riot Session Expired</h4>
+                        <p className="text-muted small max-w-lg mb-0">
+                            The session tokens for <strong>{activeAccount.gameName}#{activeAccount.tagLine}</strong> have expired.
+                            Riot Games requires re-authentication every few hours to view your live store.
+                        </p>
+                    </div>
+                    {onConnectAccount && (
+                        <button type="button" className="btn-tactical btn-tactical-danger" onClick={onConnectAccount}>
+                            Reconnect Account
+                        </button>
+                    )}
                 </div>
             )}
 

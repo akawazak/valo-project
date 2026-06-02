@@ -1,102 +1,120 @@
 # ValoVault
 
-ValoVault is a premium desktop application that allows you to create, save, and apply your favorite weapon skin loadouts in VALORANT, automatically apply them to selected agents, and view your Riot Storefront (Daily Offers, Night Market, Bundles, and Wallet) without opening the game client.
+ValoVault is a Windows desktop companion app for VALORANT loadouts and storefront viewing.
 
-<img width="1666" height="937" alt="image" src="https://github.com/user-attachments/assets/f617d5d8-93b8-46e2-965e-d466f1fdad79" />
+It lets you save/apply skin presets, manage agent-specific loadouts, connect Riot accounts, and view your live Riot storefront including daily offers, featured bundles, Night Market, accessories, and wallet balances.
+
+> This project is not endorsed by Riot Games. Riot Games, VALORANT, and all related assets are trademarks or registered trademarks of Riot Games, Inc.
 
 ## Download
 
-**Portable (recommended):** [ValoVault-Portable-x64.zip](https://github.com/akawazak/valo-project/releases/latest/download/ValoVault-Portable-x64.zip) — extract and run `ValoVault.exe` anywhere.
+Releases are published at:
 
-**Installer:** [Latest NSIS setup](https://github.com/akawazak/valo-project/releases/latest) — per-user install, no admin required.
+[github.com/akawazak/valo-project/releases](https://github.com/akawazak/valo-project/releases)
 
-Auto-updates are enabled in installed/portable builds signed for this repo.
+Recommended build:
 
-See all releases: [github.com/akawazak/valo-project/releases](https://github.com/akawazak/valo-project/releases)
+- `ValoVault-Portable-x64.zip`: extract anywhere and run `ValoVault.exe`.
 
----
+Optional installer:
 
-## ✨ Features
+- NSIS setup executable from the latest release.
 
-### 🎒 Skin Loadout & Presets (Core)
-- **Create Presets:** Save your favorite combinations of weapon skins and gun buddies as custom presets.
-- **Apply Presets:** Quickly apply any saved preset to your current loadout with a single click.
-- **Agent-Specific Presets:** Assign different presets to your favorite agents.
-- **Auto-Apply (Optional):** Enable "Auto Select Agent" to automatically apply a preset when you lock in an agent in-game.
+## Features
 
-### 🛒 Riot Storefront Viewer (New!)
-- **Daily Offers:** View your 4 daily weapon skin offers with authentic Content Tier colored rarity cards, custom glowing borders, and tier rarity icons.
-- **Night Market Container:** A beautiful, fully styled neon cyan and pink Night Market panel with discount calculations, countdown timer, and original-vs-discounted prices.
-- **Featured Bundles:** View high-resolution promotional bundle banners and their included items (skins, cards, buddies, sprays) with their precise discounted bundle pricing.
-- **Wallet Balances:** Live display of your active Valorant Points (VP) and Radianite Points (RP) directly inside the store header.
-- **Ownership Badging:** A distinct, glowing green `OWNED` badge shows up automatically on any skin or bundle item you already own.
+- Skin and buddy preset saving.
+- Agent-specific preset assignment.
+- Optional auto-apply flow for selected agents.
+- Riot account connection through official Riot login plus pasted localhost redirect URL.
+- Multi-account switching.
+- Local persistent account storage.
+- Daily Store, Featured Bundle, Night Market, Accessories, VP, and RP display.
+- Preset import/export share codes.
+- Early spray and identity preset customization work.
+- Tauri updater support for GitHub Releases.
 
-### 👥 Premium Multi-Account Panel (New!)
-- **Dynamic Navigation Sidebar:** A glassy, high-fidelity dark left-hand navigation sidebar that organizes and separates your settings.
-- **Instant Account Switcher:** Keep multiple Riot accounts connected and hot-swap between them seamlessly. Switching accounts updates the storefront, wallet, and presets instantly without jarred page reloads.
-- **Secure Local Storage:** Authentication tokens and accounts are stored securely in local app storage.
-- **Session Expiry Alerts:** Graceful `401 Session Expired` alerts tell you when it's time to reconnect, avoiding raw API errors.
-- **Account Disconnect Dialog:** A premium custom delete dialog with a "Don't ask again" option to speed up workflow.
+## Account Storage
 
----
+Connected Riot account sessions are mirrored in two places:
 
-## 💖 Credits & Acknowledgements
+- WebView `localStorage` for fast frontend access.
+- Local backend file storage at the app config directory under `valovault/accounts/accounts.json`.
 
-ValoVault was built by combining, upgrading, and expanding two outstanding open-source projects. We express our deep appreciation to the original authors:
+Riot OAuth access tokens expire. When a stored session expires, the app prompts you to reconnect that account instead of silently failing the storefront.
 
-1. **[truearken/valovault](https://github.com/truearken/valovault)**  
-   The wonderful foundation for the preset manager, Go client-binding bridge, and Tauri desktop integration.
+## Credits
 
-2. **[victorxia18/valorant-shop-checker](https://github.com/victorxia18/valorant-shop-checker)**  
-   Inspiration and basic patterns for the Riot OAuth token paste-redirect authentication flow and fetching the raw daily storefront. *(Note: All premium features including multi-account registries, live wallet balances, content tier rarity styles, Night Market container, and session-state management were built entirely from scratch for ValoVault).*
+This project builds on and takes inspiration from two open-source projects:
 
----
+- [truearken/valovault](https://github.com/truearken/valovault): original ValoVault foundation, preset/loadout workflow, local VALORANT client integration, and Tauri app structure.
+- [victorxia18/valorant-shop-checker](https://github.com/victorxia18/valorant-shop-checker): inspiration for the Riot OAuth paste-redirect flow and remote storefront retrieval pattern.
 
-## 🚀 Setting Up Your Own Repository
+Thank you to both authors for making their work available.
 
-To dump this upgraded codebase into your own new GitHub repository:
+## Development
 
-1. Create a new empty repository on [GitHub](https://github.com/new).
-2. Open your terminal in the `valovault` root directory.
-3. Update your git remote to point to your new repository:
-   ```sh
-   git remote set-url origin <YOUR_NEW_GITHUB_REPO_URL>
-   ```
-4. Push your changes:
-   ```sh
-   git add .
-   git commit -m "feat: upgrade ValoVault with premium storefront and multi-account sidebar"
-   git push -u origin main
-   ```
+Prerequisites:
 
----
+- Go
+- Node.js
+- Rust/Tauri prerequisites
 
-## 🛠️ Developer Setup
+Run backend:
 
-### Prerequisites
-- [Go](https://go.dev/doc/install)
-- [Node.js](https://nodejs.org/en/download)
-- [Tauri](https://tauri.app/start/prerequisites/)
+```powershell
+cd backend
+go run .
+```
 
-### Setup & Running
+Run frontend dev server:
 
-1. **Install frontend dependencies:**
-   ```sh
-   cd frontend
-   npm install
-   ```
+```powershell
+cd frontend
+npm run dev -- --hostname 127.0.0.1 --port 33100
+```
 
-2. **Run the Go Backend:**
-   Open a terminal in the `backend/` directory:
-   ```sh
-   go run .
-   ```
-   *(Or `air` if you have live-reloading configured)*.
+Launch Tauri debug app:
 
-3. **Run the Frontend (with Tauri):**
-   Open a terminal in the `frontend/` directory:
-   ```sh
-   npx tauri dev
-   ```
-   This compiles the backend, runs the Next.js development server on `http://localhost:3000`, and launches the native desktop app.
+```powershell
+frontend\src-tauri\target\debug\app.exe
+```
 
+Build checks:
+
+```powershell
+cd backend
+go build ./...
+```
+
+```powershell
+cd frontend
+npm.cmd run lint
+npm.cmd run build
+```
+
+## Releases And Auto Update
+
+The Tauri updater endpoint is configured for:
+
+```text
+https://github.com/akawazak/valo-project/releases/latest/download/latest.json
+```
+
+GitHub Actions builds the Tauri app and uploads release artifacts. Portable packaging is generated as:
+
+```text
+ValoVault-Portable-x64.zip
+```
+
+For updater signing, add this repository secret before creating production releases:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY
+```
+
+Create releases by pushing a version tag:
+
+```powershell
+git tag v0.4.1
+git push origin v0.4.1
+```

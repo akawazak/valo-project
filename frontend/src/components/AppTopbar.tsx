@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
-import { RiotAccount } from '@/context/DataContext';
+import { RiotAccount } from '@/lib/types';
 
 interface AppTopbarProps {
     activeTab: 'store' | 'skins';
@@ -40,6 +40,7 @@ export default function AppTopbar({
     const [appVersion, setAppVersion] = useState("");
     const [updateAvailable, setUpdateAvailable] = useState(false);
     const [isUpdating, setIsUpdating] = useState(false);
+    const [updateReady, setUpdateReady] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -51,9 +52,19 @@ export default function AppTopbar({
                 if (!cancelled) setAppVersion(version);
 
                 const update = await check();
-                if (!cancelled) setUpdateAvailable(Boolean(update));
+                if (!update || cancelled) return;
+
+                setUpdateAvailable(true);
+                setIsUpdating(true);
+                await update.downloadAndInstall();
+                if (!cancelled) {
+                    setUpdateReady(true);
+                    setUpdateAvailable(false);
+                }
             } catch {
                 // Updater unavailable in dev or before first signed release.
+            } finally {
+                if (!cancelled) setIsUpdating(false);
             }
         };
 
@@ -67,6 +78,8 @@ export default function AppTopbar({
             const update = await check();
             if (!update) return;
             await update.downloadAndInstall();
+            setUpdateReady(true);
+            setUpdateAvailable(false);
         } catch (err) {
             console.error("Update failed:", err);
         } finally {
@@ -212,6 +225,12 @@ export default function AppTopbar({
                         >
                             {isUpdating ? "Updating…" : "Update"}
                         </button>
+                    )}
+
+                    {updateReady && (
+                        <span className="topbar-update-ready" title="Update installed and will apply after restarting the app">
+                            Update ready
+                        </span>
                     )}
 
                     <button onClick={onToggleTheme} className="theme-toggle-btn" title="Toggle theme">

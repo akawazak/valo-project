@@ -1,4 +1,4 @@
-import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot } from '@/lib/types';
+import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot, RiotAccount } from '@/lib/types';
 import { LocalClientError } from '@/lib/errors';
 import { fetch } from '@tauri-apps/plugin-http';
 
@@ -178,6 +178,29 @@ export async function savePresets(presets: Preset[]): Promise<void> {
     } catch (error) {
         console.error(error);
         throw new LocalClientError();
+    }
+}
+
+export async function getPersistedAccounts(): Promise<RiotAccount[]> {
+    try {
+        const response = await fetch(LOCAL_URL + '/accounts');
+        if (!response.ok) return [];
+        const data = await response.json();
+        return Array.isArray(data) ? data as RiotAccount[] : [];
+    } catch {
+        return [];
+    }
+}
+
+export async function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
+    try {
+        await fetch(LOCAL_URL + '/accounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(accounts),
+        });
+    } catch (error) {
+        console.error('Failed to persist Riot accounts:', error);
     }
 }
 
