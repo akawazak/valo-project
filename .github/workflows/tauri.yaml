@@ -52,7 +52,9 @@ jobs:
         run: npm install
 
       - name: Disable updater signing if private key is missing
-        if: ${{ !secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        if: ${{ env.SIGNING_KEY == '' }}
         shell: pwsh
         run: |
           $configPath = "frontend/src-tauri/tauri.conf.json"
