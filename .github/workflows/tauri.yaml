@@ -16,10 +16,10 @@ jobs:
         settings:
           - platform: 'windows-latest'
             go-target: './tmp/valovault-backend-x86_64-pc-windows-msvc.exe'
-            tauri-args: '--bundle nsis'
+            tauri-args: '--bundles nsis'
           - platform: 'ubuntu-22.04'
             go-target: './tmp/valovault-backend-x86_64-unknown-linux-gnu'
-            tauri-args: '--bundle deb,appimage'
+            tauri-args: '--bundles deb,appimage'
     runs-on: ${{ matrix.settings.platform }}
     steps:
       - uses: actions/checkout@v4
