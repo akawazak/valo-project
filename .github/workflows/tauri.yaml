@@ -10,7 +10,17 @@ jobs:
   publish-tauri:
     permissions:
       contents: write
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - platform: 'windows-latest'
+            go-target: './tmp/valovault-backend-x86_64-pc-windows-msvc.exe'
+            tauri-args: '--bundle nsis'
+          - platform: 'ubuntu-22.04'
+            go-target: './tmp/valovault-backend-x86_64-unknown-linux-gnu'
+            tauri-args: '--bundle deb,appimage'
+    runs-on: ${{ matrix.settings.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,9 +34,15 @@ jobs:
         with:
           go-version-file: backend/go.mod
 
+      - name: Install Linux dependencies
+        if: matrix.settings.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - name: Build backend sidecar
         working-directory: backend
-        run: go build -o ./tmp/valovault-backend-x86_64-pc-windows-msvc.exe .
+        run: go build -o ${{ matrix.settings.go-target }} .
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -44,12 +60,15 @@ jobs:
           projectPath: frontend
           tagName: v__VERSION__
           releaseName: ValoVault v__VERSION__
+          args: ${{ matrix.settings.tauri-args }}
           releaseBody: |
             ## ValoVault v__VERSION__
 
             ### Download
-            - **Portable (recommended):** `ValoVault-Portable-x64.zip` — extract anywhere and run `ValoVault.exe`
-            - **Installer:** `ValoVault_*_x64-setup.exe` — per-user install, no admin required
+            - **Windows Portable (recommended):** `ValoVault-Portable-x64.zip` — extract anywhere and run `ValoVault.exe`
+            - **Windows Installer:** `ValoVault_*_x64-setup.exe` — per-user install, no admin required
+            - **Linux AppImage:** `ValoVault_*_amd64.AppImage` — portable Linux execution
+            - **Linux Debian Package:** `ValoVault_*_amd64.deb` — standard Linux install
 
             ### Auto-update
             Installed copies check for updates automatically on launch.
@@ -57,6 +76,7 @@ jobs:
           prerelease: false
 
       - name: Package portable build
+        if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
         run: |
           $release = "frontend/src-tauri/target/release"
@@ -76,6 +96,7 @@ jobs:
           Compress-Archive -Path "$portable/*" -DestinationPath "ValoVault-Portable-x64.zip" -Force
 
       - name: Upload portable zip
+        if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
