@@ -88,7 +88,7 @@ jobs:
             ## ValoVault v__VERSION__
 
             ### Download
-            - **Windows Portable (recommended):** `ValoVault-Portable-x64.zip` — extract anywhere and run `ValoVault.exe`
+            - **Windows Portable (recommended):** `ValoVault.exe` — run directly from anywhere (no installation needed)
             - **Windows Installer:** `ValoVault_*_x64-setup.exe` — per-user install, no admin required
             - **Linux AppImage:** `ValoVault_*_amd64.AppImage` — portable Linux execution
             - **Linux Debian Package:** `ValoVault_*_amd64.deb` — standard Linux install
@@ -103,22 +103,11 @@ jobs:
         shell: pwsh
         run: |
           $release = "frontend/src-tauri/target/release"
-          $portable = "$release/ValoVault-Portable"
-          New-Item -ItemType Directory -Force -Path $portable | Out-Null
-
           $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } | Select-Object -First 1
           if (-not $exe) { throw "App executable not found in $release" }
+          Copy-Item $exe.FullName "ValoVault.exe" -Force
 
-          Copy-Item $exe.FullName "$portable/ValoVault.exe" -Force
-          Copy-Item "backend/tmp/valovault-backend-x86_64-pc-windows-msvc.exe" "$portable/" -Force
-          Get-ChildItem "$release" -Filter "*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination $portable -Force
-          if (Test-Path "$release/resources") {
-            Copy-Item "$release/resources" "$portable/resources" -Recurse -Force
-          }
-
-          Compress-Archive -Path "$portable/*" -DestinationPath "ValoVault-Portable-x64.zip" -Force
-
-      - name: Upload portable zip
+      - name: Upload portable exe
         if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
         env:
@@ -130,5 +119,5 @@ jobs:
             exit 0
           }
           $tag = "v$version"
-          gh release upload "$tag" "ValoVault-Portable-x64.zip" --repo akawazak/valo-project --clobber
+          gh release upload "$tag" "ValoVault.exe" --repo akawazak/valo-project --clobber
 

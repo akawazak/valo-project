@@ -21,15 +21,6 @@
         }
       ]
     },
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "..\\..\\backend\\tmp\\valovault-backend",
-          "sidecar": true
-        }
-      ]
-    },
     "shell:default"
   ]
 }

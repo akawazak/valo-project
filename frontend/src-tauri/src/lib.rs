@@ -4,11 +4,53 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, RunEvent, State, WindowEvent,
 };
-use tauri_plugin_shell::process::CommandChild;
-use tauri_plugin_shell::ShellExt;
+
+#[cfg(target_os = "windows")]
+const SIDECAR_BYTES: &[u8] = include_bytes!("../../../backend/tmp/valovault-backend-x86_64-pc-windows-msvc.exe");
+
+#[cfg(not(target_os = "windows"))]
+const SIDECAR_BYTES: &[u8] = include_bytes!("../../../backend/tmp/valovault-backend-x86_64-unknown-linux-gnu");
 
 struct AppState {
-    child: Mutex<Option<CommandChild>>,
+    child: Mutex<Option<std::process::Child>>,
+}
+
+fn spawn_embedded_sidecar(app_handle: &tauri::AppHandle) -> Result<std::process::Child, String> {
+    let cache_dir = app_handle.path().app_cache_dir().map_err(|e| e.to_string())?;
+    
+    #[cfg(target_os = "windows")]
+    let sidecar_name = "valovault-backend-temp.exe";
+    #[cfg(not(target_os = "windows"))]
+    let sidecar_name = "valovault-backend-temp";
+    
+    let sidecar_path = cache_dir.join(sidecar_name);
+    
+    std::fs::write(&sidecar_path, SIDECAR_BYTES)
+        .map_err(|e| format!("Failed to write embedded sidecar: {}", e))?;
+        
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&sidecar_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&sidecar_path, perms)
+            .map_err(|e| e.to_string())?;
+    }
+    
+    let mut cmd = std::process::Command::new(&sidecar_path);
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
+        
+    Ok(child)
 }
 
 #[tauri::command]
@@ -101,12 +143,12 @@ async fn is_portable() -> Result<bool, String> {
 #[tauri::command]
 async fn install_portable_update(app_handle: tauri::AppHandle, version: String) -> Result<(), String> {
     let download_url = format!(
-        "https://github.com/akawazak/valo-project/releases/download/v{}/ValoVault-portable.zip",
+        "https://github.com/akawazak/valo-project/releases/download/v{}/ValoVault.exe",
         version
     );
 
     let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path.parent().ok_or("Cannot get executable directory")?.to_path_buf();
+    let exe_name = exe_path.file_name().ok_or("Cannot get executable name")?.to_string_lossy().to_string();
     
     // Create temporary directory
     let cache_dir = app_handle.path().app_cache_dir().map_err(|e| e.to_string())?;
@@ -116,15 +158,13 @@ async fn install_portable_update(app_handle: tauri::AppHandle, version: String) 
     }
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     
-    let zip_file_path = temp_dir.join("update.zip");
-    let extracted_dir = temp_dir.join("extracted");
-    std::fs::create_dir_all(&extracted_dir).map_err(|e| e.to_string())?;
+    let temp_exe_path = temp_dir.join("ValoVault.exe");
 
     // Use PowerShell to download
     let download_script = format!(
         "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}'",
         download_url,
-        zip_file_path.to_string_lossy()
+        temp_exe_path.to_string_lossy()
     );
     let output_download = std::process::Command::new("powershell")
         .args(&["-NoProfile", "-Command", &download_script])
@@ -138,45 +178,30 @@ async fn install_portable_update(app_handle: tauri::AppHandle, version: String) 
         ));
     }
 
-    // Use PowerShell to extract
-    let extract_script = format!(
-        "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-        zip_file_path.to_string_lossy(),
-        extracted_dir.to_string_lossy()
-    );
-    let output_extract = std::process::Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &extract_script])
-        .output()
-        .map_err(|e| format!("Failed to extract update: {}", e))?;
-
-    if !output_extract.status.success() {
-        return Err(format!(
-            "Extraction failed: {}",
-            String::from_utf8_lossy(&output_extract.stderr)
-        ));
-    }
-
     // Create the update.bat script in the temp directory
     let bat_content = format!(
         r#"@echo off
 title ValoVault Update
-echo Waiting for ValoVault to close...
+echo Waiting for {} to close...
 timeout /t 2 /nobreak > nul
 :loop
-tasklist /nh /fi "imagename eq ValoVault.exe" | find /i "ValoVault.exe" > nul
+tasklist /nh /fi "imagename eq {}" | find /i "{}" > nul
 if %errorlevel% == 0 (
     timeout /t 1 /nobreak > nul
     goto loop
 )
 echo Applying update...
-xcopy "{}\*" "{}\" /y /e /s /i
-echo Relaunching ValoVault...
-start "" "{}\ValoVault.exe"
+copy /y "{}" "{}"
+echo Relaunching...
+start "" "{}"
 exit
 "#,
-        extracted_dir.to_string_lossy(),
-        exe_dir.to_string_lossy(),
-        exe_dir.to_string_lossy()
+        exe_name,
+        exe_name,
+        exe_name,
+        temp_exe_path.to_string_lossy(),
+        exe_path.to_string_lossy(),
+        exe_path.to_string_lossy()
     );
 
     let bat_path = temp_dir.join("update.bat");
@@ -231,11 +256,14 @@ pub fn run() {
                 )?;
             }
 
-            if !cfg!(dev) {
-                let state = app.state::<AppState>();
-                let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
-                let (_rx, child) = sidecar_command.spawn().expect("Failed to spawn sidecar");
-                *state.child.lock().unwrap() = Some(child);
+            let state = app.state::<AppState>();
+            match spawn_embedded_sidecar(app.handle()) {
+                Ok(child) => {
+                    *state.child.lock().unwrap() = Some(child);
+                }
+                Err(err) => {
+                    eprintln!("Failed to spawn embedded sidecar: {}", err);
+                }
             }
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -276,13 +304,11 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if !cfg!(dev) {
-            if let RunEvent::ExitRequested { .. } = &event {
-                let state: State<AppState> = app_handle.state();
-                if let Some(child) = state.child.lock().unwrap().take() {
-                    child.kill().expect("Failed to kill sidecar");
-                };
-            }
+        if let RunEvent::ExitRequested { .. } = &event {
+            let state: State<AppState> = app_handle.state();
+            if let Some(mut child) = state.child.lock().unwrap().take() {
+                let _ = child.kill();
+            };
         }
 
         if let RunEvent::WindowEvent {
