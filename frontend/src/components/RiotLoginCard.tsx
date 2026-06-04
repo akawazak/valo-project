@@ -120,10 +120,10 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         <div className="riot-login-overlay">
             <div className="riot-login-card">
                 <h1 className="riot-brand-title">
-                    SKIN<span style={{ color: "var(--accent-red)" }}>VAULT</span>
+                    VALO<span style={{ color: "var(--accent-red)" }}>VAULT</span>
                 </h1>
                 <p className="riot-brand-subtitle">
-                    Connect your Riot Account to view your Daily Store and use SkinVault
+                    Connect your Riot Account to view your Daily Store and use ValoVault
                 </p>
                 {error && <div className="alert alert-danger py-2 text-center">{error}</div>}
                 {stage === "start" ? (

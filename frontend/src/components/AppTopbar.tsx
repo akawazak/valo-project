@@ -195,8 +195,8 @@ export default function AppTopbar({
             )}
             <div className="topbar-inner">
                 <button type="button" className="topbar-brand" onClick={() => onTabChange('store')}>
-                    <span className="brand-mark">S</span>
-                    <span>SKIN<span>VAULT</span></span>
+                    <span className="brand-mark">V</span>
+                    <span>VALO<span>VAULT</span></span>
                 </button>
 
                 <nav className="topbar-nav" aria-label="Primary">
@@ -227,7 +227,7 @@ export default function AppTopbar({
                     </label>
 
                     {onLaunchAtStartupChange && (
-                        <label className="topbar-switch" title="Start SkinVault when you sign in to Windows (opt-in)">
+                        <label className="topbar-switch" title="Start ValoVault when you sign in to Windows (opt-in)">
                             <span>Launch at login</span>
                             <input
                                 type="checkbox"

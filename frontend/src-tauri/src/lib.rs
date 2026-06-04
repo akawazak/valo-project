@@ -101,7 +101,7 @@ async fn is_portable() -> Result<bool, String> {
 #[tauri::command]
 async fn install_portable_update(app_handle: tauri::AppHandle, version: String) -> Result<(), String> {
     let download_url = format!(
-        "https://github.com/akawazak/valo-project/releases/download/v{}/SkinVault-portable.zip",
+        "https://github.com/akawazak/valo-project/releases/download/v{}/ValoVault-portable.zip",
         version
     );
 
@@ -159,19 +159,19 @@ async fn install_portable_update(app_handle: tauri::AppHandle, version: String) 
     // Create the update.bat script in the temp directory
     let bat_content = format!(
         r#"@echo off
-title SkinVault Update
-echo Waiting for SkinVault to close...
+title ValoVault Update
+echo Waiting for ValoVault to close...
 timeout /t 2 /nobreak > nul
 :loop
-tasklist /nh /fi "imagename eq SkinVault.exe" | find /i "SkinVault.exe" > nul
+tasklist /nh /fi "imagename eq ValoVault.exe" | find /i "ValoVault.exe" > nul
 if %errorlevel% == 0 (
     timeout /t 1 /nobreak > nul
     goto loop
 )
 echo Applying update...
 xcopy "{}\*" "{}\" /y /e /s /i
-echo Relaunching SkinVault...
-start "" "{}\SkinVault.exe"
+echo Relaunching ValoVault...
+start "" "{}\ValoVault.exe"
 exit
 "#,
         extracted_dir.to_string_lossy(),
