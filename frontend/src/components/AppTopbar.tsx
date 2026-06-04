@@ -75,13 +75,14 @@ export default function AppTopbar({
 
     const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (isBulkRefreshing || accounts.length === 0) return;
+        const expiredAccounts = accounts.filter(isAccountTokenExpired);
+        if (isBulkRefreshing || expiredAccounts.length === 0) return;
         setIsBulkRefreshing(true);
-        setBulkProgressTotal(accounts.length);
+        setBulkProgressTotal(expiredAccounts.length);
         setBulkProgressCurrent(0);
 
-        for (let i = 0; i < accounts.length; i++) {
-            const acc = accounts[i];
+        for (let i = 0; i < expiredAccounts.length; i++) {
+            const acc = expiredAccounts[i];
             setBulkProgressCurrent(i + 1);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
@@ -198,7 +199,6 @@ export default function AppTopbar({
                     <span className="brand-mark">V</span>
                     <span>VALO<span>VAULT</span></span>
                 </button>
-
                 <nav className="topbar-nav" aria-label="Primary">
                     <button
                         type="button"
@@ -267,7 +267,7 @@ export default function AppTopbar({
                                             type="button"
                                             className={`account-dropdown-bulk-refresh-btn${isBulkRefreshing ? " refreshing" : ""}`}
                                             onClick={handleRefreshAllAccounts}
-                                            disabled={isBulkRefreshing}
+                                            disabled={isBulkRefreshing || accounts.filter(isAccountTokenExpired).length === 0}
                                         >
                                             {isBulkRefreshing ? (
                                                 <>
@@ -275,7 +275,7 @@ export default function AppTopbar({
                                                     <span className="mini-spinner"></span>
                                                 </>
                                             ) : (
-                                                "↻ Refresh All Accounts"
+                                                `↻ Refresh Expired (${accounts.filter(isAccountTokenExpired).length})`
                                             )}
                                         </button>
                                         {isBulkRefreshing && (
@@ -289,49 +289,51 @@ export default function AppTopbar({
                                     </div>
                                 )}
                                 {accounts.length > 0 ? (
-                                    accounts.map((acc) => {
-                                        const isExpired = isAccountTokenExpired(acc);
-                                        const isRefreshing = !!refreshingPuuids[acc.puuid];
-                                        return (
-                                            <div
-                                                key={acc.puuid}
-                                                className={`account-dropdown-item${activeAccount?.puuid === acc.puuid ? " active" : ""}`}
-                                                role="option"
-                                                aria-selected={activeAccount?.puuid === acc.puuid}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    className="account-dropdown-select"
-                                                    onClick={() => handleSelectAccount(acc)}
-                                                    title={accountLabel(acc)}
+                                    <div className="account-dropdown-list">
+                                        {accounts.map((acc) => {
+                                            const isExpired = isAccountTokenExpired(acc);
+                                            const isRefreshing = !!refreshingPuuids[acc.puuid];
+                                            return (
+                                                <div
+                                                    key={acc.puuid}
+                                                    className={`account-dropdown-item${activeAccount?.puuid === acc.puuid ? " active" : ""}`}
+                                                    role="option"
+                                                    aria-selected={activeAccount?.puuid === acc.puuid}
                                                 >
-                                                    <span>{acc.gameName}</span>
-                                                    <small>#{acc.tagLine}</small>
-                                                    {isExpired && (
-                                                        <span className="account-expired-dot" title="Session expired" />
-                                                    )}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className={`account-dropdown-refresh${isRefreshing ? " refreshing" : ""}`}
-                                                    aria-label={`Refresh ${acc.gameName}`}
-                                                    onClick={(e) => handleRefreshAccount(e, acc)}
-                                                    disabled={isRefreshing || isBulkRefreshing}
-                                                    title="Refresh session"
-                                                >
-                                                    ↻
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="account-dropdown-remove"
-                                                    aria-label={`Remove ${acc.gameName}`}
-                                                    onClick={() => handleRemoveAccount(acc.puuid)}
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
-                                        );
-                                    })
+                                                    <button
+                                                        type="button"
+                                                        className="account-dropdown-select"
+                                                        onClick={() => handleSelectAccount(acc)}
+                                                        title={accountLabel(acc)}
+                                                    >
+                                                        <span>{acc.gameName}</span>
+                                                        <small>#{acc.tagLine}</small>
+                                                        {isExpired && (
+                                                            <span className="account-expired-dot" title="Session expired" />
+                                                        )}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className={`account-dropdown-refresh${isRefreshing ? " refreshing" : ""}`}
+                                                        aria-label={`Refresh ${acc.gameName}`}
+                                                        onClick={(e) => handleRefreshAccount(e, acc)}
+                                                        disabled={isRefreshing || isBulkRefreshing}
+                                                        title="Refresh session"
+                                                    >
+                                                        ↻
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="account-dropdown-remove"
+                                                        aria-label={`Remove ${acc.gameName}`}
+                                                        onClick={() => handleRemoveAccount(acc.puuid)}
+                                                    >
+                                                        ×
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 ) : (
                                     <div className="account-dropdown-empty">No accounts connected</div>
                                 )}

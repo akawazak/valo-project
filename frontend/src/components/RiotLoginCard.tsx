@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import * as api from "@/services/api";
 import { RiotAccount } from "@/lib/types";
@@ -34,6 +34,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [error, setError] = useState<string | null>(null);
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
     const [currentSessionId, setCurrentSessionId] = useState("");
+    const currentSessionIdRef = useRef("");
 
     useEffect(() => {
         api.getLocalAccount()
@@ -82,7 +83,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 region: res.region,
                 gameName: res.game_name || "Unknown",
                 tagLine: res.tag_line || "",
-                sessionId: currentSessionId || undefined,
+                sessionId: currentSessionIdRef.current || undefined,
             };
             activateAccount(newAccount);
             onLoginSuccess(newAccount);
@@ -100,6 +101,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             const { auth_url } = await api.getAuthUrl();
             const { invoke } = await import("@tauri-apps/api/core");
             const tempSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            currentSessionIdRef.current = tempSessionId;
             setCurrentSessionId(tempSessionId);
             await invoke("open_login_window", { authUrl: auth_url, sessionId: tempSessionId, visible: true });
             setStage("paste");
