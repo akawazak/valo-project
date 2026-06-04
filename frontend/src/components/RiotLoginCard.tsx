@@ -44,27 +44,35 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             .catch(() => {});
     }, []);
 
-    async function handleStartLogin() {
-        setIsLoading(true);
-        setError(null);
-        try {
-            const { auth_url } = await api.getAuthUrl();
-            await open(auth_url);
-            setStage("paste");
-        } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to open Riot authorization URL.");
-        } finally {
-            setIsLoading(false);
-        }
-    }
+    // Listen for the redirect event from the Tauri main process when using the popup window
+    useEffect(() => {
+        let unlisten: (() => void) | null = null;
 
-    async function handleSubmitUrl(e: React.FormEvent) {
-        e.preventDefault();
-        if (!pastedUrl.trim()) return;
+        async function setupListener() {
+            try {
+                const { listen } = await import("@tauri-apps/api/event");
+                const fn = await listen<string>("riot-login-redirect", (event) => {
+                    const redirectUrl = event.payload;
+                    connectWithUrl(redirectUrl);
+                });
+                unlisten = fn;
+            } catch (err) {
+                console.error("Failed to setup Tauri redirect event listener:", err);
+            }
+        }
+
+        setupListener();
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, []);
+
+    async function connectWithUrl(url: string) {
         setIsLoading(true);
         setError(null);
         try {
-            const res = await api.submitTokenUrl(pastedUrl.trim());
+            const res = await api.submitTokenUrl(url);
             const newAccount: RiotAccount = {
                 puuid: res.puuid,
                 accessToken: res.access_token,
@@ -74,7 +82,6 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 gameName: res.game_name || "Unknown",
                 tagLine: res.tag_line || "",
             };
-            // Don't save here — let the parent (DataContext) handle storage via handleAddNewAccount
             activateAccount(newAccount);
             onLoginSuccess(newAccount);
         } catch (err) {
@@ -82,6 +89,27 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         } finally {
             setIsLoading(false);
         }
+    }
+
+    async function handleStartLogin() {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const { auth_url } = await api.getAuthUrl();
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("open_login_window", { authUrl: auth_url });
+            setStage("paste");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to open Riot authorization window.");
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    async function handleSubmitUrl(e: React.FormEvent) {
+        e.preventDefault();
+        if (!pastedUrl.trim()) return;
+        await connectWithUrl(pastedUrl.trim());
     }
 
     return (
@@ -122,12 +150,16 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                             {isLoading ? "Opening…" : "Sign In with Riot"}
                         </button>
                         <p className="text-muted small text-center mt-3">
-                            After signing in, copy the full URL from your browser and paste it on the next screen.
+                            A secure login popup has been opened. Complete your sign-in there to connect automatically.
                         </p>
                     </>
                 ) : (
                     <form onSubmit={handleSubmitUrl}>
-                        <label className="form-label small">Paste redirect URL</label>
+                        <div className="text-center mb-3">
+                            <span className="spinner-border spinner-border-sm text-danger me-2" role="status" />
+                            <span className="small text-muted">Waiting for login popup...</span>
+                        </div>
+                        <label className="form-label small">Or paste redirect URL manually if it didn&apos;t connect</label>
                         <textarea className="form-control mb-2" rows={3} value={pastedUrl} onChange={e => setPastedUrl(e.target.value)} placeholder="http://localhost/redirect#access_token=..." />
                         <button type="submit" className="btn btn-danger w-100" disabled={isLoading || !pastedUrl.trim()}>
                             {isLoading ? "Connecting…" : "Connect Account"}
