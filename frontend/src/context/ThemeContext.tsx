@@ -11,23 +11,28 @@ type ThemeContextType = {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+function readStoredTheme(): Theme {
+    if (typeof window === 'undefined') return 'dark';
+    const stored = localStorage.getItem('theme');
+    return stored === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme: Theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-bs-theme', theme);
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem('theme', theme);
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-    const [theme, setTheme] = useState<Theme>('dark');
+    const [theme, setTheme] = useState<Theme>(readStoredTheme);
 
     useEffect(() => {
-        const storedTheme = localStorage.getItem('theme') as Theme | null;
-        if (storedTheme) {
-            setTheme(storedTheme);
-        }
-    }, []);
-
-    useEffect(() => {
-        document.documentElement.setAttribute('data-bs-theme', theme);
-        localStorage.setItem('theme', theme);
+        applyTheme(theme);
     }, [theme]);
 
     const toggleTheme = () => {
-        setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
+        setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
     };
 
     return (

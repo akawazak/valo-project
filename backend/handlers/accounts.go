@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -44,4 +45,35 @@ func (h *Handler) PostAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.returnAny(w, "success")
+}
+
+type LocalAccountResponse struct {
+	Puuid    string `json:"puuid"`
+	Region   string `json:"region"`
+	GameName string `json:"game_name"`
+	TagLine  string `json:"tag_line"`
+}
+
+func (h *Handler) GetLocalAccount(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	val := h.Val
+	h.mu.RUnlock()
+
+	if val == nil {
+		h.returnError(w, fmt.Errorf("local Valorant client is not running"))
+		return
+	}
+
+	names, err := val.GetNames([]string{val.Player.Uuid})
+	if err != nil || len(names) == 0 {
+		h.returnError(w, fmt.Errorf("failed to get local player details: %v", err))
+		return
+	}
+
+	h.returnAny(w, &LocalAccountResponse{
+		Puuid:    val.Player.Uuid,
+		Region:   string(val.Region),
+		GameName: names[0].GameName,
+		TagLine:  names[0].TagLine,
+	})
 }

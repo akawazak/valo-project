@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Preset, LoadoutItemV1, SpraySlot } from '@/lib/types';
-import { getPlayerLoadout, savePresets } from '@/services/api';
+import { getPlayerLoadoutData, savePresets } from '@/services/api';
 import { importPreset } from '@/lib/presetShare';
-
-const DEFAULT_PRESET_ID = 'default-preset';
+import { DEFAULT_PRESET_ID, effectiveIdentity, effectiveSprays, GameLoadoutMeta, mergePresetLoadout } from '@/lib/effectivePreset';
 
 export enum NamingMode {
     New,
@@ -19,7 +18,13 @@ export const defaultPreset: Preset = {
     agents: [],
 };
 
-export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Record<string, LoadoutItemV1>, onPresetSelectError: (error: unknown) => void) {
+export function usePresets(
+    initialPresets: Preset[],
+    initialPlayerLoadout: Record<string, LoadoutItemV1>,
+    onPresetSelectError: (error: unknown) => void,
+    initialGameMeta: GameLoadoutMeta = { sprays: [] },
+    dataRevision = 0,
+) {
     const [presets, setPresets] = useState<Preset[]>(initialPresets);
     const [selectedPreset, setSelectedPreset] = useState<Preset | null>(defaultPreset);
     const [isEditing, setIsEditing] = useState(false);
@@ -31,13 +36,91 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
     const [showConfirmationModal, setShowConfirmationModal] = useState(false);
     const [presetToDelete, setPresetToDelete] = useState<Preset | null>(null);
     const [currentLoadout, setCurrentLoadout] = useState<Record<string, LoadoutItemV1>>(initialPlayerLoadout);
+    const [gameLoadout, setGameLoadout] = useState<Record<string, LoadoutItemV1>>(initialPlayerLoadout);
+    const [gameMeta, setGameMeta] = useState<GameLoadoutMeta>(initialGameMeta);
 
+    const lastRevisionRef = useRef(-1);
+    const isEditingRef = useRef(false);
+    isEditingRef.current = isEditing;
+
+    const livePreset = useMemo<Preset>(() => ({
+        ...defaultPreset,
+        loadout: gameLoadout,
+    }), [gameLoadout]);
+
+    const makeEditableSnapshot = useCallback((preset: Preset): Preset => {
+        const sprays = effectiveSprays(preset, gameMeta);
+        const identity = effectiveIdentity(preset, gameMeta);
+        return {
+            ...preset,
+            loadout: { ...preset.loadout },
+            agents: preset.agents ? [...preset.agents] : [],
+            sprays: sprays.length ? [...sprays] : undefined,
+            identity: { ...identity },
+        };
+    }, [gameMeta]);
+
+    // Sync server data when parent reloads (account switch / refresh) without clobbering in-progress edits
     useEffect(() => {
-        defaultPreset.loadout = initialPlayerLoadout;
-        setCurrentLoadout(initialPlayerLoadout);
-        setPresets(initialPresets);
-    }, [initialPlayerLoadout, initialPresets]);
+        if (lastRevisionRef.current === dataRevision) {
+            return;
+        }
+        lastRevisionRef.current = dataRevision;
 
+        setPresets(initialPresets);
+        setGameMeta(initialGameMeta);
+        setGameLoadout(initialPlayerLoadout);
+
+        if (isEditingRef.current) {
+            return;
+        }
+
+        setIsEditing(false);
+        setEditingPreset(null);
+        setOriginalPreset(null);
+
+        setSelectedPreset(prev => {
+            const next =
+                prev?.uuid === DEFAULT_PRESET_ID || initialPresets.some(p => p.uuid === prev?.uuid)
+                    ? (prev ?? livePreset)
+                    : livePreset;
+
+            if (next.uuid === DEFAULT_PRESET_ID) {
+                setCurrentLoadout(initialPlayerLoadout);
+                return livePreset;
+            } else {
+                const fresh = initialPresets.find(p => p.uuid === next.uuid);
+                setCurrentLoadout(
+                    fresh
+                        ? mergePresetLoadout(fresh, initialPresets, fresh.loadout)
+                        : initialPlayerLoadout,
+                );
+            }
+            return next;
+        });
+    }, [dataRevision, initialPresets, initialPlayerLoadout, initialGameMeta, livePreset]);
+
+    const refreshFromGame = useCallback(async () => {
+        try {
+            const playerData = await getPlayerLoadoutData();
+            setGameLoadout(playerData.loadout);
+            setGameMeta({ sprays: playerData.sprays, identity: playerData.identity });
+
+            if (!isEditingRef.current) {
+                setSelectedPreset(prev => {
+                    if (!prev || prev.uuid === DEFAULT_PRESET_ID) {
+                        setCurrentLoadout(playerData.loadout);
+                        return { ...defaultPreset, loadout: playerData.loadout };
+                    }
+                    return prev;
+                });
+            }
+            return playerData;
+        } catch (error) {
+            onPresetSelectError(error);
+            throw error;
+        }
+    }, [onPresetSelectError]);
 
     const handleSave = async () => {
         if (!editingPreset || editingPreset.uuid === DEFAULT_PRESET_ID) return;
@@ -48,6 +131,7 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
         setPresets(updatedPresets);
         await savePresets(updatedPresets);
         setSelectedPreset(editingPreset);
+        setCurrentLoadout(mergePresetLoadout(editingPreset, updatedPresets, editingPreset.loadout));
         setIsEditing(false);
         setEditingPreset(null);
         setOriginalPreset(null);
@@ -71,27 +155,36 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
                 setPresets(updatedPresets);
                 await savePresets(updatedPresets);
                 setShowPresetNameModal(false);
+                setDropdownPreset(null);
                 return;
             }
             case NamingMode.New:
-                newPreset.loadout = defaultPreset.loadout;
+                newPreset.loadout = { ...gameLoadout };
                 newPreset.agents = [];
-                newPreset.identity = defaultPreset.identity;
-                newPreset.sprays = defaultPreset.sprays;
+                newPreset.identity = effectiveIdentity(livePreset, gameMeta);
+                newPreset.sprays = [...effectiveSprays(livePreset, gameMeta)];
                 break;
             case NamingMode.SaveAsNew:
-                newPreset.loadout = currentLoadout;
+                newPreset.loadout = { ...currentLoadout };
                 newPreset.agents = editingPreset?.agents || originalPreset?.agents || [];
                 newPreset.identity = editingPreset?.identity || originalPreset?.identity;
-                newPreset.sprays = editingPreset?.sprays || originalPreset?.sprays || [];
+                newPreset.sprays = editingPreset?.sprays || originalPreset?.sprays || [...gameMeta.sprays];
                 break;
             case NamingMode.Variant: {
                 newPreset.parentUuid = editingPreset?.uuid || originalPreset?.uuid || dropdownPreset?.uuid;
                 const edited: Record<string, LoadoutItemV1> = {};
-                for (const [gun, item] of Object.entries(editingPreset?.loadout || dropdownPreset!.loadout)) {
-                    const originalGun = originalPreset?.loadout[gun] || dropdownPreset!.loadout[gun];
-                    const wasEdited = originalGun.chromaId != item.chromaId || originalGun.skinLevelId != item.skinLevelId;
-                    if (wasEdited) {
+                const source = editingPreset?.loadout || dropdownPreset!.loadout;
+                const base = originalPreset?.loadout || dropdownPreset!.loadout;
+                for (const [gun, item] of Object.entries(source)) {
+                    const originalGun = base[gun];
+                    if (
+                        !originalGun ||
+                        originalGun.skinId !== item.skinId ||
+                        originalGun.chromaId !== item.chromaId ||
+                        originalGun.skinLevelId !== item.skinLevelId ||
+                        originalGun.charmID !== item.charmID ||
+                        originalGun.charmLevelID !== item.charmLevelID
+                    ) {
                         edited[gun] = item;
                     }
                 }
@@ -106,35 +199,50 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
         setSelectedPreset(newPreset);
         setCurrentLoadout(newPreset.loadout);
 
+        if (namingMode === NamingMode.New || namingMode === NamingMode.SaveAsNew) {
+            setIsEditing(true);
+            setEditingPreset({ ...newPreset });
+            setOriginalPreset({ ...newPreset });
+        } else {
+            setIsEditing(false);
+            setEditingPreset(null);
+            setOriginalPreset(null);
+        }
+
         setShowPresetNameModal(false);
-        setIsEditing(false);
-        setEditingPreset(null);
-        setOriginalPreset(null);
         setDropdownPreset(null);
     };
 
     const handlePresetSelect = async (preset: Preset) => {
+        if (isEditing) {
+            setIsEditing(false);
+            setEditingPreset(null);
+            setOriginalPreset(null);
+        }
+
         if (preset.uuid === DEFAULT_PRESET_ID) {
             try {
-                const playerLoadout = await getPlayerLoadout();
-                defaultPreset.loadout = playerLoadout;
-                setCurrentLoadout(playerLoadout);
+                const playerData = await getPlayerLoadoutData();
+                setGameLoadout(playerData.loadout);
+                setGameMeta({ sprays: playerData.sprays, identity: playerData.identity });
+                setCurrentLoadout(playerData.loadout);
+                setSelectedPreset({ ...defaultPreset, loadout: playerData.loadout });
+                return;
             } catch (error) {
                 onPresetSelectError(error);
+                return;
             }
         } else {
-            setCurrentLoadout(preset.loadout);
+            setCurrentLoadout(mergePresetLoadout(preset, presets, preset.loadout));
         }
 
         setSelectedPreset(preset);
-        setIsEditing(false);
-        setEditingPreset(null);
-        setOriginalPreset(null);
     };
 
     const handlePresetDelete = (presetId: string) => {
-        const presetToDelete = presets.find(p => p.uuid == presetId)
-        setPresetToDelete(presetToDelete!);
+        const presetToDelete = presets.find(p => p.uuid === presetId);
+        if (!presetToDelete) return;
+        setPresetToDelete(presetToDelete);
         setShowConfirmationModal(true);
     };
 
@@ -144,20 +252,21 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
                 p => p.uuid !== presetToDelete.uuid && p.parentUuid !== presetToDelete.uuid
             );
 
-            if (presetToDelete.uuid === selectedPreset?.uuid || presetToDelete.uuid === selectedPreset?.parentUuid) {
-                const parent = getParent(presetToDelete)
-                if (parent) {
-                    setSelectedPreset(parent);
-                    setCurrentLoadout(parent.loadout);
-                } else {
-                    setSelectedPreset(defaultPreset);
-                    setCurrentLoadout(defaultPreset.loadout);
-                }
+            const deletingActive =
+                presetToDelete.uuid === selectedPreset?.uuid ||
+                presetToDelete.uuid === editingPreset?.uuid ||
+                presetToDelete.uuid === originalPreset?.uuid;
+
+            if (deletingActive) {
+                setSelectedPreset(livePreset);
+                setCurrentLoadout(gameLoadout);
+                setIsEditing(false);
+                setEditingPreset(null);
+                setOriginalPreset(null);
             }
 
             setPresets(updatedPresets);
             await savePresets(updatedPresets);
-
             setPresetToDelete(null);
         }
         setShowConfirmationModal(false);
@@ -171,7 +280,7 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
     const handleCancel = () => {
         if (originalPreset) {
             setSelectedPreset(originalPreset);
-            setCurrentLoadout(originalPreset.loadout);
+            setCurrentLoadout(mergePresetLoadout(originalPreset, presets, originalPreset.loadout));
         }
         setIsEditing(false);
         setEditingPreset(null);
@@ -184,21 +293,21 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
     };
 
     const handleOpenRenameModal = (preset: Preset) => {
-        setNamingMode(NamingMode.Rename)
+        setNamingMode(NamingMode.Rename);
         setDropdownPreset(preset);
         setShowPresetNameModal(true);
     };
 
     const handleDropdownVariant = (preset: Preset) => {
-        setNamingMode(NamingMode.Variant)
+        setNamingMode(NamingMode.Variant);
         setDropdownPreset(preset);
         setShowPresetNameModal(true);
     };
 
     const handleVariant = () => {
-        setNamingMode(NamingMode.Variant)
+        setNamingMode(NamingMode.Variant);
         setShowPresetNameModal(true);
-    }
+    };
 
     const handleClosePresetNameModal = () => {
         setShowPresetNameModal(false);
@@ -206,106 +315,153 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
     };
 
     const handleAgentAssignment = (agentIds: string[], isAssigned: boolean) => {
+        const base = editingPreset || selectedPreset;
+        if (!base || base.uuid === DEFAULT_PRESET_ID) return;
+
+        const applyAgentChange = (preset: Preset): Preset => {
+            const updatedAgents = isAssigned
+                ? [...new Set([...(preset.agents || []), ...agentIds])]
+                : (preset.agents || []).filter(id => !agentIds.includes(id));
+            return { ...preset, agents: updatedAgents };
+        };
+
         if (!isEditing) {
+            const snapshot = applyAgentChange(makeEditableSnapshot(base));
             setIsEditing(true);
-            setOriginalPreset(selectedPreset);
-            setEditingPreset(selectedPreset);
+            setOriginalPreset(base);
+            setEditingPreset(snapshot);
             setSelectedPreset(null);
+            setCurrentLoadout(mergePresetLoadout(snapshot, presets, snapshot.loadout));
+            return;
         }
 
-        setEditingPreset(prev => {
-            if (!prev) return null;
-            const updatedAgents = isAssigned
-                ? [...(prev.agents || []), ...agentIds]
-                : (prev.agents || []).filter(id => !agentIds.includes(id));
-            return { ...prev, agents: updatedAgents };
-        });
+        setEditingPreset(prev => prev ? applyAgentChange(prev) : null);
+    };
+
+    const applyLoadoutChange = (
+        preset: Preset,
+        weaponId: string,
+        changedItem: Partial<LoadoutItemV1> | null,
+    ): Preset => {
+        const parentPreset = preset.parentUuid
+            ? presets.find(p => p.uuid === preset.parentUuid)
+            : undefined;
+        const baseItem =
+            preset.loadout[weaponId] ??
+            parentPreset?.loadout[weaponId];
+
+        const newLoadout = { ...preset.loadout };
+        if (!changedItem) {
+            delete newLoadout[weaponId];
+        } else if (baseItem) {
+            newLoadout[weaponId] = { ...baseItem, ...changedItem };
+        } else {
+            newLoadout[weaponId] = changedItem as LoadoutItemV1;
+        }
+        return { ...preset, loadout: newLoadout };
     };
 
     const handleItemChange = (weaponId: string, changedItem: Partial<LoadoutItemV1> | null) => {
-        const preset = editingPreset || selectedPreset;
-        const parentPreset = presets.find(p => p.uuid === preset?.parentUuid)
-        const newLoadoutItem = { ...(editingPreset?.loadout[weaponId] || currentLoadout[weaponId]) || parentPreset?.loadout[weaponId], ...changedItem };
-
         if (editingPreset) {
-            const newLoadout = { ...editingPreset.loadout, [weaponId]: newLoadoutItem };
-            if (!changedItem) {
-                delete newLoadout[weaponId];
-            }
-            setEditingPreset({ ...editingPreset, loadout: newLoadout });
-            setCurrentLoadout(newLoadout);
-        } else if (selectedPreset) {
-            setIsEditing(true);
-            setOriginalPreset(selectedPreset);
-            const newLoadout = { ...selectedPreset.loadout, [weaponId]: newLoadoutItem };
-            if (!changedItem) {
-                delete newLoadout[weaponId];
-            }
-            setEditingPreset({ ...selectedPreset, loadout: newLoadout });
-            setCurrentLoadout(newLoadout);
-            setSelectedPreset(null);
-        } else {
-            setCurrentLoadout(prev => ({ ...prev, [weaponId]: newLoadoutItem }));
+            const next = applyLoadoutChange(editingPreset, weaponId, changedItem);
+            setEditingPreset(next);
+            setCurrentLoadout(next.loadout);
+            return;
         }
+
+        const preset = selectedPreset;
+        if (!preset || preset.uuid === DEFAULT_PRESET_ID) {
+            const newLoadout = { ...currentLoadout };
+            if (!changedItem) delete newLoadout[weaponId];
+            else {
+                const base = currentLoadout[weaponId];
+                newLoadout[weaponId] = base ? { ...base, ...changedItem } : (changedItem as LoadoutItemV1);
+            }
+            setCurrentLoadout(newLoadout);
+            setGameLoadout(newLoadout);
+            return;
+        }
+
+        const sprays = effectiveSprays(preset, gameMeta);
+        const identity = effectiveIdentity(preset, gameMeta);
+        let snapshot: Preset = {
+            ...makeEditableSnapshot(preset),
+            sprays: sprays.length ? [...sprays] : undefined,
+            identity: { ...identity },
+        };
+        snapshot = applyLoadoutChange(snapshot, weaponId, changedItem);
+        const displayLoadout = mergePresetLoadout(snapshot, presets, snapshot.loadout);
+        setIsEditing(true);
+        setOriginalPreset(preset);
+        setEditingPreset(snapshot);
+        setSelectedPreset(null);
+        setCurrentLoadout(displayLoadout);
     };
 
     const handleTogglePreset = async (preset: Preset, checked: boolean) => {
         const updatedPresets = presets.map(p =>
-            p.uuid === preset!.uuid ? { ...p, disabled: !checked } : p
+            p.uuid === preset.uuid ? { ...p, disabled: !checked } : p
         );
         setPresets(updatedPresets);
         await savePresets(updatedPresets);
-    }
+    };
 
-    const getParent = (preset: Preset) => {
-        return presets.find(p => p.uuid == preset.parentUuid)
-    }
+    const getParentPreset = (preset: Preset | null | undefined) => {
+        if (!preset?.parentUuid) return undefined;
+        return presets.find(p => p.uuid === preset.parentUuid);
+    };
 
     const handleIdentityChange = (cardId: string, titleId: string) => {
-        if (editingPreset) {
-            setEditingPreset({ 
-                ...editingPreset, 
-                identity: { playerCardId: cardId, playerTitleId: titleId } 
-            });
-        } else if (selectedPreset) {
+        const base = editingPreset || selectedPreset;
+        if (!base) return;
+
+        const nextIdentity = { playerCardId: cardId, playerTitleId: titleId };
+
+        if (!isEditing) {
+            const snapshot = { ...makeEditableSnapshot(base), identity: nextIdentity };
             setIsEditing(true);
-            setOriginalPreset(selectedPreset);
-            setEditingPreset({ 
-                ...selectedPreset, 
-                identity: { playerCardId: cardId, playerTitleId: titleId } 
-            });
+            setOriginalPreset(base);
+            setEditingPreset(snapshot);
             setSelectedPreset(null);
+            setCurrentLoadout(mergePresetLoadout(snapshot, presets, snapshot.loadout));
+            return;
         }
+
+        setEditingPreset(prev => prev ? { ...prev, identity: nextIdentity } : null);
     };
 
     const handleSpraysChange = (sprays: SpraySlot[]) => {
-        if (editingPreset) {
-            setEditingPreset({ ...editingPreset, sprays });
-        } else if (selectedPreset) {
+        const base = editingPreset || selectedPreset;
+        if (!base) return;
+
+        if (!isEditing) {
+            const snapshot = { ...makeEditableSnapshot(base), sprays };
             setIsEditing(true);
-            setOriginalPreset(selectedPreset);
-            setEditingPreset({ ...selectedPreset, sprays });
+            setOriginalPreset(base);
+            setEditingPreset(snapshot);
             setSelectedPreset(null);
+            setCurrentLoadout(mergePresetLoadout(snapshot, presets, snapshot.loadout));
+            return;
         }
+
+        setEditingPreset(prev => (prev ? { ...prev, sprays } : null));
     };
 
     const handleImportPresetAction = async (presetCode: string) => {
-        try {
-            const imported = importPreset(presetCode);
-            const newPreset: Preset = {
-                ...imported,
-                uuid: crypto.randomUUID()
-            };
-            const updatedPresets = [...presets.filter(p => p.uuid !== DEFAULT_PRESET_ID), newPreset];
-            setPresets(updatedPresets);
-            await savePresets(updatedPresets);
-            setSelectedPreset(newPreset);
-            setCurrentLoadout(newPreset.loadout);
-            return true;
-        } catch (e) {
-            console.error(e);
-            throw e;
-        }
+        const imported = importPreset(presetCode);
+        const newPreset: Preset = {
+            ...imported,
+            uuid: crypto.randomUUID(),
+        };
+        const updatedPresets = [...presets.filter(p => p.uuid !== DEFAULT_PRESET_ID), newPreset];
+        setPresets(updatedPresets);
+        await savePresets(updatedPresets);
+        setSelectedPreset(newPreset);
+        setCurrentLoadout(newPreset.loadout);
+        setIsEditing(false);
+        setEditingPreset(null);
+        setOriginalPreset(null);
+        return true;
     };
 
     return {
@@ -337,7 +493,10 @@ export function usePresets(initialPresets: Preset[], initialPlayerLoadout: Recor
         handleIdentityChange,
         handleSpraysChange,
         handleImportPresetAction,
-        defaultPreset,
-        NamingMode
+        refreshFromGame,
+        getParentPreset,
+        defaultPreset: livePreset,
+        gameMeta,
+        NamingMode,
     };
 }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
     AccessoryStoreOffer, BundleInfo, ContentTier, StorefrontBonusOffer, StorefrontBundleItem,
-    StorefrontOffer, StorefrontResponse, Weapon,
+    StorefrontOffer, StorefrontResponse, Weapon, SprayAsset, PlayerCardAsset, GunBuddy,
 } from "@/lib/types";
 import { getStorefront, getWallet } from "@/services/api";
 import { useData } from "@/context/DataContext";
@@ -97,21 +97,21 @@ function cardFromOffer(
 
 function accessoryFromOffer(
     offer: StorefrontOffer,
-    sprays: ReturnType<typeof useData>["sprays"],
-    cards: ReturnType<typeof useData>["playerCards"],
-    buddies: ReturnType<typeof useData>["ownedBuddies"]
+    sprays: Record<string, SprayAsset>,
+    cards: Record<string, PlayerCardAsset>,
+    buddies: Record<string, GunBuddy>
 ): AccessoryOfferCard | null {
     const rewardId = offer.Rewards?.[0]?.ItemID || offer.OfferID;
     const rewardKey = rewardId.toLowerCase();
-    const spray = sprays.find(item => item.uuid.toLowerCase() === rewardKey);
+    const spray = sprays[rewardKey];
     if (spray) {
         return { uuid: rewardId, name: spray.displayName, kind: "Spray", image: spray.displayIcon || spray.fullIcon || spray.fullTransparentIcon || "", priceValue: firstCost(offer.Cost) };
     }
-    const card = cards.find(item => item.uuid.toLowerCase() === rewardKey);
+    const card = cards[rewardKey];
     if (card) {
         return { uuid: rewardId, name: card.displayName, kind: "Card", image: card.displayIcon || card.smallArt || card.wideArt || "", priceValue: firstCost(offer.Cost) };
     }
-    const buddy = buddies.find(item => item.uuid.toLowerCase() === rewardKey || item.levels.some(level => level.uuid.toLowerCase() === rewardKey));
+    const buddy = buddies[rewardKey];
     if (buddy) {
         return { uuid: rewardId, name: buddy.displayName, kind: "Buddy", image: buddy.levels[0]?.displayIcon || "", priceValue: firstCost(offer.Cost) };
     }
@@ -194,6 +194,33 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         [contentTiers]
     );
 
+    const sprayMap = useMemo(() =>
+        sprays.reduce<Record<string, SprayAsset>>((acc, spray) => {
+            acc[spray.uuid.toLowerCase()] = spray;
+            return acc;
+        }, {}),
+        [sprays]
+    );
+
+    const playerCardMap = useMemo(() =>
+        playerCards.reduce<Record<string, PlayerCardAsset>>((acc, card) => {
+            acc[card.uuid.toLowerCase()] = card;
+            return acc;
+        }, {}),
+        [playerCards]
+    );
+
+    const buddyMap = useMemo(() =>
+        ownedBuddies.reduce<Record<string, GunBuddy>>((acc, buddy) => {
+            acc[buddy.uuid.toLowerCase()] = buddy;
+            for (const level of buddy.levels) {
+                acc[level.uuid.toLowerCase()] = buddy;
+            }
+            return acc;
+        }, {}),
+        [ownedBuddies]
+    );
+
     const refreshStorefront = useCallback(() => {
         if (!activeAccount) {
             setStorefront(null);
@@ -257,9 +284,10 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
 
     const accessories = useMemo(() =>
         (storefront?.AccessoryStore?.AccessoryStoreOffers ?? [])
-            .map((entry: AccessoryStoreOffer) => accessoryFromOffer(entry.Offer, sprays, playerCards, ownedBuddies))
+            .map((entry: AccessoryStoreOffer) =>
+                accessoryFromOffer(entry.Offer, sprayMap, playerCardMap, buddyMap))
             .filter((item): item is AccessoryOfferCard => item !== null),
-        [storefront, sprays, playerCards, ownedBuddies]
+        [storefront, sprayMap, playerCardMap, buddyMap]
     );
 
     const resolvedBundle = useMemo(() => {
@@ -401,7 +429,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     </button>
                     {bundleOpen && (
                         <div className="storefront-bundle-items-panel">
-                            <div className="store-grid">
+                            <div className="store-bundle-row">
                                 {resolvedBundle.items.map(o => <OfferCard key={o.uuid} offer={o} />)}
                             </div>
                         </div>

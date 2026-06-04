@@ -71,12 +71,12 @@ func (h *Handler) GetOwnedSkins(w http.ResponseWriter, r *http.Request) {
 }
 
 type Buddy struct {
-	LevelId string
-	Amount  int
+	LevelId string `json:"levelId"`
+	Amount  int    `json:"amount"`
 }
 
 type OwnedGunBuddiesResponse struct {
-	Buddies []*Buddy
+	Buddies []*Buddy `json:"buddies"`
 }
 
 func (h *Handler) GetOwnedGunBuddies(w http.ResponseWriter, r *http.Request) {
@@ -150,8 +150,9 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type PlayerLoadoutResp struct {
-		Loadout map[string]presets.LoadoutItemV1 `json:"loadout"`
-		Sprays  []SpraySlotResp                 `json:"sprays"`
+		Loadout  map[string]presets.LoadoutItemV1 `json:"loadout"`
+		Sprays   []SpraySlotResp                    `json:"sprays"`
+		Identity *presets.IdentityV1              `json:"identity,omitempty"`
 	}
 
 	resp := &PlayerLoadoutResp{
@@ -175,6 +176,13 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 				EquipSlotID: expr.TypeID,
 				SprayID:     expr.AssetID,
 			})
+		}
+	}
+
+	if loadout.Identity != nil {
+		resp.Identity = &presets.IdentityV1{
+			PlayerCardID:  loadout.Identity.PlayerCardID,
+			PlayerTitleID: loadout.Identity.PlayerTitleID,
 		}
 	}
 

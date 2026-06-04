@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import * as api from "@/services/api";
 import { RiotAccount } from "@/lib/types";
@@ -32,6 +32,17 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [pastedUrl, setPastedUrl] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
+
+    useEffect(() => {
+        api.getLocalAccount()
+            .then(data => {
+                if (data && data.puuid) {
+                    setLocalAccount(data);
+                }
+            })
+            .catch(() => {});
+    }, []);
 
     async function handleStartLogin() {
         setIsLoading(true);
@@ -85,6 +96,28 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 {error && <div className="alert alert-danger py-2 text-center">{error}</div>}
                 {stage === "start" ? (
                     <>
+                        {localAccount && (
+                            <button
+                                type="button"
+                                className="btn btn-outline-success w-100 mb-3 d-flex align-items-center justify-content-center gap-2"
+                                onClick={() => {
+                                    const newAccount: RiotAccount = {
+                                        puuid: localAccount.puuid,
+                                        accessToken: "",
+                                        entitlementsToken: "",
+                                        expiresAt: 0,
+                                        region: localAccount.region,
+                                        gameName: localAccount.game_name,
+                                        tagLine: localAccount.tag_line,
+                                    };
+                                    activateAccount(newAccount);
+                                    onLoginSuccess(newAccount);
+                                }}
+                                style={{ borderColor: "#28a745", color: "#28a745" }}
+                            >
+                                ⚡ Use Active Game Session ({localAccount.game_name}#{localAccount.tag_line})
+                            </button>
+                        )}
                         <button type="button" className="btn btn-danger w-100 mb-2" onClick={handleStartLogin} disabled={isLoading}>
                             {isLoading ? "Opening…" : "Sign In with Riot"}
                         </button>

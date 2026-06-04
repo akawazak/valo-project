@@ -3,6 +3,21 @@ import { LocalClientError } from '@/lib/errors';
 import { fetch } from '@tauri-apps/plugin-http';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
+const PUBLIC_API_TIMEOUT_MS = 8000;
+
+async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEOUT_MS): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+        }
+        return await response.json() as T;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
     const headers = new Headers(init?.headers || {});
@@ -21,22 +36,48 @@ async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response>
     return fetch(url, { ...init, headers });
 }
 
-export async function getHealth(): Promise<boolean> {
+export interface HealthStatus {
+    online: boolean;
+    localClientActive: boolean;
+    localPuuid: string;
+}
+
+export async function getHealth(): Promise<HealthStatus> {
     try {
         const response = await fetch(LOCAL_URL + '/health');
-        return response.ok;
+        if (!response.ok) {
+            return { online: false, localClientActive: false, localPuuid: "" };
+        }
+        const data = await response.json().catch(() => ({}));
+        return {
+            online: true,
+            localClientActive: !!data.local_client_active,
+            localPuuid: data.local_puuid || "",
+        };
     } catch {
-        return false;
+        return { online: false, localClientActive: false, localPuuid: "" };
     }
+}
+
+export interface LocalAccountResponse {
+    puuid: string;
+    region: string;
+    game_name: string;
+    tag_line: string;
+}
+
+export async function getLocalAccount(): Promise<LocalAccountResponse> {
+    const response = await fetch(LOCAL_URL + '/accounts/local');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch local game details.');
+    }
+    return response.json();
 }
 
 export async function getAgents(): Promise<Agent[]> {
     try {
-        const response = await fetch('https://valorant-api.com/v1/agents');
-        if (!response.ok) {
-            throw new Error('Failed to fetch agents');
-        }
-        const data = await response.json();
+        const data = await fetchJsonWithTimeout<{ data: Agent[] }>('https://valorant-api.com/v1/agents');
         return data.data.filter((agent: Agent) => agent.displayIcon);
     } catch (error) {
         console.error(error);
@@ -46,11 +87,7 @@ export async function getAgents(): Promise<Agent[]> {
 
 export async function getWeapons(): Promise<Weapon[]> {
     try {
-        const response = await fetch('https://valorant-api.com/v1/weapons');
-        if (!response.ok) {
-            throw new Error('Failed to fetch weapons');
-        }
-        const data = await response.json();
+        const data = await fetchJsonWithTimeout<{ data: Weapon[] }>('https://valorant-api.com/v1/weapons');
         return data.data as Weapon[];
     } catch (error) {
         console.error(error);
@@ -60,11 +97,7 @@ export async function getWeapons(): Promise<Weapon[]> {
 
 export async function getGunBuddies(): Promise<GunBuddy[]> {
     try {
-        const response = await fetch('https://valorant-api.com/v1/buddies');
-        if (!response.ok) {
-            throw new Error('Failed to fetch gun buddies');
-        }
-        const data = await response.json();
+        const data = await fetchJsonWithTimeout<{ data: GunBuddy[] }>('https://valorant-api.com/v1/buddies');
         return data.data as GunBuddy[];
     } catch (error) {
         console.error(error);
@@ -74,11 +107,7 @@ export async function getGunBuddies(): Promise<GunBuddy[]> {
 
 export async function getContentTiers(): Promise<ContentTier[]> {
     try {
-        const response = await fetch('https://valorant-api.com/v1/contenttiers');
-        if (!response.ok) {
-            throw new Error('Failed to fetch content tiers');
-        }
-        const data = await response.json();
+        const data = await fetchJsonWithTimeout<{ data: ContentTier[] }>('https://valorant-api.com/v1/contenttiers');
         return data.data as ContentTier[];
     } catch (error) {
         console.error(error);
@@ -87,28 +116,39 @@ export async function getContentTiers(): Promise<ContentTier[]> {
 }
 
 
-export async function getPlayerLoadout(): Promise<Record<string, LoadoutItemV1>> {
+export type PlayerLoadoutData = {
+    loadout: Record<string, LoadoutItemV1>;
+    sprays: SpraySlot[];
+    identity?: IdentityV1;
+};
+
+export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL+'/player-loadout');
+        const response = await fetchWithAuth(LOCAL_URL + '/player-loadout');
         if (!response.ok) {
             throw new Error('Failed to fetch player loadout. The local client might not be running or there was a server error.');
         }
         const data = await response.json();
-        // New shape: { loadout: {...}, sprays: [...] }
-        // Old shape fallback: the loadout object directly
-        return (data.loadout ?? data) as Record<string, LoadoutItemV1>;
+        return {
+            loadout: (data.loadout ?? data) as Record<string, LoadoutItemV1>,
+            sprays: (data.sprays ?? []) as SpraySlot[],
+            identity: data.identity as IdentityV1 | undefined,
+        };
     } catch (error) {
         console.error(error);
         throw new LocalClientError();
     }
 }
 
+export async function getPlayerLoadout(): Promise<Record<string, LoadoutItemV1>> {
+    const data = await getPlayerLoadoutData();
+    return data.loadout;
+}
+
 export async function getPlayerSprays(): Promise<SpraySlot[]> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL+'/player-loadout');
-        if (!response.ok) return [];
-        const data = await response.json();
-        return (data.sprays ?? []) as SpraySlot[];
+        const data = await getPlayerLoadoutData();
+        return data.sprays;
     } catch {
         return [];
     }
@@ -133,7 +173,19 @@ export async function getOwnedGunBuddies(): Promise<OwnedGunBuddiesResponse> {
         if (!response.ok) {
             throw new Error('Failed to fetch owned gun buddies. The local client might not be running or there was a server error.');
         }
-        return await response.json();
+        const data = await response.json() as {
+            buddies?: Array<{ levelId?: string; amount?: number; LevelId?: string; Amount?: number }>;
+            Buddies?: Array<{ levelId?: string; amount?: number; LevelId?: string; Amount?: number }>;
+        };
+        const rawBuddies = data.buddies ?? data.Buddies ?? [];
+        return {
+            buddies: rawBuddies
+                .map((buddy) => ({
+                    levelId: buddy.levelId ?? buddy.LevelId ?? '',
+                    amount: buddy.amount ?? buddy.Amount ?? 0,
+                }))
+                .filter((buddy) => buddy.levelId),
+        };
     } catch (error) {
         console.error(error);
         throw new LocalClientError();
@@ -264,10 +316,13 @@ export async function getWallet(): Promise<Record<string, number>> {
 }
 
 export async function getBundles(): Promise<BundleInfo[]> {
-    const response = await fetch('https://valorant-api.com/v1/bundles');
-    if (!response.ok) throw new Error('Failed to fetch bundle assets');
-    const data = await response.json();
-    return data.data as BundleInfo[];
+    try {
+        const data = await fetchJsonWithTimeout<{ data: BundleInfo[] }>('https://valorant-api.com/v1/bundles');
+        return data.data as BundleInfo[];
+    } catch (error) {
+        console.error(error);
+        return [];
+    }
 }
 
 export async function getOwnedSprays(): Promise<string[]> {
@@ -313,22 +368,31 @@ export async function getOwnedPlayerTitles(): Promise<string[]> {
 }
 
 export async function getSprays(): Promise<SprayAsset[]> {
-    const response = await fetch('https://valorant-api.com/v1/sprays');
-    if (!response.ok) throw new Error('Failed to fetch spray assets');
-    const data = await response.json();
-    return data.data as SprayAsset[];
+    try {
+        const data = await fetchJsonWithTimeout<{ data: SprayAsset[] }>('https://valorant-api.com/v1/sprays');
+        return data.data as SprayAsset[];
+    } catch (error) {
+        console.error(error);
+        return [];
+    }
 }
 
 export async function getPlayerCards(): Promise<PlayerCardAsset[]> {
-    const response = await fetch('https://valorant-api.com/v1/playercards');
-    if (!response.ok) throw new Error('Failed to fetch playercard assets');
-    const data = await response.json();
-    return data.data as PlayerCardAsset[];
+    try {
+        const data = await fetchJsonWithTimeout<{ data: PlayerCardAsset[] }>('https://valorant-api.com/v1/playercards');
+        return data.data as PlayerCardAsset[];
+    } catch (error) {
+        console.error(error);
+        return [];
+    }
 }
 
 export async function getPlayerTitles(): Promise<PlayerTitleAsset[]> {
-    const response = await fetch('https://valorant-api.com/v1/playertitles');
-    if (!response.ok) throw new Error('Failed to fetch playertitle assets');
-    const data = await response.json();
-    return data.data as PlayerTitleAsset[];
+    try {
+        const data = await fetchJsonWithTimeout<{ data: PlayerTitleAsset[] }>('https://valorant-api.com/v1/playertitles');
+        return data.data as PlayerTitleAsset[];
+    } catch (error) {
+        console.error(error);
+        return [];
+    }
 }

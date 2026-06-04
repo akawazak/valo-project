@@ -98,12 +98,12 @@ export interface OwnedSkinsResponse {
 }
 
 export interface OwnedBuddy {
-    LevelId: string
-    Amount: number
+    levelId: string;
+    amount: number;
 }
 
 export interface OwnedGunBuddiesResponse {
-    Buddies: OwnedBuddy[];
+    buddies: OwnedBuddy[];
 }
 
 export interface OwnedAgentsResponse {

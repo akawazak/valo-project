@@ -7,6 +7,7 @@ import { SprayAsset, SpraySlot } from '@/lib/types';
 interface SpraySelectorProps {
     currentSprays: SpraySlot[];
     onUpdateSprays: (sprays: SpraySlot[]) => void;
+    compact?: boolean;
 }
 
 const SPRAY_SLOTS = [
@@ -16,7 +17,7 @@ const SPRAY_SLOTS = [
     { id: 'd2b4e425-4a7b-3b3b-81d3-356c9a33bb58', name: 'Extra / Wheel' }
 ];
 
-export default function SpraySelector({ currentSprays, onUpdateSprays }: SpraySelectorProps) {
+export default function SpraySelector({ currentSprays, onUpdateSprays, compact }: SpraySelectorProps) {
     const { sprays, ownedSprayIDs } = useData();
     const [selectedSlotId, setSelectedSlotId] = useState<string>(SPRAY_SLOTS[0].id);
     const [searchQuery, setSearchQuery] = useState('');
@@ -55,7 +56,7 @@ export default function SpraySelector({ currentSprays, onUpdateSprays }: SpraySe
     const activeSlotName = SPRAY_SLOTS.find(s => s.id === selectedSlotId)?.name || 'Spray';
 
     return (
-        <div className="preset-panel mt-3">
+        <div className={`preset-panel${compact ? ' preset-panel--compact' : ' mt-3'}`}>
             <div className="section-row mb-3" style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: '0.75rem' }}>
                 <div>
                     <div className="tactical-kicker">// EXPRESSION</div>
@@ -111,7 +112,7 @@ export default function SpraySelector({ currentSprays, onUpdateSprays }: SpraySe
                     </div>
                 </div>
 
-                <div className="spray-grid" style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                <div className="spray-grid spray-scroll-grid">
                     {displaySprays.map(spray => {
                         const isEquipped = currentSprays.some(
                             s => s.equipSlotId.toLowerCase() === selectedSlotId.toLowerCase() &&

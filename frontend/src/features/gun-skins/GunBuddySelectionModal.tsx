@@ -18,8 +18,8 @@ export default function GunBuddySelectionModal({ onSelect, onClose, weaponName, 
         b.displayName.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
-    const getBuddyUsage = (loadout: Record<string, LoadoutItemV1>, buddyId: string): number => {
-        return Object.values(loadout).filter(item => item.charmID === buddyId).length;
+    const getBuddyUsage = (loadout: Record<string, LoadoutItemV1>, buddyLevelId: string): number => {
+        return Object.values(loadout).filter(item => item.charmLevelID === buddyLevelId).length;
     };
 
     const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -66,13 +66,15 @@ export default function GunBuddySelectionModal({ onSelect, onClose, weaponName, 
                                             </div>
                                         </div>
                                         {filteredBuddies.map((buddy) => {
-                                            const usage = getBuddyUsage(currentLoadout, buddy.uuid);
+                                            const level = buddy.levels?.[0];
+                                            if (!level) return null;
+                                            const usage = getBuddyUsage(currentLoadout, level.uuid);
                                             const isDisabled = usage >= buddy.amount;
 
                                             return (
-                                                <div key={buddy.uuid} className="col" onClick={() => !isDisabled && onSelect(buddy.uuid, buddy.levels[0].uuid)}>
+                                                <div key={buddy.uuid} className="col" onClick={() => !isDisabled && onSelect(buddy.uuid, level.uuid)}>
                                                     <div className={`card h-100 card-hover ${isDisabled ? 'disabled' : ''}`} style={{ opacity: isDisabled ? 0.5 : 1, cursor: isDisabled ? 'not-allowed' : 'pointer' }}>
-                                                        <Image src={buddy.levels[0].displayIcon} alt={buddy.displayName} className="card-img-top" width={100} height={100} style={{ objectFit: 'contain' }} unoptimized />
+                                                        <Image src={level.displayIcon} alt={buddy.displayName} className="card-img-top" width={100} height={100} style={{ objectFit: 'contain' }} unoptimized />
                                                         <div className="card-body p-2">
                                                             <p className="card-text text-center small">{buddy.displayName}</p>
                                                         </div>

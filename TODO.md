@@ -10,7 +10,7 @@
 - [x] Version Control in top left
 - [x] Create "Variants" for Presets so you don't have to change agents for every preset
 - [x] Tray App
-- [ ] Autostart Option
+- [x] Autostart Option (opt-in, Windows login via Tauri autostart plugin)
 - [x] Hide unowned agents
 
 ### Frontend
@@ -26,7 +26,7 @@
 - [x] Little button on WeaponCard to change Variant
 - [ ] Ability to hide certain weapons
 - [ ] Ability rearrange the weapons (Drag & Drop)
-- [ ] Allow multiple agents to be selected at once
+- [x] Allow multiple agents to be selected at once (agent picker modal)
 - [ ] Ability to move skin selection modals
 
 ### Backend

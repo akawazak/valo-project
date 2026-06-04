@@ -3,15 +3,17 @@
 import { useState, useMemo } from 'react';
 import { useData } from '@/context/DataContext';
 import Image from 'next/image';
+import { getPlayerCardPortraitUrl } from '@/lib/playerCardArt';
 
 interface IdentitySelectorProps {
     currentCardId: string;
     currentTitleId: string;
     onSelectCard: (uuid: string) => void;
     onSelectTitle: (uuid: string) => void;
+    compact?: boolean;
 }
 
-export default function IdentitySelector({ currentCardId, currentTitleId, onSelectCard, onSelectTitle }: IdentitySelectorProps) {
+export default function IdentitySelector({ currentCardId, currentTitleId, onSelectCard, onSelectTitle, compact }: IdentitySelectorProps) {
     const { playerCards, playerTitles, ownedCardIDs, ownedTitleIDs } = useData();
     const [cardSearch, setCardSearch] = useState('');
     const [titleSearch, setTitleSearch] = useState('');
@@ -43,7 +45,7 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
     }, [playerTitles, currentTitleId]);
 
     return (
-        <div className="preset-panel mt-3">
+        <div className={`preset-panel${compact ? ' preset-panel--compact' : ' mt-3'}`}>
             <div className="section-row mb-3" style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: '0.75rem' }}>
                 <div>
                     <div className="tactical-kicker">// IDENTITY</div>
@@ -51,36 +53,23 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                 </div>
             </div>
 
-            <div className="identity-preview-banner mb-4"
-                style={{
-                    backgroundImage: selectedCard?.wideArt
-                        ? `linear-gradient(to right, rgba(15, 23, 42, 0.95) 30%, rgba(15, 23, 42, 0.6)), url(${selectedCard.wideArt})`
-                        : 'none'
-                }}
+            <div
+                className="identity-preview-banner mb-4"
+                style={getPlayerCardPortraitUrl(selectedCard) ? { backgroundImage: `url(${getPlayerCardPortraitUrl(selectedCard)})` } : undefined}
             >
                 {selectedCard?.displayIcon && (
-                    <Image src={selectedCard.displayIcon} alt="Card" width={60} height={60} className="rounded-2" style={{ border: '1px solid rgba(255,255,255,0.1)' }} unoptimized />
+                    <Image src={selectedCard.displayIcon} alt="Card" width={60} height={60} className="rounded-2 identity-preview-card-img" unoptimized />
                 )}
                 <div>
-                    <div style={{ color: 'var(--text-dim)', fontFamily: '"JetBrains Mono", monospace', fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Active Identity</div>
-                    <div className="fw-bold fs-5 text-white">{selectedCard?.displayName || 'No Player Card'}</div>
-                    <div style={{
-                        display: 'inline-block',
-                        marginTop: '0.25rem',
-                        padding: '0.15rem 0.5rem',
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '4px',
-                        fontFamily: '"JetBrains Mono", monospace',
-                        fontSize: '0.7rem',
-                        color: 'var(--text-muted)',
-                    }}>
+                    <div className="tactical-kicker">Active Identity</div>
+                    <div className="fw-bold fs-5 identity-preview-title">{selectedCard?.displayName || 'No Player Card'}</div>
+                    <div className="identity-preview-chip">
                         {selectedTitle?.titleText || selectedTitle?.displayName || 'No Title'}
                     </div>
                 </div>
             </div>
 
-            <div className="d-flex border-bottom mb-3" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+            <div className="d-flex border-bottom mb-3 identity-tabs-row">
                 <button onClick={() => setActiveTab('cards')} className={`identity-tab-btn${activeTab === 'cards' ? ' active' : ''}`}>
                     Player Cards ({displayCards.length})
                 </button>
@@ -105,7 +94,7 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                         </svg>
                     </div>
 
-                    <div className="row g-2" style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                    <div className="row g-2 identity-scroll-grid">
                         {displayCards.map(card => {
                             const isSelected = card.uuid.toLowerCase() === currentCardId.toLowerCase();
                             return (
@@ -115,8 +104,8 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                                         className={`identity-card${isSelected ? ' active' : ''}`}
                                     >
                                         <div className="identity-card-img-wrap">
-                                            {card.wideArt ? (
-                                                <Image src={card.wideArt} alt={card.displayName} fill unoptimized style={{ objectFit: 'cover' }} />
+                                            {getPlayerCardPortraitUrl(card) ? (
+                                                <Image src={getPlayerCardPortraitUrl(card)!} alt={card.displayName} fill unoptimized style={{ objectFit: 'cover', objectPosition: 'center top' }} />
                                             ) : (
                                                 <div className="d-flex align-items-center justify-content-center text-muted small h-100">No Image</div>
                                             )}
@@ -125,12 +114,7 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                                             {card.displayName}
                                         </div>
                                         {isSelected && (
-                                            <div style={{
-                                                position: 'absolute', top: '4px', right: '4px',
-                                                background: 'var(--accent-red)', color: '#fff',
-                                                padding: '0.05rem 0.3rem', borderRadius: '3px',
-                                                fontFamily: '"JetBrains Mono", monospace', fontSize: '0.6rem', fontWeight: 800
-                                            }}>ACTIVE</div>
+                                            <div className="identity-card-badge">ACTIVE</div>
                                         )}
                                     </div>
                                 </div>
@@ -157,7 +141,7 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                         </svg>
                     </div>
 
-                    <div style={{ maxHeight: '280px', overflowY: 'auto', paddingRight: '4px', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <div className="identity-scroll-grid identity-title-list">
                         {displayTitles.map(title => {
                             const isSelected = title.uuid.toLowerCase() === currentTitleId.toLowerCase();
                             const titleDisplayText = title.titleText || title.displayName;
@@ -174,11 +158,7 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                                         <span className="text-muted" style={{ fontSize: '0.68rem' }}>{title.displayName}</span>
                                     </div>
                                     {isSelected && (
-                                        <span style={{
-                                            background: 'var(--accent-red)', color: '#fff',
-                                            padding: '0.1rem 0.4rem', borderRadius: '3px',
-                                            fontFamily: '"JetBrains Mono", monospace', fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase'
-                                        }}>Active</span>
+                                        <span className="identity-card-badge">Active</span>
                                     )}
                                 </button>
                             );

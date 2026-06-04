@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { RiotAccount } from '@/lib/types';
+import { setLaunchAtStartup } from '@/services/autostart';
 
 interface AppTopbarProps {
     activeTab: 'store' | 'skins';
@@ -17,6 +18,9 @@ interface AppTopbarProps {
     onAddAccount: () => void;
     theme: string;
     onToggleTheme: () => void;
+    launchAtStartup?: boolean;
+    onLaunchAtStartupChange?: (enabled: boolean) => void;
+    isBackendOnline?: boolean;
 }
 
 function accountLabel(acc: RiotAccount) {
@@ -35,6 +39,9 @@ export default function AppTopbar({
     onAddAccount,
     theme,
     onToggleTheme,
+    launchAtStartup = false,
+    onLaunchAtStartupChange,
+    isBackendOnline = true,
 }: AppTopbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const [appVersion, setAppVersion] = useState("");
@@ -91,9 +98,14 @@ export default function AppTopbar({
         if (!menuOpen) return;
 
         const handlePointerDown = (event: MouseEvent) => {
-            if (!dropdownRef.current?.contains(event.target as Node)) {
-                setMenuOpen(false);
+            const target = event.target as HTMLElement;
+            if (dropdownRef.current?.contains(target)) {
+                return;
             }
+            if (target.closest(".acc-delete-modal") || target.closest(".acc-delete-modal-overlay")) {
+                return;
+            }
+            setMenuOpen(false);
         };
 
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -120,11 +132,15 @@ export default function AppTopbar({
 
     const handleRemoveAccount = (puuid: string) => {
         onRequestDeleteAccount(puuid);
-        setMenuOpen(false);
     };
 
     return (
         <header className="app-topbar">
+            {!isBackendOnline && (
+                <div className="backend-offline-banner" role="status">
+                    Local client offline — run <code>go run .</code> in the backend folder, then restart the app.
+                </div>
+            )}
             <div className="topbar-inner">
                 <button type="button" className="topbar-brand" onClick={() => onTabChange('store')}>
                     <span className="brand-mark">V</span>
@@ -149,7 +165,7 @@ export default function AppTopbar({
                 </nav>
 
                 <div className="topbar-actions">
-                    <label className="topbar-switch">
+                    <label className="topbar-switch" title="Apply the preset linked to your agent when agent select starts">
                         <span>Auto agent</span>
                         <input
                             type="checkbox"
@@ -157,6 +173,25 @@ export default function AppTopbar({
                             onChange={(e) => onToggleAutoAgent(e.target.checked)}
                         />
                     </label>
+
+                    {onLaunchAtStartupChange && (
+                        <label className="topbar-switch" title="Start ValoVault when you sign in to Windows (opt-in)">
+                            <span>Launch at login</span>
+                            <input
+                                type="checkbox"
+                                checked={launchAtStartup}
+                                onChange={async (e) => {
+                                    const next = e.target.checked;
+                                    try {
+                                        await setLaunchAtStartup(next);
+                                        onLaunchAtStartupChange(next);
+                                    } catch {
+                                        onLaunchAtStartupChange(false);
+                                    }
+                                }}
+                            />
+                        </label>
+                    )}
 
                     <div className="account-dropdown" ref={dropdownRef}>
                         <button

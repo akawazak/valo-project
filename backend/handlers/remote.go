@@ -231,7 +231,7 @@ func extractTokens(redirectURL string) (string, string, int, error) {
 }
 
 func (h *Handler) GetAuthUrl(w http.ResponseWriter, r *http.Request) {
-	authURL := "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account&prompt=login"
+	authURL := "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
 	h.returnAny(w, map[string]string{"auth_url": authURL})
 }
 
@@ -290,27 +290,23 @@ type storeOffersResponse struct {
 }
 
 func (h *Handler) GetStorefront(w http.ResponseWriter, r *http.Request) {
-	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
+	val, err := h.getClient(r)
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
-	if !hasRemoteAuth {
-		h.returnError(w, fmt.Errorf("authentication required: please log in first"))
-		return
-	}
-	shard := getShardFromRegion(remoteAuth.Region)
-	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/store/v3/storefront/%s", shard, remoteAuth.Puuid)
-	headers := buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken)
+	shard := string(val.Shard)
+	puuid := val.Player.Uuid
+	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/store/v3/storefront/%s", shard, puuid)
 	var rawResponse map[string]any
-	if err := runRiotJSON(http.MethodPost, apiURL, headers, map[string]any{}, &rawResponse); err != nil {
+	if err := runRiotJSON(http.MethodPost, apiURL, val.Header, map[string]any{}, &rawResponse); err != nil {
 		h.returnError(w, err)
 		return
 	}
 	if !hasSingleItemStoreOffers(rawResponse) {
 		offersURL := fmt.Sprintf("https://pd.%s.a.pvp.net/store/v1/offers/", shard)
 		var offers storeOffersResponse
-		if err := runRiotJSON(http.MethodGet, offersURL, headers, nil, &offers); err != nil {
+		if err := runRiotJSON(http.MethodGet, offersURL, val.Header, nil, &offers); err != nil {
 			h.returnError(w, err)
 			return
 		}
@@ -320,20 +316,16 @@ func (h *Handler) GetStorefront(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetWallet(w http.ResponseWriter, r *http.Request) {
-	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
+	val, err := h.getClient(r)
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
-	if !hasRemoteAuth {
-		h.returnError(w, fmt.Errorf("authentication required: please log in first"))
-		return
-	}
-	shard := getShardFromRegion(remoteAuth.Region)
-	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/store/v1/wallet/%s", shard, remoteAuth.Puuid)
-	headers := buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken)
+	shard := string(val.Shard)
+	puuid := val.Player.Uuid
+	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/store/v1/wallet/%s", shard, puuid)
 	var rawResponse map[string]any
-	if err := runRiotJSON(http.MethodGet, apiURL, headers, nil, &rawResponse); err != nil {
+	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &rawResponse); err != nil {
 		h.returnError(w, err)
 		return
 	}

@@ -61,6 +61,7 @@ func main() {
 	mux.HandleFunc("POST /v1/settings", h.PostSettings)
 	mux.HandleFunc("GET /v1/accounts", h.GetAccounts)
 	mux.HandleFunc("POST /v1/accounts", h.PostAccounts)
+	mux.HandleFunc("GET /v1/accounts/local", h.GetLocalAccount)
 
 	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
 	mux.HandleFunc("POST /v1/auth/token", h.PostAuthToken)
