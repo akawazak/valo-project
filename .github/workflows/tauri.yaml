@@ -124,9 +124,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag -or $tag -eq "main") {
-            Write-Host "No version tag found, skipping portable upload."
+          $version = "${{ steps.tauri.outputs.appVersion }}"
+          if (-not $version) {
+            Write-Host "No app version output found, skipping portable upload."
             exit 0
           }
+          $tag = "v$version"
           gh release upload "$tag" "ValoVault-Portable-x64.zip" --repo akawazak/valo-project --clobber
+
