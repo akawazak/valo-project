@@ -13,6 +13,7 @@ export interface RiotAccount {
     region: string;
     gameName: string;
     tagLine: string;
+    sessionId?: string;
 }
 
 export interface IdentityV1 {

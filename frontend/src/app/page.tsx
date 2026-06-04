@@ -38,6 +38,7 @@ export default function Home() {
         handleSwitchAccount,
         handleDeleteAccount,
         handleAddNewAccount,
+        refreshAccountToken,
         storefrontRefreshKey,
     } = useData();
 
@@ -264,6 +265,7 @@ export default function Home() {
                 onSwitchAccount={handleSwitchAccount}
                 onRequestDeleteAccount={requestDeleteAccount}
                 onAddAccount={() => setShowAddAccount(true)}
+                onRefreshAccount={refreshAccountToken}
                 theme={theme}
                 onToggleTheme={toggleTheme}
             />

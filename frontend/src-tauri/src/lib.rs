@@ -12,7 +12,12 @@ struct AppState {
 }
 
 #[tauri::command]
-async fn open_login_window(app_handle: tauri::AppHandle, auth_url: String) -> Result<(), String> {
+async fn open_login_window(
+    app_handle: tauri::AppHandle,
+    auth_url: String,
+    session_id: Option<String>,
+    visible: Option<bool>,
+) -> Result<(), String> {
     let label = "riot_login";
     
     // Close existing login window if open
@@ -22,7 +27,18 @@ async fn open_login_window(app_handle: tauri::AppHandle, auth_url: String) -> Re
     
     let cloned_handle = app_handle.clone();
     
-    tauri::webview::WebviewWindowBuilder::new(
+    let config_dir = app_handle.path().app_config_dir().map_err(|e| e.to_string())?;
+    let mut session_dir = config_dir.clone();
+    session_dir.push("sessions");
+    if let Some(ref sid) = session_id {
+        session_dir.push(sid);
+    } else {
+        session_dir.push("default");
+    }
+    
+    let is_visible = visible.unwrap_or(true);
+    
+    let window = tauri::webview::WebviewWindowBuilder::new(
         &app_handle,
         label,
         tauri::WebviewUrl::External(url::Url::parse(&auth_url).map_err(|e| format!("Invalid URL: {}", e))?),
@@ -30,6 +46,8 @@ async fn open_login_window(app_handle: tauri::AppHandle, auth_url: String) -> Re
     .title("Riot Sign In")
     .inner_size(600.0, 800.0)
     .resizable(true)
+    .visible(is_visible)
+    .data_directory(session_dir)
     .on_navigation(move |url| {
         let host = url.host_str().unwrap_or("");
         let path = url.path();
@@ -52,8 +70,126 @@ async fn open_login_window(app_handle: tauri::AppHandle, auth_url: String) -> Re
     })
     .build()
     .map_err(|e| e.to_string())?;
+
+    let cloned_handle_for_close = app_handle.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = cloned_handle_for_close.emit("riot-login-closed", ());
+        }
+    });
     
     Ok(())
+}
+
+#[tauri::command]
+async fn show_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window("riot_login") {
+        let _ = window.show().map_err(|e| e.to_string())?;
+        let _ = window.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn is_portable() -> Result<bool, String> {
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir_str = exe_path.to_string_lossy().to_lowercase();
+    let is_p = !(exe_dir_str.contains("appdata\\local\\programs") || exe_dir_str.contains("program files"));
+    Ok(is_p)
+}
+
+#[tauri::command]
+async fn install_portable_update(app_handle: tauri::AppHandle, version: String) -> Result<(), String> {
+    let download_url = format!(
+        "https://github.com/akawazak/valo-project/releases/download/v{}/SkinVault-portable.zip",
+        version
+    );
+
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path.parent().ok_or("Cannot get executable directory")?.to_path_buf();
+    
+    // Create temporary directory
+    let cache_dir = app_handle.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let temp_dir = cache_dir.join(format!("update_{}", version));
+    if temp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    
+    let zip_file_path = temp_dir.join("update.zip");
+    let extracted_dir = temp_dir.join("extracted");
+    std::fs::create_dir_all(&extracted_dir).map_err(|e| e.to_string())?;
+
+    // Use PowerShell to download
+    let download_script = format!(
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}'",
+        download_url,
+        zip_file_path.to_string_lossy()
+    );
+    let output_download = std::process::Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &download_script])
+        .output()
+        .map_err(|e| format!("Failed to download update: {}", e))?;
+    
+    if !output_download.status.success() {
+        return Err(format!(
+            "Download failed: {}",
+            String::from_utf8_lossy(&output_download.stderr)
+        ));
+    }
+
+    // Use PowerShell to extract
+    let extract_script = format!(
+        "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+        zip_file_path.to_string_lossy(),
+        extracted_dir.to_string_lossy()
+    );
+    let output_extract = std::process::Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &extract_script])
+        .output()
+        .map_err(|e| format!("Failed to extract update: {}", e))?;
+
+    if !output_extract.status.success() {
+        return Err(format!(
+            "Extraction failed: {}",
+            String::from_utf8_lossy(&output_extract.stderr)
+        ));
+    }
+
+    // Create the update.bat script in the temp directory
+    let bat_content = format!(
+        r#"@echo off
+title SkinVault Update
+echo Waiting for SkinVault to close...
+timeout /t 2 /nobreak > nul
+:loop
+tasklist /nh /fi "imagename eq SkinVault.exe" | find /i "SkinVault.exe" > nul
+if %errorlevel% == 0 (
+    timeout /t 1 /nobreak > nul
+    goto loop
+)
+echo Applying update...
+xcopy "{}\*" "{}\" /y /e /s /i
+echo Relaunching SkinVault...
+start "" "{}\SkinVault.exe"
+exit
+"#,
+        extracted_dir.to_string_lossy(),
+        exe_dir.to_string_lossy(),
+        exe_dir.to_string_lossy()
+    );
+
+    let bat_path = temp_dir.join("update.bat");
+    std::fs::write(&bat_path, bat_content).map_err(|e| e.to_string())?;
+
+    // Spawn the batch script
+    std::process::Command::new("cmd.exe")
+        .args(&["/c", "start", "", &bat_path.to_string_lossy()])
+        .spawn()
+        .map_err(|e| format!("Failed to run update script: {}", e))?;
+
+    // Exit the app immediately
+    std::process::exit(0);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -66,8 +202,27 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![open_login_window])
+        .invoke_handler(tauri::generate_handler![
+            open_login_window,
+            show_login_window,
+            is_portable,
+            install_portable_update
+        ])
         .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(cache_dir) = handle.path().app_cache_dir() {
+                    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+                        for entry in entries.filter_map(Result::ok) {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if name.starts_with("update_") {
+                                    let _ = std::fs::remove_dir_all(entry.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            });
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

@@ -34,25 +34,34 @@ export default function Header() {
             console.log(
                 `found update ${update.version} from ${update.date} with notes ${update.body}`
             );
-            let downloaded = 0;
-            let contentLength = 0;
-            await update.downloadAndInstall((event) => {
-                switch (event.event) {
-                    case 'Started':
-                        contentLength = event.data.contentLength!;
-                        console.log(`started downloading ${event.data.contentLength} bytes`);
-                        break;
-                    case 'Progress':
-                        downloaded += event.data.chunkLength;
-                        console.log(`downloaded ${downloaded} from ${contentLength}`);
-                        break;
-                    case 'Finished':
-                        console.log('download finished');
-                        break;
+            try {
+                const { invoke } = await import("@tauri-apps/api/core");
+                const isPortable = await invoke<boolean>("is_portable");
+                if (isPortable) {
+                    await invoke("install_portable_update", { version: update.version });
+                } else {
+                    let downloaded = 0;
+                    let contentLength = 0;
+                    await update.downloadAndInstall((event) => {
+                        switch (event.event) {
+                            case 'Started':
+                                contentLength = event.data.contentLength!;
+                                console.log(`started downloading ${event.data.contentLength} bytes`);
+                                break;
+                            case 'Progress':
+                                downloaded += event.data.chunkLength;
+                                console.log(`downloaded ${downloaded} from ${contentLength}`);
+                                break;
+                            case 'Finished':
+                                console.log('download finished');
+                                break;
+                        }
+                    });
+                    console.log('update installed');
                 }
-            });
-
-            console.log('update installed');
+            } catch (err) {
+                console.error("Update failed:", err);
+            }
         }
     }
 
@@ -62,7 +71,7 @@ export default function Header() {
                 <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noopener noreferrer" className="d-flex align-items-center me-2">
                     <Image src="/github-logo.svg" alt="GitHub" width={24} height={24} />
                 </a>
-                <span className="navbar-brand me-2">ValoVault</span>
+                <span className="navbar-brand me-2">SkinVault</span>
                 {appVersion && (
                     <>
                         <span className="badge bg-secondary me-2">{appVersion}</span>

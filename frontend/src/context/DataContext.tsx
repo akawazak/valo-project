@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount } from '@/lib/types';
-import { getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts } from '@/services/api';
+import { getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl } from '@/services/api';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
@@ -101,6 +101,7 @@ interface DataContextType {
     handleDeleteAccount: (puuid: string) => void;
     handleAddNewAccount: (acc: RiotAccount) => void;
     refreshAccountsList: () => void;
+    refreshAccountToken: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
     
     // Storefront refresh signal — increment to trigger re-fetch in StorePanels
     storefrontRefreshKey: number;
@@ -354,6 +355,99 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setStorefrontRefreshKey(k => k + 1);
     }, []);
 
+    const refreshAccountToken = useCallback(async (acc: RiotAccount, visible: boolean = false): Promise<boolean> => {
+        let sessionId = acc.sessionId;
+        if (!sessionId) {
+            sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            acc.sessionId = sessionId;
+        }
+
+        try {
+            const { auth_url } = await getAuthUrl();
+            const { invoke } = await import("@tauri-apps/api/core");
+            const { listen } = await import("@tauri-apps/api/event");
+
+            return new Promise<boolean>((resolve) => {
+                let resolved = false;
+                let unlistenFn: (() => void) | null = null;
+                let unlistenCloseFn: (() => void) | null = null;
+
+                const cleanup = () => {
+                    resolved = true;
+                    clearTimeout(timeoutId);
+                    if (unlistenFn) unlistenFn();
+                    if (unlistenCloseFn) unlistenCloseFn();
+                };
+
+                const timeoutId = setTimeout(async () => {
+                    if (resolved) return;
+                    if (!visible) {
+                        // If it was hidden, show it now to let user log in manually
+                        await invoke("show_login_window").catch(() => {});
+                        // Keep waiting for redirect or close
+                    } else {
+                        cleanup();
+                        resolve(false);
+                    }
+                }, 6000); // 6 seconds timeout
+
+                listen<string>("riot-login-redirect", async (event) => {
+                    if (resolved) return;
+                    cleanup();
+
+                    try {
+                        const redirectUrl = event.payload;
+                        const res = await submitTokenUrl(redirectUrl);
+                        
+                        const updatedAcc: RiotAccount = {
+                            ...acc,
+                            accessToken: res.access_token,
+                            entitlementsToken: res.entitlements_token,
+                            expiresAt: Date.now() + Math.max(0, (res.expires_in || 3600) - 60) * 1000,
+                            region: res.region,
+                            gameName: res.game_name || acc.gameName,
+                            tagLine: res.tag_line || acc.tagLine,
+                            sessionId,
+                        };
+
+                        const stored = getStoredAccounts();
+                        const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
+                        saveStoredAccounts(updated);
+                        setAccounts(updated);
+                        if (activeAccount?.puuid === acc.puuid) {
+                            setActiveAccount(updatedAcc);
+                            setIsTokenExpired(false);
+                            setStorefrontRefreshKey(k => k + 1);
+                        }
+                        resolve(true);
+                    } catch (err) {
+                        console.error("Error in token submit during auto-refresh:", err);
+                        resolve(false);
+                    }
+                }).then(fn => {
+                    unlistenFn = fn;
+                });
+
+                listen<void>("riot-login-closed", () => {
+                    if (resolved) return;
+                    cleanup();
+                    resolve(false);
+                }).then(fn => {
+                    unlistenCloseFn = fn;
+                });
+
+                invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
+                    console.error("Failed to open login window:", err);
+                    cleanup();
+                    resolve(false);
+                });
+            });
+        } catch (err) {
+            console.error("Failed to start refreshAccountToken:", err);
+            return false;
+        }
+    }, [activeAccount]);
+
     // Initialize accounts list and load static data on mount
     useEffect(() => {
         refreshAccountsList();
@@ -464,7 +558,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             agents, weapons, ownedBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
             sprays, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
-            handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList,
+            handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken,
             storefrontRefreshKey,
         }}>
             {children}

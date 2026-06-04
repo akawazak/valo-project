@@ -391,6 +391,103 @@ html, body, body > div:first-child, div#__next, div#__next > div {
 }
 .account-dropdown-remove:hover { color: #fff; background: rgba(255, 70, 85, 0.2); }
 
+.account-dropdown-refresh {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all var(--transition);
+  display: grid;
+  place-items: center;
+}
+.account-dropdown-refresh:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.account-dropdown-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.account-dropdown-refresh.refreshing {
+  animation: spin 1s linear infinite;
+  color: var(--accent);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.account-expired-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--danger, #ff4655);
+  display: inline-block;
+  margin-left: auto;
+  box-shadow: 0 0 8px var(--danger, #ff4655);
+}
+
+.account-dropdown-bulk-actions {
+  padding: 0.25rem 0.25rem 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--border-strong);
+  margin-bottom: 0.4rem;
+}
+
+.account-dropdown-bulk-refresh-btn {
+  width: 100%;
+  min-height: 28px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.account-dropdown-bulk-refresh-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.account-dropdown-bulk-refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.bulk-refresh-progress-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.bulk-refresh-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.mini-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
 .account-dropdown-empty {
   padding: 0.6rem 0.6rem;
   color: var(--text-dim);

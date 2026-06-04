@@ -33,6 +33,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
+    const [currentSessionId, setCurrentSessionId] = useState("");
 
     useEffect(() => {
         api.getLocalAccount()
@@ -81,6 +82,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 region: res.region,
                 gameName: res.game_name || "Unknown",
                 tagLine: res.tag_line || "",
+                sessionId: currentSessionId || undefined,
             };
             activateAccount(newAccount);
             onLoginSuccess(newAccount);
@@ -97,7 +99,9 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         try {
             const { auth_url } = await api.getAuthUrl();
             const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("open_login_window", { authUrl: auth_url });
+            const tempSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            setCurrentSessionId(tempSessionId);
+            await invoke("open_login_window", { authUrl: auth_url, sessionId: tempSessionId, visible: true });
             setStage("paste");
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to open Riot authorization window.");
@@ -116,10 +120,10 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         <div className="riot-login-overlay">
             <div className="riot-login-card">
                 <h1 className="riot-brand-title">
-                    VALO<span style={{ color: "var(--accent-red)" }}>VAULT</span>
+                    SKIN<span style={{ color: "var(--accent-red)" }}>VAULT</span>
                 </h1>
                 <p className="riot-brand-subtitle">
-                    Connect your Riot Account to view your Daily Store and use ValoVault
+                    Connect your Riot Account to view your Daily Store and use SkinVault
                 </p>
                 {error && <div className="alert alert-danger py-2 text-center">{error}</div>}
                 {stage === "start" ? (
