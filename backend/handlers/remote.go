@@ -201,9 +201,25 @@ type AuthTokenResponse struct {
 	Region            string `json:"region"`
 	GameName          string `json:"game_name"`
 	TagLine           string `json:"tag_line"`
+	Cookies           string `json:"cookies,omitempty"`
+}
+
+type extractedTokens struct {
+	AccessToken  string
+	IDToken      string
+	RefreshToken string
+	ExpiresIn    int
 }
 
 func extractTokens(redirectURL string) (string, string, int, error) {
+	t, err := extractAllTokens(redirectURL)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return t.AccessToken, t.IDToken, t.ExpiresIn, nil
+}
+
+func extractAllTokens(redirectURL string) (*extractedTokens, error) {
 	var fragment string
 	if idx := strings.Index(redirectURL, "#"); idx != -1 {
 		fragment = redirectURL[idx+1:]
@@ -214,12 +230,11 @@ func extractTokens(redirectURL string) (string, string, int, error) {
 	}
 	values, err := url.ParseQuery(fragment)
 	if err != nil {
-		return "", "", 0, err
+		return nil, err
 	}
 	accessToken := values.Get("access_token")
-	idToken := values.Get("id_token")
 	if accessToken == "" {
-		return "", "", 0, fmt.Errorf("no access token found in redirect URL")
+		return nil, fmt.Errorf("no access token found in redirect URL")
 	}
 	expiresIn := 3600
 	if rawExpiresIn := values.Get("expires_in"); rawExpiresIn != "" {
@@ -227,10 +242,17 @@ func extractTokens(redirectURL string) (string, string, int, error) {
 			expiresIn = parsed
 		}
 	}
-	return accessToken, idToken, expiresIn, nil
+	return &extractedTokens{
+		AccessToken:  accessToken,
+		IDToken:      values.Get("id_token"),
+		RefreshToken: values.Get("refresh_token"),
+		ExpiresIn:    expiresIn,
+	}, nil
 }
 
 func (h *Handler) GetAuthUrl(w http.ResponseWriter, r *http.Request) {
+	// Standard implicit flow — works for all unofficial/community apps.
+	// offline_access is restricted to officially registered Riot partner apps only.
 	authURL := "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
 	h.returnAny(w, map[string]string{"auth_url": authURL})
 }
@@ -241,7 +263,7 @@ func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
-	accessToken, idToken, expiresIn, err := extractTokens(body.URL)
+	tokens, err := extractAllTokens(body.URL)
 	if err != nil {
 		h.returnError(w, err)
 		return
@@ -249,7 +271,7 @@ func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
 	var entitlements struct {
 		EntitlementsToken string `json:"entitlements_token"`
 	}
-	if err := postJSON("https://entitlements.auth.riotgames.com/api/token/v1", accessToken, []byte("{}"), &entitlements); err != nil {
+	if err := postJSON("https://entitlements.auth.riotgames.com/api/token/v1", tokens.AccessToken, []byte("{}"), &entitlements); err != nil {
 		h.returnError(w, err)
 		return
 	}
@@ -260,7 +282,7 @@ func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
 			TagLine  string `json:"tag_line"`
 		} `json:"acct"`
 	}
-	if err := getJSON("https://auth.riotgames.com/userinfo", accessToken, &userInfo); err != nil {
+	if err := getJSON("https://auth.riotgames.com/userinfo", tokens.AccessToken, &userInfo); err != nil {
 		h.returnError(w, err)
 		return
 	}
@@ -269,20 +291,144 @@ func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
 			Live string `json:"live"`
 		} `json:"affinities"`
 	}
-	payloadBytes, _ := json.Marshal(map[string]string{"id_token": idToken})
-	if err := putJSON("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", accessToken, payloadBytes, &geoResult); err != nil {
+	payloadBytes, _ := json.Marshal(map[string]string{"id_token": tokens.IDToken})
+	if err := putJSON("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", tokens.AccessToken, payloadBytes, &geoResult); err != nil {
 		h.returnError(w, err)
 		return
 	}
 	h.returnAny(w, &AuthTokenResponse{
-		AccessToken:       accessToken,
+		AccessToken:       tokens.AccessToken,
 		EntitlementsToken: entitlements.EntitlementsToken,
-		ExpiresIn:         expiresIn,
+		ExpiresIn:         tokens.ExpiresIn,
 		Puuid:             userInfo.Sub,
 		Region:            geoResult.Affinities.Live,
 		GameName:          userInfo.Acct.GameName,
 		TagLine:           userInfo.Acct.TagLine,
 	})
+}
+
+type SsidReauthRequest struct {
+	Cookies string `json:"cookies"` // full cookie string e.g. "ssid=xxx; sub=yyy; ..."
+}
+
+// PostSsidReauth silently refreshes tokens using the saved Riot auth cookies (ssid + all).
+// Based on https://valapidocs.techchrism.me/endpoint/cookie-reauth
+// GET auth.riotgames.com/authorize with Cookie header → 302 redirect → access_token in Location fragment
+func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
+	var body SsidReauthRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Cookies == "" {
+		http.Error(w, `{"error":"missing_cookies"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Confirmed endpoint from techchrism community docs.
+	// Using play-valorant-web-prod client so the redirect goes to playvalorant.com.
+	const reauthURL = "https://auth.riotgames.com/authorize" +
+		"?redirect_uri=https%3A%2F%2Fplayvalorant.com%2Fopt_in" +
+		"&client_id=play-valorant-web-prod" +
+		"&response_type=token%20id_token" +
+		"&nonce=1" +
+		"&scope=account%20openid"
+
+	req, err := http.NewRequest(http.MethodGet, reauthURL, nil)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	req.Header.Set("Cookie", body.Cookies)
+	req.Header.Set("User-Agent", "RiotClient/60.0.6.4871019.4749393 rso-auth (Windows;10;;Professional, x64)")
+
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Stop at redirect — token is in Location header
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		h.returnError(w, fmt.Errorf("cookie reauth request failed: %w", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	// Success: 301/302 redirect to playvalorant.com with token in fragment
+	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound {
+		http.Error(w, `{"error":"cookies_expired","message":"Cookies are no longer valid, please log in again"}`, http.StatusUnauthorized)
+		return
+	}
+
+	location := resp.Header.Get("Location")
+	// Failure redirect goes to authenticate.riotgames.com (login page)
+	if strings.Contains(location, "authenticate.riotgames.com") {
+		http.Error(w, `{"error":"cookies_expired","message":"Cookies are no longer valid, please log in again"}`, http.StatusUnauthorized)
+		return
+	}
+
+	// Extract access_token from the redirect URI fragment (after #)
+	accessToken, _, expiresIn, err := extractTokens(location)
+	if err != nil {
+		h.returnError(w, fmt.Errorf("failed to extract tokens from cookie reauth redirect: %w", err))
+		return
+	}
+
+	// Fetch entitlements with the fresh access_token
+	var entitlements struct {
+		EntitlementsToken string `json:"entitlements_token"`
+	}
+	if err := postJSON("https://entitlements.auth.riotgames.com/api/token/v1", accessToken, []byte("{}"), &entitlements); err != nil {
+		h.returnError(w, fmt.Errorf("failed to get entitlements: %w", err))
+		return
+	}
+
+	// Merge newly received cookies with old cookies to rotate and maintain the session
+	rotatedCookies := mergeCookies(body.Cookies, resp.Cookies())
+
+	h.returnAny(w, &AuthTokenResponse{
+		AccessToken:       accessToken,
+		EntitlementsToken: entitlements.EntitlementsToken,
+		ExpiresIn:         expiresIn,
+		Cookies:           rotatedCookies,
+	})
+}
+
+func mergeCookies(oldCookiesStr string, newCookies []*http.Cookie) string {
+	cookieMap := make(map[string]string)
+
+	if oldCookiesStr != "" {
+		parts := strings.Split(oldCookiesStr, ";")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			eqIdx := strings.Index(part, "=")
+			if eqIdx == -1 {
+				continue
+			}
+			name := part[:eqIdx]
+			val := part[eqIdx+1:]
+			cookieMap[name] = val
+		}
+	}
+
+	for _, cookie := range newCookies {
+		if cookie.Value != "" {
+			cookieMap[cookie.Name] = cookie.Value
+		}
+	}
+
+	var sb strings.Builder
+	first := true
+	for name, val := range cookieMap {
+		if !first {
+			sb.WriteString("; ")
+		}
+		sb.WriteString(name)
+		sb.WriteString("=")
+		sb.WriteString(val)
+		first = false
+	}
+	return sb.String()
 }
 
 type storeOffersResponse struct {

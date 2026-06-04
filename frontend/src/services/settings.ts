@@ -4,6 +4,7 @@ import { LOCAL_URL } from "./api";
 
 export type Settings = {
     autoSelectAgent: boolean;
+    useLocalSso: boolean;
 };
 
 export async function getSettings(): Promise<Settings> {

@@ -393,6 +393,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
             acc.sessionId = sessionId;
         }
 
+        // Step 1: Silent ssid cookie reauth (techchrism endpoint — no popup needed)
+        // ssid lasts ~1 week, all-cookies strategy lasts ~3 weeks
+        if (acc.ssid) {
+            try {
+                const res = await fetch("http://localhost:31719/v1/auth/ssid-reauth", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ cookies: acc.ssid }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.access_token) {
+                        const updatedAcc: RiotAccount = {
+                            ...acc,
+                            accessToken: data.access_token,
+                            entitlementsToken: data.entitlements_token,
+                            expiresAt: Date.now() + Math.max(0, (data.expires_in || 3600) - 60) * 1000,
+                            ssid: data.cookies || acc.ssid,
+                            sessionId,
+                        };
+                        const stored = getStoredAccounts();
+                        const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
+                        saveStoredAccounts(updated);
+                        setAccounts(updated);
+                        if (activeAccount?.puuid === acc.puuid) {
+                            setActiveAccount(updatedAcc);
+                            setIsTokenExpired(false);
+                            setStorefrontRefreshKey(k => k + 1);
+                        }
+                        return true;
+                    }
+                }
+                // 401 = ssid expired → fall through to popup
+            } catch {
+                // Network error → fall through to popup
+            }
+        }
+
+        // Step 2: Fallback — WebView popup (first login or refresh_token expired)
         try {
             const { auth_url } = await getAuthUrl();
             const { invoke } = await import("@tauri-apps/api/core");
@@ -413,34 +452,40 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 const timeoutId = setTimeout(async () => {
                     if (resolved) return;
                     if (!visible) {
-                        // If it was hidden, show it now to let user log in manually
                         await invoke("show_login_window").catch(() => {});
-                        // Keep waiting for redirect or close
                     } else {
                         cleanup();
                         resolve(false);
                     }
-                }, 10000); // 10s: give Riot time to auto-redirect before showing the window
+                }, 10000);
 
                 listen<string>("riot-login-redirect", async (event) => {
                     if (resolved) return;
                     cleanup();
-
                     try {
                         const redirectUrl = event.payload;
                         const res = await submitTokenUrl(redirectUrl);
-                        
+
+                        // After successful login, grab the ssid cookies from the WebView2
+                        // session so we can silently reauth next time without any popup.
+                        let ssid: string | undefined;
+                        try {
+                            ssid = await invoke<string | null>("get_ssid_cookie", { sessionId }) ?? undefined;
+                        } catch {
+                            // ssid capture is optional — fall back gracefully
+                        }
+
                         const updatedAcc: RiotAccount = {
                             ...acc,
                             accessToken: res.access_token,
                             entitlementsToken: res.entitlements_token,
                             expiresAt: Date.now() + Math.max(0, (res.expires_in || 3600) - 60) * 1000,
-                            region: res.region,
+                            region: res.region || acc.region,
                             gameName: res.game_name || acc.gameName,
                             tagLine: res.tag_line || acc.tagLine,
+                            ssid: ssid ?? acc.ssid,
                             sessionId,
                         };
-
                         const stored = getStoredAccounts();
                         const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
                         saveStoredAccounts(updated);
@@ -455,17 +500,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         console.error("Error in token submit during auto-refresh:", err);
                         resolve(false);
                     }
-                }).then(fn => {
-                    unlistenFn = fn;
-                });
+                }).then(fn => { unlistenFn = fn; });
 
                 listen<void>("riot-login-closed", () => {
                     if (resolved) return;
                     cleanup();
                     resolve(false);
-                }).then(fn => {
-                    unlistenCloseFn = fn;
-                });
+                }).then(fn => { unlistenCloseFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
                     console.error("Failed to open login window:", err);
@@ -559,7 +600,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // Health check and user inventory loading
     useEffect(() => {
         const healthCheck = async () => {
-            const hasRemoteSession = typeof window !== 'undefined' && Boolean(localStorage.getItem('riot_access_token'));
+            const useLocalSso = typeof window !== 'undefined' && localStorage.getItem('use_local_sso') === 'true';
+            const hasRemoteSession = !useLocalSso && typeof window !== 'undefined' && Boolean(localStorage.getItem('riot_access_token'));
             const health = await getHealth();
             setIsBackendOnline(health.online);
             setIsLocalClientActive(health.localClientActive);

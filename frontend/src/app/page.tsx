@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import WeaponGrid from '@/features/gun-skins/WeaponGrid';
 import PresetList from '@/features/presets/PresetList';
 import AgentAssigner from '@/features/agents/AgentAssigner';
@@ -40,12 +40,15 @@ export default function Home() {
         handleAddNewAccount,
         refreshAccountToken,
         storefrontRefreshKey,
+        refreshAccountsList,
     } = useData();
 
     const { theme, toggleTheme } = useTheme();
 
     const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1> }>({ presets: [], playerLoadout: {} });
-    const [autoSelectAgent, setAutoSelectAgent] = useState<boolean>(false);
+    const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
+    const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
+    const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     const [activeTab, setActiveTab] = useState<'skins' | 'store'>('skins');
@@ -85,6 +88,11 @@ export default function Home() {
 
     useEffect(() => {
         setSkipDeleteConfirm(localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === '1');
+        import('@/services/autostart').then(async ({ syncLaunchAtStartup, readLaunchAtStartupState }) => {
+            await syncLaunchAtStartup().catch(() => {});
+            const enabled = await readLaunchAtStartupState();
+            setLaunchAtStartupState(enabled);
+        });
     }, []);
 
     const loadInitialData = useCallback(async () => {
@@ -99,6 +107,9 @@ export default function Home() {
             }
             setInitialData({ playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [] });
             setAutoSelectAgent(settings.autoSelectAgent);
+            setUseLocalSso(settings.useLocalSso);
+            prevSettingsRef.current = settings;
+            localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
         } catch (error) {
             if (error instanceof LocalClientError) {
@@ -122,11 +133,37 @@ export default function Home() {
         }
     }, [isClientHealthy, loadInitialData]);
 
+    const prevSettingsRef = useRef<{ autoSelectAgent: boolean; useLocalSso: boolean } | null>(null);
+
     useEffect(() => {
-        if (autoSelectAgent !== undefined) {
-            saveSettings({ autoSelectAgent });
+        if (autoSelectAgent !== undefined && useLocalSso !== undefined) {
+            const prev = prevSettingsRef.current;
+            if (!prev || prev.autoSelectAgent !== autoSelectAgent || prev.useLocalSso !== useLocalSso) {
+                saveSettings({ autoSelectAgent, useLocalSso });
+                prevSettingsRef.current = { autoSelectAgent, useLocalSso };
+            }
         }
-    }, [autoSelectAgent]);
+    }, [autoSelectAgent, useLocalSso]);
+
+    const handleToggleLocalSso = (val: boolean) => {
+        setUseLocalSso(val);
+        localStorage.setItem("use_local_sso", val ? "true" : "false");
+    };
+
+    const handleToggleFavorite = (puuid: string) => {
+        const stored = JSON.parse(localStorage.getItem("riot_accounts") || "[]");
+        const updated = stored.map((acc: any) => {
+            if (acc.puuid === puuid) {
+                return { ...acc, favorite: !acc.favorite };
+            }
+            return acc;
+        });
+        localStorage.setItem("riot_accounts", JSON.stringify(updated));
+        import('@/services/api').then(({ savePersistedAccounts }) => {
+            void savePersistedAccounts(updated);
+        });
+        refreshAccountsList();
+    };
 
     const handleSkinSelect = (weaponId: string, skinId: string, levelId: string, chromaId: string) => {
         handleItemChange(weaponId, { skinId, skinLevelId: levelId, chromaId });
@@ -258,7 +295,7 @@ export default function Home() {
             <AppTopbar
                 activeTab={activeTab}
                 onTabChange={setActiveTab}
-                autoSelectAgent={autoSelectAgent}
+                autoSelectAgent={autoSelectAgent || false}
                 onToggleAutoAgent={(v) => setAutoSelectAgent(v)}
                 accounts={accounts}
                 activeAccount={activeAccount}
@@ -266,6 +303,11 @@ export default function Home() {
                 onRequestDeleteAccount={requestDeleteAccount}
                 onAddAccount={() => setShowAddAccount(true)}
                 onRefreshAccount={refreshAccountToken}
+                onToggleFavorite={handleToggleFavorite}
+                useLocalSso={useLocalSso || false}
+                onToggleLocalSso={handleToggleLocalSso}
+                launchAtStartup={launchAtStartup}
+                onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}
                 onToggleTheme={toggleTheme}
             />

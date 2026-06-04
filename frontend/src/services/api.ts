@@ -22,15 +22,18 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEO
 async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
     const headers = new Headers(init?.headers || {});
     if (typeof window !== "undefined") {
-        const token = localStorage.getItem("riot_access_token");
-        const entitlements = localStorage.getItem("riot_entitlements");
-        const puuid = localStorage.getItem("riot_puuid");
-        const region = localStorage.getItem("riot_region");
-        if (token && entitlements && puuid && region) {
-            headers.set("X-Riot-Access-Token", token);
-            headers.set("X-Riot-Entitlements-JWT", entitlements);
-            headers.set("X-Riot-Puuid", puuid);
-            headers.set("X-Riot-Region", region);
+        const useLocalSso = localStorage.getItem("use_local_sso") === "true";
+        if (!useLocalSso) {
+            const token = localStorage.getItem("riot_access_token");
+            const entitlements = localStorage.getItem("riot_entitlements");
+            const puuid = localStorage.getItem("riot_puuid");
+            const region = localStorage.getItem("riot_region");
+            if (token && entitlements && puuid && region) {
+                headers.set("X-Riot-Access-Token", token);
+                headers.set("X-Riot-Entitlements-JWT", entitlements);
+                headers.set("X-Riot-Puuid", puuid);
+                headers.set("X-Riot-Region", region);
+            }
         }
     }
     return fetch(url, { ...init, headers });

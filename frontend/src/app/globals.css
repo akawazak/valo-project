@@ -351,8 +351,20 @@ html, body, body > div:first-child, div#__next, div#__next > div {
   align-items: center;
   gap: 0.25rem;
   border-radius: var(--radius-sm);
+  border-left: 3px solid transparent;
+  transition: border-color var(--transition);
 }
-.account-dropdown-item.active { background: var(--accent-dim); }
+.account-dropdown-item.active {
+  background: rgba(255, 70, 85, 0.14);
+  border-left-color: var(--accent, #ff4655);
+}
+.account-dropdown-item.active .account-dropdown-select span {
+  color: var(--accent, #ff4655);
+  font-weight: 600;
+}
+.account-dropdown-item.active .account-dropdown-select small {
+  color: rgba(255, 70, 85, 0.7);
+}
 
 .account-dropdown-select {
   flex: 1;
@@ -390,6 +402,29 @@ html, body, body > div:first-child, div#__next, div#__next > div {
   place-items: center;
 }
 .account-dropdown-remove:hover { color: #fff; background: rgba(255, 70, 85, 0.2); }
+
+.account-dropdown-favorite {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all var(--transition);
+  display: grid;
+  place-items: center;
+}
+.account-dropdown-favorite:hover {
+  color: #ffb01f;
+  background: rgba(255, 255, 255, 0.08);
+}
+.account-dropdown-favorite.is-fav {
+  color: #ffb01f;
+  text-shadow: 0 0 8px rgba(255, 176, 31, 0.5);
+}
 
 .account-dropdown-refresh {
   flex-shrink: 0;
@@ -434,7 +469,7 @@ html, body, body > div:first-child, div#__next, div#__next > div {
 }
 
 .account-dropdown-list {
-  max-height: 180px;
+  max-height: 300px;
   overflow-y: auto;
   margin: 0.2rem 0;
   display: flex;

@@ -9,6 +9,7 @@ import (
 
 type Settings struct {
 	AutoSelectAgent bool `json:"autoSelectAgent"`
+	UseLocalSso     bool `json:"useLocalSso"`
 }
 
 func (s *Settings) Marshal() ([]byte, error) {
@@ -17,6 +18,7 @@ func (s *Settings) Marshal() ([]byte, error) {
 
 var DefaultSettings = &Settings{
 	AutoSelectAgent: true,
+	UseLocalSso:     false,
 }
 
 func Get() (*Settings, error) {

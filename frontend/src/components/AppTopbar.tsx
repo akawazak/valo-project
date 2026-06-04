@@ -17,11 +17,14 @@ interface AppTopbarProps {
     onRequestDeleteAccount: (puuid: string) => void;
     onAddAccount: () => void;
     onRefreshAccount: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
+    onToggleFavorite: (puuid: string) => void;
     theme: string;
     onToggleTheme: () => void;
     launchAtStartup?: boolean;
     onLaunchAtStartupChange?: (enabled: boolean) => void;
     isBackendOnline?: boolean;
+    useLocalSso: boolean;
+    onToggleLocalSso: (v: boolean) => void;
 }
 
 function accountLabel(acc: RiotAccount) {
@@ -39,11 +42,14 @@ export default function AppTopbar({
     onRequestDeleteAccount,
     onAddAccount,
     onRefreshAccount,
+    onToggleFavorite,
     theme,
     onToggleTheme,
     launchAtStartup = false,
     onLaunchAtStartupChange,
     isBackendOnline = true,
+    useLocalSso,
+    onToggleLocalSso,
 }: AppTopbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const [appVersion, setAppVersion] = useState("");
@@ -61,11 +67,16 @@ export default function AppTopbar({
         return Date.now() >= acc.expiresAt;
     };
 
+    const handleFavoriteAccount = (e: React.MouseEvent, puuid: string) => {
+        e.stopPropagation();
+        onToggleFavorite(puuid);
+    };
+
     const handleRefreshAccount = async (e: React.MouseEvent, acc: RiotAccount) => {
         e.stopPropagation();
         setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
         try {
-            // visible: false → hidden popup first; only shows if auto-auth fails after 6s
+            // visible: false → hidden popup first; only shows if auto-auth fails after 10s
             await onRefreshAccount(acc, false);
         } catch (err) {
             console.error("Refresh account error:", err);
@@ -74,9 +85,15 @@ export default function AppTopbar({
         }
     };
 
+    // Favorites pinned to the top, then the rest in original order
+    const sortedAccounts = [
+        ...accounts.filter(a => a.favorite),
+        ...accounts.filter(a => !a.favorite),
+    ];
+
     const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        const expiredAccounts = accounts.filter(isAccountTokenExpired);
+        const expiredAccounts = sortedAccounts.filter(isAccountTokenExpired);
         if (isBulkRefreshing || expiredAccounts.length === 0) return;
         setIsBulkRefreshing(true);
         setBulkProgressTotal(expiredAccounts.length);
@@ -227,6 +244,15 @@ export default function AppTopbar({
                         />
                     </label>
 
+                    <label className="topbar-switch" title="Use currently logged in account from local Riot Client instead of saved accounts">
+                        <span>Local SSO</span>
+                        <input
+                            type="checkbox"
+                            checked={useLocalSso || false}
+                            onChange={(e) => onToggleLocalSso(e.target.checked)}
+                        />
+                    </label>
+
                     {onLaunchAtStartupChange && (
                         <label className="topbar-switch" title="Start ValoVault when you sign in to Windows (opt-in)">
                             <span>Launch at login</span>
@@ -291,16 +317,26 @@ export default function AppTopbar({
                                 )}
                                 {accounts.length > 0 ? (
                                     <div className="account-dropdown-list">
-                                        {accounts.map((acc) => {
+                                        {sortedAccounts.map((acc) => {
                                             const isExpired = isAccountTokenExpired(acc);
                                             const isRefreshing = !!refreshingPuuids[acc.puuid];
+                                            const isFav = !!acc.favorite;
                                             return (
                                                 <div
                                                     key={acc.puuid}
-                                                    className={`account-dropdown-item${activeAccount?.puuid === acc.puuid ? " active" : ""}`}
+                                                    className={`account-dropdown-item${activeAccount?.puuid === acc.puuid ? " active" : ""}${isFav ? " favorited" : ""}`}
                                                     role="option"
                                                     aria-selected={activeAccount?.puuid === acc.puuid}
                                                 >
+                                                    <button
+                                                        type="button"
+                                                        className={`account-dropdown-favorite${isFav ? " is-fav" : ""}`}
+                                                        aria-label={isFav ? "Unpin" : "Pin as favorite"}
+                                                        title={isFav ? "Remove from favorites" : "Add to favorites"}
+                                                        onClick={(e) => handleFavoriteAccount(e, acc.puuid)}
+                                                    >
+                                                        {isFav ? "★" : "☆"}
+                                                    </button>
                                                     <button
                                                         type="button"
                                                         className="account-dropdown-select"

@@ -14,6 +14,8 @@ export interface RiotAccount {
     gameName: string;
     tagLine: string;
     sessionId?: string;
+    ssid?: string;      // Riot auth cookies for silent reauth (lasts ~3 weeks, from WebView capture)
+    favorite?: boolean; // user-pinned account
 }
 
 export interface IdentityV1 {

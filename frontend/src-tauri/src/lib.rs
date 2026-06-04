@@ -136,6 +136,133 @@ async fn show_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads the WebView2 cookie database for a given session and extracts the
+/// Riot `ssid` cookie value (decrypted via Windows DPAPI).
+/// Returns `None` if the cookie is not found or cannot be decrypted.
+#[tauri::command]
+async fn get_ssid_cookie(
+    app_handle: tauri::AppHandle,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+
+    // WebView2 stores its cookie DB under EBWebView/Default/Network/Cookies
+    let cookie_db = config_dir
+        .join("sessions")
+        .join(&session_id)
+        .join("EBWebView")
+        .join("Default")
+        .join("Network")
+        .join("Cookies");
+
+    if !cookie_db.exists() {
+        return Ok(None);
+    }
+
+    // We need to copy the DB to a temp path because WebView2 may hold a lock on it
+    let temp_path = config_dir.join("sessions").join(format!("{}_cookies_tmp", session_id));
+    std::fs::copy(&cookie_db, &temp_path)
+        .map_err(|e| format!("Failed to copy cookie DB: {}", e))?;
+
+        let result = read_cookies_from_db(&temp_path);
+    let _ = std::fs::remove_file(&temp_path);
+    result
+}
+
+fn read_cookies_from_db(db_path: &std::path::Path) -> Result<Option<String>, String> {
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open cookie DB: {}", e))?;
+
+    // Query for all cookies on riotgames.com
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, value, encrypted_value FROM cookies \
+             WHERE host_key LIKE '%riotgames.com'",
+        )
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let mut cookies = Vec::new();
+    let mut rows = stmt.query([])
+        .map_err(|e| format!("Failed to execute query: {}", e))?;
+
+    while let Some(row) = rows.next().map_err(|e| format!("Failed to fetch next row: {}", e))? {
+        let name: String = row.get(0).unwrap_or_default();
+        let value: String = row.get(1).unwrap_or_default();
+        let encrypted: Vec<u8> = row.get(2).unwrap_or_default();
+
+        let mut cookie_value = value;
+        if cookie_value.is_empty() && !encrypted.is_empty() {
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(decrypted) = dpapi_decrypt(&encrypted) {
+                    if let Ok(decrypted_str) = String::from_utf8(decrypted) {
+                        cookie_value = decrypted_str;
+                    }
+                }
+            }
+        }
+
+        if !name.is_empty() && !cookie_value.is_empty() {
+            cookies.push(format!("{}={}", name, cookie_value));
+        }
+    }
+
+    if cookies.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(cookies.join("; ")))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+
+    if data.is_empty() {
+        return Err("Empty encrypted data".to_string());
+    }
+
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    unsafe {
+        CryptUnprotectData(
+            &mut input,
+            None,
+            None,
+            None,
+            None,
+            0,
+            &mut output,
+        ).map_err(|e| format!("DPAPI decryption failed: {}", e))?;
+    }
+
+    let result = unsafe {
+        std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec()
+    };
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LocalFree(hmem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+
+    unsafe {
+        let _ = LocalFree(output.pbData as _);
+    }
+
+    Ok(result)
+}
+
+
 #[tauri::command]
 async fn is_portable() -> Result<bool, String> {
     let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -234,6 +361,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_login_window,
             show_login_window,
+            get_ssid_cookie,
             is_portable,
             install_portable_update
         ])

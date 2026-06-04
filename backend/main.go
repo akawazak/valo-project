@@ -65,6 +65,7 @@ func main() {
 
 	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
 	mux.HandleFunc("POST /v1/auth/token", h.PostAuthToken)
+	mux.HandleFunc("POST /v1/auth/ssid-reauth", h.PostSsidReauth)
 	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
 	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
 
