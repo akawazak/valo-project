@@ -77,7 +77,11 @@ async fn open_login_window(
     } else {
         session_dir.push("default");
     }
-    
+
+    // Ensure the directory exists — WebView fails silently if it doesn't
+    std::fs::create_dir_all(&session_dir)
+        .map_err(|e| format!("Failed to create session directory: {}", e))?;
+
     let is_visible = visible.unwrap_or(true);
     
     let window = tauri::webview::WebviewWindowBuilder::new(

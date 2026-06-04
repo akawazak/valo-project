@@ -59,6 +59,31 @@ export function saveStoredAccounts(accounts: RiotAccount[]) {
     void savePersistedAccounts(accounts);
 }
 
+// One-time migration: ensure every stored account has a stable, PUUID-based
+// sessionId so the Tauri WebView always reuses the same data-directory (and
+// therefore the same browser cookies) when the user clicks ↻ Refresh.
+export function migrateSessionIds(): void {
+    try {
+        const accounts: RiotAccount[] = JSON.parse(localStorage.getItem("riot_accounts") || "[]");
+        let changed = false;
+        const migrated = accounts.map(acc => {
+            const stableId = `session_${acc.puuid}`;
+            // Only assign if the account has no sessionId OR has an old random one
+            if (!acc.sessionId || (!acc.sessionId.startsWith('session_') || acc.sessionId !== stableId)) {
+                changed = true;
+                return { ...acc, sessionId: stableId };
+            }
+            return acc;
+        });
+        if (changed) {
+            localStorage.setItem("riot_accounts", JSON.stringify(migrated));
+            void savePersistedAccounts(migrated);
+        }
+    } catch {
+        // silently ignore migration errors
+    }
+}
+
 export function activateAccount(account: RiotAccount) {
     localStorage.setItem("riot_puuid", account.puuid);
     localStorage.setItem("riot_region", account.region);
@@ -343,13 +368,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, [activeAccount]);
 
     const handleAddNewAccount = useCallback((acc: RiotAccount) => {
+        // Always ensure a stable, PUUID-based sessionId so the same cookie
+        // directory is used for every future refresh of this account.
+        const stableAcc: RiotAccount = {
+            ...acc,
+            sessionId: `session_${acc.puuid}`,
+        };
         const stored = getStoredAccounts();
-        const updated = stored.filter(a => a.puuid !== acc.puuid);
-        updated.unshift(acc);
+        const updated = stored.filter(a => a.puuid !== stableAcc.puuid);
+        updated.unshift(stableAcc);
         saveStoredAccounts(updated);
         setAccounts(updated);
-        activateAccount(acc);
-        setActiveAccount(acc);
+        activateAccount(stableAcc);
+        setActiveAccount(stableAcc);
         setIsTokenExpired(false);
         // Bump storefront refresh key so store loads fresh for new account
         setStorefrontRefreshKey(k => k + 1);
@@ -358,7 +389,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const refreshAccountToken = useCallback(async (acc: RiotAccount, visible: boolean = false): Promise<boolean> => {
         let sessionId = acc.sessionId;
         if (!sessionId) {
-            sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            sessionId = `session_${acc.puuid}`;
             acc.sessionId = sessionId;
         }
 
@@ -389,7 +420,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         cleanup();
                         resolve(false);
                     }
-                }, 6000); // 6 seconds timeout
+                }, 10000); // 10s: give Riot time to auto-redirect before showing the window
 
                 listen<string>("riot-login-redirect", async (event) => {
                     if (resolved) return;
@@ -450,6 +481,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     // Initialize accounts list and load static data on mount
     useEffect(() => {
+        migrateSessionIds(); // one-time migration to stable PUUID-based session IDs
         refreshAccountsList();
         loadStaticData();
     }, [loadStaticData, refreshAccountsList]);

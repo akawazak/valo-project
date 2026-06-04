@@ -65,7 +65,8 @@ export default function AppTopbar({
         e.stopPropagation();
         setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
         try {
-            await onRefreshAccount(acc, true);
+            // visible: false → hidden popup first; only shows if auto-auth fails after 6s
+            await onRefreshAccount(acc, false);
         } catch (err) {
             console.error("Refresh account error:", err);
         } finally {

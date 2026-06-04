@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "login-capability",
+  "description": "Permissions for the Riot OAuth login popup window",
+  "windows": [
+    "riot_login"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}
