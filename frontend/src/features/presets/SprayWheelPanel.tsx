@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useData } from '@/context/DataContext';
 import { SpraySlot } from '@/lib/types';
 
@@ -79,9 +80,7 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
         <div className="cosmetics-panel-container">
             {/* Spray Wheel Section */}
             <div className="premium-spray-wheel-wrapper">
-                <div className="workspace-column-title" style={{ width: '100%', marginBottom: '0.5rem', borderBottom: 'none' }}>
-                    Sprays
-                </div>
+                <div className="cosmetics-sub-header">Sprays</div>
                 
                 <div className="circular-spray-wheel">
                     <div className="circular-spray-wheel-ring" />
@@ -112,10 +111,9 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                 <div className="circular-spray-label-hint">Click a slot to configure</div>
             </div>
 
-            {/* Spray Selector Modal */}
-            {activeSlot && (
+            {activeSlot && createPortal(
                 <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleCloseModal()}>
-                    <div className="unified-modal-container">
+                    <div className="unified-modal-container" style={{ maxWidth: '780px', height: 'min(80vh, 560px)' }}>
                         {/* Header */}
                         <div className="unified-modal-header">
                             <div className="unified-modal-title-wrap">
@@ -128,10 +126,10 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                         </div>
 
                         {/* Split Content */}
-                        <div className="unified-modal-content">
+                        <div className="unified-modal-content" style={{ gridTemplateColumns: '260px 1fr' }}>
                             {/* Left Pane: Preview and Clear Actions */}
-                            <div className="unified-modal-left">
-                                <div className="unified-modal-preview-box">
+                            <div className="unified-modal-left" style={{ padding: '1.25rem' }}>
+                                <div className="unified-modal-preview-box" style={{ aspectRatio: '1 / 1' }}>
                                     <div className="unified-modal-card-tier-line" style={{ backgroundColor: 'var(--accent)' }} />
                                     {slotSprayMap[activeSlot.id] ? (
                                         <img
@@ -219,7 +217,8 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                             </div>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </div>
     );

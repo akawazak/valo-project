@@ -65,6 +65,9 @@ export default function WeaponCard({
     
     // Determine specific card class
     let cardClass = "valorant-weapon-card";
+    if (["classic", "shorty", "frenzy", "ghost", "sheriff"].includes(wName)) cardClass += " valorant-weapon-card--sidearm";
+    if (["stinger", "spectre"].includes(wName)) cardClass += " valorant-weapon-card--smg";
+    if (["bucky", "judge"].includes(wName)) cardClass += " valorant-weapon-card--shotgun";
     if (["phantom", "vandal", "guardian", "bulldog"].includes(wName)) cardClass += " valorant-weapon-card--rifle";
     if (["operator", "outlaw", "marshal"].includes(wName)) cardClass += " valorant-weapon-card--sniper";
     if (["odin", "ares"].includes(wName)) cardClass += " valorant-weapon-card--heavy";
@@ -96,7 +99,7 @@ export default function WeaponCard({
                     {/* Buddy Display Bubble */}
                     {weapon.category !== 'EEquippableCategory::Melee' && buddy && (
                         <div
-                            className="valorant-weapon-card-buddy"
+                            className="weapon-card-buddy-btn"
                             title={`Buddy: ${buddy.displayName}`}
                             style={{ pointerEvents: 'none' }}
                         >
@@ -106,7 +109,7 @@ export default function WeaponCard({
 
                     {/* Reset custom skin option */}
                     {isEquipped && parentItem && (
-                        <button type="button" className="valorant-weapon-card-action-btn" onClick={handleResetSkinClick} title="Reset to parent preset loadout">
+                        <button type="button" className="weapon-card-reset-btn" onClick={handleResetSkinClick} title="Reset to parent preset loadout">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
                                 <path d="M3 3v5h5"></path>
