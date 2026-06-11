@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import WeaponGrid from '@/features/gun-skins/WeaponGrid';
+import ArsenalView from '@/features/arsenal/ArsenalView';
 import PresetList from '@/features/presets/PresetList';
-import AgentAssigner from '@/features/agents/AgentAssigner';
 import Footer from '@/components/Footer';
 import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
@@ -12,25 +11,23 @@ import ConfirmationModal from '@/components/ConfirmationModal';
 import { getPlayerLoadout, getPresets } from '@/services/api';
 import { getSettings, saveSettings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
-import { Preset, LoadoutItemV1 } from '@/lib/types';
+import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { useData } from '@/context/DataContext';
 import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
 import { useLoadout } from '@/hooks/useLoadout';
 import RiotLoginCard from '@/components/RiotLoginCard';
 import StorePanels from '@/features/dashboard/StorePanels';
 import { useTheme } from '@/context/ThemeContext';
-import IdentitySelector from '@/features/identity/IdentitySelector';
-import SpraySelector from '@/features/sprays/SpraySelector';
 import { exportPreset } from '@/lib/presetShare';
 import AppTopbar from '@/components/AppTopbar';
 import ImportPresetModal from '@/components/ImportPresetModal';
-import AccountDeleteModal from '@/components/AccountDeleteModal';
-
-const SKIP_DELETE_CONFIRM_KEY = 'valovault_skip_acc_delete_confirm';
+import AccountManagerModal from '@/components/AccountManagerModal';
+import SettingsModal from '@/components/SettingsModal';
 
 export default function Home() {
     const {
         agents,
+        weapons,
         loading: dataContextLoading,
         isClientHealthy,
         accounts,
@@ -41,6 +38,9 @@ export default function Home() {
         refreshAccountToken,
         storefrontRefreshKey,
         refreshAccountsList,
+        contentTiers,
+        ownedLevelIDs,
+        ownedChromaIDs,
     } = useData();
 
     const { theme, toggleTheme } = useTheme();
@@ -51,13 +51,15 @@ export default function Home() {
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
+    
+    // Core Layout State
     const [activeTab, setActiveTab] = useState<'skins' | 'store'>('skins');
+    const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+    
+    // Modals
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isAccountsOpen, setIsAccountsOpen] = useState(false);
     const [showAddAccount, setShowAddAccount] = useState(false);
-
-    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-    const [showDeleteModal, setShowDeleteModal] = useState(false);
-    const [skipDeleteConfirm, setSkipDeleteConfirm] = useState(false);
-    const [dontAskAgain, setDontAskAgain] = useState(false);
 
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
@@ -87,7 +89,6 @@ export default function Home() {
     const [importError, setImportError] = useState('');
 
     useEffect(() => {
-        setSkipDeleteConfirm(localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === '1');
         import('@/services/autostart').then(async ({ syncLaunchAtStartup, readLaunchAtStartupState }) => {
             await syncLaunchAtStartup().catch(() => {});
             const enabled = await readLaunchAtStartupState();
@@ -152,7 +153,7 @@ export default function Home() {
 
     const handleToggleFavorite = (puuid: string) => {
         const stored = JSON.parse(localStorage.getItem("riot_accounts") || "[]");
-        const updated = stored.map((acc: any) => {
+        const updated = stored.map((acc: RiotAccount) => {
             if (acc.puuid === puuid) {
                 return { ...acc, favorite: !acc.favorite };
             }
@@ -242,37 +243,19 @@ export default function Home() {
     };
 
     const requestDeleteAccount = (puuid: string) => {
-        if (skipDeleteConfirm) {
-            handleDeleteAccount(puuid);
-        } else {
-            setDeleteTarget(puuid);
-            setDontAskAgain(false);
-            setShowDeleteModal(true);
-        }
+        handleDeleteAccount(puuid); // Account delete without prompt since we removed the prompt earlier
     };
 
-    const confirmDeleteAccount = () => {
-        if (dontAskAgain) {
-            localStorage.setItem(SKIP_DELETE_CONFIRM_KEY, '1');
-            setSkipDeleteConfirm(true);
-        }
-        setShowDeleteModal(false);
-        if (deleteTarget) handleDeleteAccount(deleteTarget);
-        setDeleteTarget(null);
+    const onSelectPresetToEdit = (preset: Preset) => {
+        handlePresetSelect(preset);
+        setIsWorkspaceOpen(true);
     };
 
-    const cancelDeleteAccount = () => {
-        setShowDeleteModal(false);
-        setDeleteTarget(null);
+    const onBackToDashboard = () => {
+        setIsWorkspaceOpen(false);
+        handlePresetSelect(defaultPreset);
+        handleCancel();
     };
-
-    if (!isClientHealthy) {
-        return (
-            <RiotLoginCard
-                onLoginSuccess={(acc) => { if (acc) handleAddNewAccount(acc); }}
-            />
-        );
-    }
 
     if (isLoading || dataContextLoading) {
         return (
@@ -288,115 +271,93 @@ export default function Home() {
     const activePreset = editingPreset || selectedPreset;
     const isDefaultPreset = activePreset?.uuid === defaultPreset.uuid;
     const showPresetExtras = activePreset && !isDefaultPreset;
-    const showAgentAssigner = showPresetExtras && !activePreset?.parentUuid;
 
     return (
         <div className="app-container">
             <AppTopbar
                 activeTab={activeTab}
-                onTabChange={setActiveTab}
-                autoSelectAgent={autoSelectAgent || false}
-                onToggleAutoAgent={(v) => setAutoSelectAgent(v)}
-                accounts={accounts}
+                onTabChange={(tab) => {
+                    setActiveTab(tab);
+                    if (tab === 'store') setIsWorkspaceOpen(false);
+                }}
                 activeAccount={activeAccount}
-                onSwitchAccount={handleSwitchAccount}
-                onRequestDeleteAccount={requestDeleteAccount}
-                onAddAccount={() => setShowAddAccount(true)}
-                onRefreshAccount={refreshAccountToken}
-                onToggleFavorite={handleToggleFavorite}
                 useLocalSso={useLocalSso || false}
-                onToggleLocalSso={handleToggleLocalSso}
-                launchAtStartup={launchAtStartup}
-                onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
-                theme={theme}
-                onToggleTheme={toggleTheme}
+                isLocalClientActive={isClientHealthy}
+                isBackendOnline={true}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+                onOpenAccounts={() => setIsAccountsOpen(true)}
             />
 
             <div className="app-content-wrapper">
                 <main className="app-main-content">
                     {activeTab === 'store' ? (
-                        <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setShowAddAccount(true)} />
+                        <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : (
-                        <div className="row h-100 m-0">
-                            <div className="col-md-8 mb-3 scrollable-col pe-md-3">
-                                <div className="preset-panel mb-3">
-                                    <div className="section-row mb-3" style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: '0.75rem' }}>
-                                        <div>
-                                            <div className="tactical-kicker">// ARSENAL</div>
-                                            <h2 className="tactical-title mb-0" style={{ fontSize: '1.4rem' }}>Weapon Skins</h2>
-                                        </div>
-                                    </div>
-                                    <p className="text-muted small mb-3">Select a weapon to see available skins.</p>
-                                    <WeaponGrid
-                                        onSkinSelectAction={handleSkinSelect}
-                                        onBuddySelectAction={handleBuddySelect}
-                                        currentLoadout={currentLoadout}
-                                        onSkinResetAction={handleSkinReset}
-                                        parent={getParent(activePreset)}
-                                    />
-                                </div>
-
-                                {showAgentAssigner && (
-                                    <AgentAssigner
-                                        agents={agents}
-                                        selectedPreset={activePreset}
-                                        assignedAgents={activePreset.agents || []}
-                                        onAssignmentChange={handleAgentAssignment}
-                                    />
-                                )}
-
-                                {showPresetExtras && (
-                                    <>
-                                        <IdentitySelector
-                                            currentCardId={activePreset.identity?.playerCardId || ''}
-                                            currentTitleId={activePreset.identity?.playerTitleId || ''}
-                                            onSelectCard={(cardId) => handleIdentityChange(cardId, activePreset.identity?.playerTitleId || '')}
-                                            onSelectTitle={(titleId) => handleIdentityChange(activePreset.identity?.playerCardId || '', titleId)}
-                                        />
-                                        <SpraySelector
-                                            currentSprays={activePreset.sprays || []}
-                                            onUpdateSprays={handleSpraysChange}
-                                        />
-                                    </>
-                                )}
-                            </div>
-
-                            <div className="col-md-4 scrollable-col ps-md-3">
-                                <div className="preset-panel">
-                                    <div className="d-flex justify-content-between align-items-center mb-3">
-                                        <div>
-                                            <div className="tactical-kicker">// LOADOUTS</div>
-                                            <h2 className="tactical-title mb-0" style={{ fontSize: '1.2rem' }}>Presets</h2>
-                                        </div>
-                                        <button
-                                            className="btn-tactical btn-tactical-danger"
-                                            onClick={() => handleOpenPresetNameModal(NamingMode.New)}
-                                        >
-                                            + New
-                                        </button>
-                                    </div>
-                                    <PresetList
-                                        presets={presets}
-                                        onPresetSelect={handlePresetSelect}
-                                        selectedPreset={selectedPreset}
-                                        defaultPreset={defaultPreset}
-                                        onPresetApply={handlePresetApply}
-                                        onPresetDelete={handlePresetDelete}
-                                        onPresetRename={handleOpenRenameModal}
-                                        onCreateVariant={handleDropdownVariant}
-                                        onTogglePreset={handleTogglePreset}
-                                        agents={agents}
-                                        onExportPreset={handleExportPreset}
-                                        onImportPresetClick={() => setShowImportModal(true)}
-                                    />
-                                </div>
-                            </div>
-                        </div>
+                        isWorkspaceOpen ? (
+                            <ArsenalView
+                                weapons={weapons}
+                                currentLoadout={currentLoadout}
+                                parent={getParent(activePreset)}
+                                ownedLevelIDs={ownedLevelIDs}
+                                ownedChromaIDs={ownedChromaIDs}
+                                contentTiers={contentTiers}
+                                onSkinSelect={handleSkinSelect}
+                                onBuddySelect={handleBuddySelect}
+                                onSkinReset={handleSkinReset}
+                                presets={presets}
+                                selectedPreset={selectedPreset}
+                                defaultPreset={defaultPreset}
+                                onPresetSelect={handlePresetSelect}
+                                onPresetApply={handlePresetApply}
+                                onPresetDelete={handlePresetDelete}
+                                onPresetRename={handleOpenRenameModal}
+                                onCreateVariant={handleDropdownVariant}
+                                onTogglePreset={handleTogglePreset}
+                                onExportPreset={handleExportPreset}
+                                onImportPresetClick={() => setShowImportModal(true)}
+                                onNewPreset={() => {
+                                    handleOpenPresetNameModal(NamingMode.New);
+                                }}
+                                agents={agents}
+                                isEditing={isEditing}
+                                editingPreset={editingPreset}
+                                onSave={handleSave}
+                                onCancel={handleCancel}
+                                onSaveAsNew={() => handleOpenPresetNameModal(NamingMode.SaveAsNew)}
+                                onApply={handleApply}
+                                onVariant={handleVariant}
+                                currentCardId={activePreset?.identity?.playerCardId || ""}
+                                currentTitleId={activePreset?.identity?.playerTitleId || ""}
+                                onSelectCard={(cardId) => handleIdentityChange(cardId, activePreset?.identity?.playerTitleId || "")}
+                                onSelectTitle={(titleId) => handleIdentityChange(activePreset?.identity?.playerCardId || "", titleId)}
+                                currentSprays={activePreset?.sprays}
+                                onUpdateSprays={handleSpraysChange}
+                                showPresetExtras={showPresetExtras || false}
+                                onBackToDashboard={onBackToDashboard}
+                                onAgentAssignment={handleAgentAssignment}
+                            />
+                        ) : (
+                            <PresetList
+                                presets={presets}
+                                selectedPreset={selectedPreset}
+                                defaultPreset={defaultPreset}
+                                agents={agents}
+                                onPresetSelect={onSelectPresetToEdit}
+                                onPresetDelete={handlePresetDelete}
+                                onPresetRename={handleOpenRenameModal}
+                                onPresetApply={handlePresetApply}
+                                onCreateVariant={handleDropdownVariant}
+                                onTogglePreset={handleTogglePreset}
+                                onExportPreset={handleExportPreset}
+                                onImportPresetClick={() => setShowImportModal(true)}
+                                onNewPreset={() => handleOpenPresetNameModal(NamingMode.New)}
+                            />
+                        )
                     )}
                 </main>
             </div>
 
-            {activeTab === 'skins' && isEditing && (
+            {activeTab === 'skins' && isWorkspaceOpen && isEditing && (
                 <Footer
                     onSaveAction={handleSave}
                     onCancelAction={handleCancel}
@@ -411,7 +372,10 @@ export default function Home() {
             <PresetNameModal
                 show={showPresetNameModal}
                 onCloseAction={handleClosePresetNameModal}
-                onSaveAction={handleSavePresetName}
+                onSaveAction={async (name) => {
+                    await handleSavePresetName(name);
+                    if (!isWorkspaceOpen) setIsWorkspaceOpen(true);
+                }}
                 initialName={dropdownPreset?.name}
                 namingMode={namingMode}
             />
@@ -425,6 +389,42 @@ export default function Home() {
                 message="Are you sure you want to delete this preset?"
             />
 
+            {/* Modals */}
+            <AccountManagerModal
+                isOpen={isAccountsOpen}
+                onClose={() => setIsAccountsOpen(false)}
+                accounts={accounts}
+                activeAccount={activeAccount}
+                onSwitchAccount={handleSwitchAccount}
+                onRequestDeleteAccount={requestDeleteAccount}
+                onAddAccount={() => {
+                    setIsAccountsOpen(false);
+                    setShowAddAccount(true);
+                }}
+                onRefreshAccount={refreshAccountToken}
+                onToggleFavorite={handleToggleFavorite}
+            />
+
+            <SettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                autoSelectAgent={autoSelectAgent || false}
+                onToggleAutoAgent={(v) => setAutoSelectAgent(v)}
+                useLocalSso={useLocalSso || false}
+                onToggleLocalSso={handleToggleLocalSso}
+                launchAtStartup={launchAtStartup}
+                onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                isLocalClientActive={isClientHealthy}
+                activeAccount={activeAccount}
+                appVersion="1.0.0"
+                updateAvailable={false}
+                isUpdating={false}
+                updateReady={false}
+                onInstallUpdate={() => {}}
+            />
+
             {showAddAccount && (
                 <div className="login-modal-layer">
                     <RiotLoginCard
@@ -436,14 +436,6 @@ export default function Home() {
                     />
                 </div>
             )}
-
-            <AccountDeleteModal
-                show={showDeleteModal}
-                onCancel={cancelDeleteAccount}
-                onConfirm={confirmDeleteAccount}
-                dontAskAgain={dontAskAgain}
-                onToggleDontAskAgain={(v) => setDontAskAgain(v)}
-            />
 
             <ImportPresetModal
                 show={showImportModal}

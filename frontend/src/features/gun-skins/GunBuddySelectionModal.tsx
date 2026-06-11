@@ -22,72 +22,84 @@ export default function GunBuddySelectionModal({ onSelect, onClose, weaponName, 
         return Object.values(loadout).filter(item => item.charmLevelID === buddyLevelId).length;
     };
 
-    const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (e.target === e.currentTarget) {
-            onClose();
-        }
-    };
-
     return (
-        <div className="modal" style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={handleBackdropClick}>
-            <div className="modal-dialog modal-dialog-centered modal-lg">
-                <div className="modal-content">
-                    <div className="modal-header">
-                        <h5 className="modal-title">Gun buddies for {weaponName}</h5>
-                        <button type="button" className="btn-close" onClick={onClose}></button>
+        <div className="lc-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="lc-dialog">
+                <div className="lc-header">
+                    <div>
+                        <div style={{ fontSize: '0.58rem', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '0.2rem' }}>GUN BUDDY</div>
+                        <div className="lc-title">{weaponName}</div>
                     </div>
-                    <div className="modal-body">
-                        {ownedBuddies.length === 0 ? (
-                            <p>You don&apos;t own any gun buddies.</p>
-                        ) : (
-                            <>
-                                <div className="mb-3">
-                                    <input
-                                        type="text"
-                                        className="form-control"
-                                        placeholder="Search gun buddies..."
-                                        value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                    />
-                                </div>
-                                <div style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden', padding: '1rem' }}>
-                                    <div className="row row-cols-2 row-cols-md-3 row-cols-lg-5 g-3">
-                                        <div className="col">
-                                            <div
-                                                className="card h-100 card-hover"
-                                                onClick={() => onSelect('', '')}
-                                                style={{ cursor: 'pointer' }}>
-                                                <div className="card-body d-flex flex-column justify-content-center align-items-center p-2">
-                                                    <span style={{ fontSize: '3rem' }}>🚫</span>
-                                                </div>
-                                                <div className="card-footer p-1">
-                                                    <small className="text-muted text-truncate">None</small>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {filteredBuddies.map((buddy) => {
-                                            const level = buddy.levels?.[0];
-                                            if (!level) return null;
-                                            const usage = getBuddyUsage(currentLoadout, level.uuid);
-                                            const isDisabled = usage >= buddy.amount;
+                    <button className="lc-close" onClick={onClose}>✕</button>
+                </div>
 
-                                            return (
-                                                <div key={buddy.uuid} className="col" onClick={() => !isDisabled && onSelect(buddy.uuid, level.uuid)}>
-                                                    <div className={`card h-100 card-hover ${isDisabled ? 'disabled' : ''}`} style={{ opacity: isDisabled ? 0.5 : 1, cursor: isDisabled ? 'not-allowed' : 'pointer' }}>
-                                                        <Image src={level.displayIcon} alt={buddy.displayName} className="card-img-top" width={100} height={100} style={{ objectFit: 'contain' }} unoptimized />
-                                                        <div className="card-body p-2">
-                                                            <p className="card-text text-center small">{buddy.displayName}</p>
-                                                        </div>
-                                                        {isDisabled && <div className="card-footer p-1"><small className="text-danger">In use</small></div>}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
+                <div className="lc-body">
+                    {ownedBuddies.length === 0 ? (
+                        <div className="skin-list-empty">You don't own any gun buddies.</div>
+                    ) : (
+                        <>
+                            <div className="lc-section-title" style={{ marginBottom: '0.6rem' }}>Select Buddy</div>
+                            <div style={{ marginBottom: '0.75rem' }}>
+                                <input
+                                    type="text"
+                                    placeholder="Search gun buddies…"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        background: 'var(--bg-surface)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: '6px',
+                                        padding: '0.5rem 0.85rem',
+                                        fontSize: '0.8rem',
+                                        fontFamily: 'var(--font-mono)',
+                                        color: 'var(--text-primary)',
+                                        outline: 'none',
+                                    }}
+                                />
+                            </div>
+                            <div className="skin-list-grid">
+                                {/* None option */}
+                                <button
+                                    className="skin-list-card"
+                                    onClick={() => onSelect('', '')}
+                                >
+                                    <div className="skin-list-card-img" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>
+                                        <span style={{ color: 'var(--text-dim)' }}>🚫</span>
                                     </div>
-                                </div>
-                            </>
-                        )}
-                    </div>
+                                    <div className="skin-list-card-info">
+                                        <div className="skin-list-card-name">None</div>
+                                    </div>
+                                </button>
+
+                                {filteredBuddies.map((buddy) => {
+                                    const level = buddy.levels?.[0];
+                                    if (!level) return null;
+                                    const usage = getBuddyUsage(currentLoadout, level.uuid);
+                                    const isDisabled = usage >= buddy.amount;
+
+                                    return (
+                                        <button
+                                            key={buddy.uuid}
+                                            className={`skin-list-card ${isDisabled ? 'disabled' : ''}`}
+                                            onClick={() => !isDisabled && onSelect(buddy.uuid, level.uuid)}
+                                            style={{ opacity: isDisabled ? 0.5 : 1, cursor: isDisabled ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            <div className="skin-list-card-img">
+                                                <Image src={level.displayIcon} alt={buddy.displayName} fill style={{ objectFit: 'contain' }} unoptimized />
+                                            </div>
+                                            <div className="skin-list-card-info">
+                                                <div className="skin-list-card-name">{buddy.displayName}</div>
+                                                {isDisabled && (
+                                                    <div style={{ fontSize: '0.55rem', color: 'var(--accent)', textAlign: 'center', marginTop: '0.15rem' }}>In use</div>
+                                                )}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
                 </div>
             </div>
         </div>

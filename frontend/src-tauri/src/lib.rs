@@ -66,12 +66,32 @@ async fn open_login_window(
     if let Some(window) = app_handle.get_webview_window(label) {
         let _ = window.close();
     }
-    
+    // Tauri defers window destruction — wait so the label is freed before we
+    // re-create the WebView with the same label.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
     let cloned_handle = app_handle.clone();
     
     let config_dir = app_handle.path().app_config_dir().map_err(|e| e.to_string())?;
-    let mut session_dir = config_dir.clone();
-    session_dir.push("sessions");
+    let mut sessions_base = config_dir.clone();
+    sessions_base.push("sessions");
+
+    // Clean up ALL old session directories before creating a new one.
+    // Leftover WebView2 lock files from crashed/unclosed sessions cause
+    // "The parameter is incorrect" (0x80070057) on subsequent launches.
+    if sessions_base.exists() {
+        for entry in std::fs::read_dir(&sessions_base).into_iter().flatten().filter_map(Result::ok) {
+            let path = entry.path();
+
+            // Keep the current session dir if it was provided; nuke everything else
+            let is_current = session_id.as_ref().map_or(false, |sid| path.to_string_lossy().ends_with(sid));
+            if !is_current && path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+
+    let mut session_dir = sessions_base.clone();
     if let Some(ref sid) = session_id {
         session_dir.push(sid);
     } else {

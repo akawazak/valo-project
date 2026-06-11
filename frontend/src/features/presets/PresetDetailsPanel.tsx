@@ -94,6 +94,7 @@ export default function PresetDetailsPanel({
                     agents={agents}
                     onExportPreset={onExportPreset}
                     onImportPresetClick={onImportPresetClick}
+                    onNewPreset={onNewPreset}
                 />
 
                 <div className="preset-details-divider" />

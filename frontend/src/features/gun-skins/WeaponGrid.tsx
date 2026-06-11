@@ -30,25 +30,7 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
         setShowSkinListModal(true);
     };
 
-    const handleEditSkinClick = (weapon: Weapon) => {
-        const itemToEdit = currentLoadout[weapon.uuid] || (parent ? parent[weapon.uuid] : undefined);
-        if (!currentLoadout[weapon.uuid] && parent?.[weapon.uuid]) {
-            const parentItem = parent[weapon.uuid];
-            onSkinSelectAction(weapon.uuid, parentItem.skinId, parentItem.skinLevelId, parentItem.chromaId);
-        }
 
-        const skin = weapon.skins.find(s => s.uuid === itemToEdit.skinId);
-        if (skin) {
-            setSelectedWeapon(weapon);
-            setSelectedSkin(skin);
-            setShowLevelAndChromaModal(true);
-        }
-    };
-
-    const handleBuddyEditClick = (weapon: Weapon) => {
-        setSelectedWeaponForBuddy(weapon);
-        setShowBuddyModal(true);
-    };
 
     const handleResetSkinClick = (weapon: Weapon) => {
         onSkinResetAction(weapon.uuid);
@@ -86,26 +68,21 @@ export default function WeaponGrid({ onSkinSelectAction, onBuddySelectAction, on
     };
 
     if (loading) {
-        return <div>Loading game data...</div>;
+        return <div style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textAlign: 'center', padding: '2rem' }}>Loading game data…</div>;
     }
 
     return (
-        <div>
-            <div className="row row-cols-2 row-cols-md-4 row-cols-lg-5 g-3">
+        <div className="weapon-grid-wrap">
+            <div className="weapon-grid">
                 {weapons.map((weapon) => (
-                    <div key={weapon.uuid} className="col">
-                        <WeaponCard
-                            weapon={weapon}
-                            ownedLevelIDs={ownedLevelIDs}
-                            ownedChromaIDs={ownedChromaIDs}
-                            onClick={() => handleWeaponClick(weapon)}
-                            onEditClick={() => handleEditSkinClick(weapon)}
-                            onBuddyEditClick={() => handleBuddyEditClick(weapon)}
-                            onHandleResetSkinClick={() => handleResetSkinClick(weapon)}
-                            selectedItem={currentLoadout[weapon.uuid]}
-                            parentItem={parent ? parent[weapon.uuid] : undefined}
-                        />
-                    </div>
+                    <WeaponCard
+                        key={weapon.uuid}
+                        weapon={weapon}
+                        onClick={() => handleWeaponClick(weapon)}
+                        onHandleResetSkinClick={() => handleResetSkinClick(weapon)}
+                        selectedItem={currentLoadout[weapon.uuid]}
+                        parentItem={parent ? parent[weapon.uuid] : undefined}
+                    />
                 ))}
             </div>
 

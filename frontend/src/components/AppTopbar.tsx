@@ -1,209 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
-import { check } from "@tauri-apps/plugin-updater";
-import { RiotAccount } from '@/lib/types';
-import { setLaunchAtStartup } from '@/services/autostart';
+import { RiotAccount } from "@/lib/types";
 
 interface AppTopbarProps {
-    activeTab: 'store' | 'skins';
-    onTabChange: (tab: 'store' | 'skins') => void;
-    autoSelectAgent: boolean;
-    onToggleAutoAgent: (v: boolean) => void;
-    accounts: RiotAccount[];
+    activeTab: "store" | "skins";
+    onTabChange: (tab: "store" | "skins") => void;
     activeAccount: RiotAccount | null;
-    onSwitchAccount: (acc: RiotAccount) => void;
-    onRequestDeleteAccount: (puuid: string) => void;
-    onAddAccount: () => void;
-    onRefreshAccount: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
-    onToggleFavorite: (puuid: string) => void;
-    theme: string;
-    onToggleTheme: () => void;
-    launchAtStartup?: boolean;
-    onLaunchAtStartupChange?: (enabled: boolean) => void;
-    isBackendOnline?: boolean;
     useLocalSso: boolean;
-    onToggleLocalSso: (v: boolean) => void;
-}
-
-function accountLabel(acc: RiotAccount) {
-    return `${acc.gameName}#${acc.tagLine}`;
+    isLocalClientActive: boolean;
+    isBackendOnline?: boolean;
+    onOpenSettings: () => void;
+    onOpenAccounts: () => void;
 }
 
 export default function AppTopbar({
     activeTab,
     onTabChange,
-    autoSelectAgent,
-    onToggleAutoAgent,
-    accounts,
     activeAccount,
-    onSwitchAccount,
-    onRequestDeleteAccount,
-    onAddAccount,
-    onRefreshAccount,
-    onToggleFavorite,
-    theme,
-    onToggleTheme,
-    launchAtStartup = false,
-    onLaunchAtStartupChange,
-    isBackendOnline = true,
     useLocalSso,
-    onToggleLocalSso,
+    isLocalClientActive,
+    isBackendOnline = true,
+    onOpenSettings,
+    onOpenAccounts,
 }: AppTopbarProps) {
-    const [menuOpen, setMenuOpen] = useState(false);
-    const [appVersion, setAppVersion] = useState("");
-    const [updateAvailable, setUpdateAvailable] = useState(false);
-    const [isUpdating, setIsUpdating] = useState(false);
-    const [updateReady, setUpdateReady] = useState(false);
-    const dropdownRef = useRef<HTMLDivElement>(null);
-    const [refreshingPuuids, setRefreshingPuuids] = useState<Record<string, boolean>>({});
-    const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
-    const [bulkProgressCurrent, setBulkProgressCurrent] = useState(0);
-    const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
-
-    const isAccountTokenExpired = (acc: RiotAccount) => {
-        if (!acc.expiresAt) return true;
-        return Date.now() >= acc.expiresAt;
-    };
-
-    const handleFavoriteAccount = (e: React.MouseEvent, puuid: string) => {
-        e.stopPropagation();
-        onToggleFavorite(puuid);
-    };
-
-    const handleRefreshAccount = async (e: React.MouseEvent, acc: RiotAccount) => {
-        e.stopPropagation();
-        setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
-        try {
-            // visible: false → hidden popup first; only shows if auto-auth fails after 10s
-            await onRefreshAccount(acc, false);
-        } catch (err) {
-            console.error("Refresh account error:", err);
-        } finally {
-            setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
-        }
-    };
-
-    // Favorites pinned to the top, then the rest in original order
-    const sortedAccounts = [
-        ...accounts.filter(a => a.favorite),
-        ...accounts.filter(a => !a.favorite),
-    ];
-
-    const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
-        e.stopPropagation();
-        const expiredAccounts = sortedAccounts.filter(isAccountTokenExpired);
-        if (isBulkRefreshing || expiredAccounts.length === 0) return;
-        setIsBulkRefreshing(true);
-        setBulkProgressTotal(expiredAccounts.length);
-        setBulkProgressCurrent(0);
-
-        for (let i = 0; i < expiredAccounts.length; i++) {
-            const acc = expiredAccounts[i];
-            setBulkProgressCurrent(i + 1);
-            setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
-            try {
-                await onRefreshAccount(acc, false);
-            } catch (err) {
-                console.error(`Failed to refresh token for ${acc.gameName}:`, err);
-            } finally {
-                setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
-            }
-        }
-        setIsBulkRefreshing(false);
-    };
-
-    useEffect(() => {
-        let cancelled = false;
-
-        const checkForUpdates = async () => {
-            try {
-                const version = await getVersion();
-                if (!cancelled) setAppVersion(version);
-
-                const update = await check();
-                if (!update || cancelled) return;
-
-                setUpdateAvailable(true);
-                setIsUpdating(true);
-                await update.downloadAndInstall();
-                if (!cancelled) {
-                    setUpdateReady(true);
-                    setUpdateAvailable(false);
-                }
-            } catch {
-                // Updater unavailable in dev or before first signed release.
-            } finally {
-                if (!cancelled) setIsUpdating(false);
-            }
-        };
-
-        checkForUpdates();
-        return () => { cancelled = true; };
-    }, []);
-
-    const handleInstallUpdate = async () => {
-        setIsUpdating(true);
-        try {
-            const update = await check();
-            if (!update) return;
-
-            const { invoke } = await import("@tauri-apps/api/core");
-            const isPortable = await invoke<boolean>("is_portable");
-            if (isPortable) {
-                await invoke("install_portable_update", { version: update.version });
-            } else {
-                await update.downloadAndInstall();
-                setUpdateReady(true);
-                setUpdateAvailable(false);
-            }
-        } catch (err) {
-            console.error("Update failed:", err);
-        } finally {
-            setIsUpdating(false);
-        }
-    };
-
-    useEffect(() => {
-        if (!menuOpen) return;
-
-        const handlePointerDown = (event: MouseEvent) => {
-            const target = event.target as HTMLElement;
-            if (dropdownRef.current?.contains(target)) {
-                return;
-            }
-            if (target.closest(".acc-delete-modal") || target.closest(".acc-delete-modal-overlay")) {
-                return;
-            }
-            setMenuOpen(false);
-        };
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setMenuOpen(false);
-        };
-
-        document.addEventListener("mousedown", handlePointerDown);
-        document.addEventListener("keydown", handleKeyDown);
-        return () => {
-            document.removeEventListener("mousedown", handlePointerDown);
-            document.removeEventListener("keydown", handleKeyDown);
-        };
-    }, [menuOpen]);
-
-    const handleSelectAccount = (acc: RiotAccount) => {
-        onSwitchAccount(acc);
-        setMenuOpen(false);
-    };
-
-    const handleAddAccount = () => {
-        onAddAccount();
-        setMenuOpen(false);
-    };
-
-    const handleRemoveAccount = (puuid: string) => {
-        onRequestDeleteAccount(puuid);
-    };
+    const accountLabel = (acc: RiotAccount) => `${acc.gameName}#${acc.tagLine}`;
 
     return (
         <header className="app-topbar">
@@ -213,198 +33,86 @@ export default function AppTopbar({
                 </div>
             )}
             <div className="topbar-inner">
-                <button type="button" className="topbar-brand" onClick={() => onTabChange('store')}>
+                <button type="button" className="topbar-brand" onClick={() => onTabChange("store")}>
                     <span className="brand-mark">V</span>
-                    <span>VALO<span>VAULT</span></span>
+                    <span>
+                        VALO<span>VAULT</span>
+                    </span>
                 </button>
                 <nav className="topbar-nav" aria-label="Primary">
                     <button
                         type="button"
-                        className={activeTab === 'store' ? 'active' : ''}
-                        onClick={() => onTabChange('store')}
+                        className={activeTab === "store" ? "active" : ""}
+                        onClick={() => onTabChange("store")}
                     >
                         Storefront
                     </button>
                     <button
                         type="button"
-                        className={activeTab === 'skins' ? 'active' : ''}
-                        onClick={() => onTabChange('skins')}
+                        className={activeTab === "skins" ? "active" : ""}
+                        onClick={() => onTabChange("skins")}
                     >
                         Presets
                     </button>
                 </nav>
 
                 <div className="topbar-actions">
-                    <label className="topbar-switch" title="Apply the preset linked to your agent when agent select starts">
-                        <span>Auto agent</span>
-                        <input
-                            type="checkbox"
-                            checked={autoSelectAgent || false}
-                            onChange={(e) => onToggleAutoAgent(e.target.checked)}
-                        />
-                    </label>
-
-                    <label className="topbar-switch" title="Use currently logged in account from local Riot Client instead of saved accounts">
-                        <span>Local SSO</span>
-                        <input
-                            type="checkbox"
-                            checked={useLocalSso || false}
-                            onChange={(e) => onToggleLocalSso(e.target.checked)}
-                        />
-                    </label>
-
-                    {onLaunchAtStartupChange && (
-                        <label className="topbar-switch" title="Start ValoVault when you sign in to Windows (opt-in)">
-                            <span>Launch at login</span>
-                            <input
-                                type="checkbox"
-                                checked={launchAtStartup}
-                                onChange={async (e) => {
-                                    const next = e.target.checked;
-                                    try {
-                                        await setLaunchAtStartup(next);
-                                        onLaunchAtStartupChange(next);
-                                    } catch {
-                                        onLaunchAtStartupChange(false);
-                                    }
-                                }}
-                            />
-                        </label>
-                    )}
-
-                    <div className="account-dropdown" ref={dropdownRef}>
-                        <button
-                            type="button"
-                            className={`account-dropdown-trigger${menuOpen ? " open" : ""}${activeAccount ? " has-account" : ""}`}
-                            onClick={() => setMenuOpen((open) => !open)}
-                            aria-haspopup="listbox"
-                            aria-expanded={menuOpen}
-                        >
-                            <span className="account-dropdown-label">
-                                {activeAccount ? accountLabel(activeAccount) : "No account"}
+                    {/* Profile Pill */}
+                    <button
+                        type="button"
+                        className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`}
+                        onClick={onOpenAccounts}
+                        title="Manage Accounts"
+                    >
+                        <div className="profile-pill-avatar">
+                            {useLocalSso ? (
+                                <svg className="pill-avatar-svg local-sso" viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                                </svg>
+                            ) : (
+                                <svg className="pill-avatar-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                    <circle cx="12" cy="7" r="4" />
+                                </svg>
+                            )}
+                        </div>
+                        <div className="profile-pill-info">
+                            <span className="profile-pill-name">
+                                {useLocalSso
+                                    ? isLocalClientActive
+                                        ? activeAccount
+                                            ? accountLabel(activeAccount)
+                                            : "Local Client"
+                                        : "Waiting for Client"
+                                    : activeAccount
+                                    ? accountLabel(activeAccount)
+                                    : "Connect Account"}
                             </span>
-                            <span className="account-dropdown-chevron" aria-hidden="true">▾</span>
-                        </button>
+                            <span
+                                className={`profile-status-indicator ${
+                                    useLocalSso
+                                        ? isLocalClientActive
+                                            ? "online"
+                                            : "waiting"
+                                        : activeAccount
+                                        ? "online"
+                                        : "offline"
+                                }`}
+                            />
+                        </div>
+                    </button>
 
-                        {menuOpen && (
-                            <div className="account-dropdown-menu" role="listbox" aria-label="Riot accounts">
-                                {accounts.length > 0 && (
-                                    <div className="account-dropdown-bulk-actions">
-                                        <button
-                                            type="button"
-                                            className={`account-dropdown-bulk-refresh-btn${isBulkRefreshing ? " refreshing" : ""}`}
-                                            onClick={handleRefreshAllAccounts}
-                                            disabled={isBulkRefreshing || accounts.filter(isAccountTokenExpired).length === 0}
-                                        >
-                                            {isBulkRefreshing ? (
-                                                <>
-                                                    <span>Refreshing ({bulkProgressCurrent}/{bulkProgressTotal})</span>
-                                                    <span className="mini-spinner"></span>
-                                                </>
-                                            ) : (
-                                                `↻ Refresh Expired (${accounts.filter(isAccountTokenExpired).length})`
-                                            )}
-                                        </button>
-                                        {isBulkRefreshing && (
-                                            <div className="bulk-refresh-progress-bar">
-                                                <div
-                                                    className="bulk-refresh-progress-fill"
-                                                    style={{ width: `${(bulkProgressCurrent / bulkProgressTotal) * 100}%` }}
-                                                />
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                {accounts.length > 0 ? (
-                                    <div className="account-dropdown-list">
-                                        {sortedAccounts.map((acc) => {
-                                            const isExpired = isAccountTokenExpired(acc);
-                                            const isRefreshing = !!refreshingPuuids[acc.puuid];
-                                            const isFav = !!acc.favorite;
-                                            return (
-                                                <div
-                                                    key={acc.puuid}
-                                                    className={`account-dropdown-item${activeAccount?.puuid === acc.puuid ? " active" : ""}${isFav ? " favorited" : ""}`}
-                                                    role="option"
-                                                    aria-selected={activeAccount?.puuid === acc.puuid}
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        className={`account-dropdown-favorite${isFav ? " is-fav" : ""}`}
-                                                        aria-label={isFav ? "Unpin" : "Pin as favorite"}
-                                                        title={isFav ? "Remove from favorites" : "Add to favorites"}
-                                                        onClick={(e) => handleFavoriteAccount(e, acc.puuid)}
-                                                    >
-                                                        {isFav ? "★" : "☆"}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="account-dropdown-select"
-                                                        onClick={() => handleSelectAccount(acc)}
-                                                        title={accountLabel(acc)}
-                                                    >
-                                                        <span>{acc.gameName}</span>
-                                                        <small>#{acc.tagLine}</small>
-                                                        {isExpired && (
-                                                            <span className="account-expired-dot" title="Session expired" />
-                                                        )}
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className={`account-dropdown-refresh${isRefreshing ? " refreshing" : ""}`}
-                                                        aria-label={`Refresh ${acc.gameName}`}
-                                                        onClick={(e) => handleRefreshAccount(e, acc)}
-                                                        disabled={isRefreshing || isBulkRefreshing}
-                                                        title="Refresh session"
-                                                    >
-                                                        ↻
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="account-dropdown-remove"
-                                                        aria-label={`Remove ${acc.gameName}`}
-                                                        onClick={() => handleRemoveAccount(acc.puuid)}
-                                                    >
-                                                        ×
-                                                    </button>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ) : (
-                                    <div className="account-dropdown-empty">No accounts connected</div>
-                                )}
-                                <button type="button" className="account-dropdown-add" onClick={handleAddAccount}>
-                                    + Add account
-                                </button>
-                            </div>
-                        )}
-                    </div>
-
-                    {appVersion && (
-                        <span className="topbar-version" title="Installed version">{appVersion}</span>
-                    )}
-
-                    {updateAvailable && (
-                        <button
-                            type="button"
-                            className="topbar-update-btn"
-                            onClick={handleInstallUpdate}
-                            disabled={isUpdating}
-                            title="Download and install update"
-                        >
-                            {isUpdating ? "Updating…" : "Update"}
-                        </button>
-                    )}
-
-                    {updateReady && (
-                        <span className="topbar-update-ready" title="Update installed and will apply after restarting the app">
-                            Update ready
-                        </span>
-                    )}
-
-                    <button onClick={onToggleTheme} className="theme-toggle-btn" title="Toggle theme">
-                        {theme === 'dark' ? '☀' : '☾'}
+                    {/* Settings Gear Button */}
+                    <button
+                        type="button"
+                        className="topbar-settings-btn"
+                        onClick={onOpenSettings}
+                        title="Open Settings"
+                    >
+                        <svg className="settings-gear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
                     </button>
                 </div>
             </div>

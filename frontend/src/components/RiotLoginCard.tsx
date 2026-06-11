@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { open } from "@tauri-apps/plugin-shell";
 import * as api from "@/services/api";
 import { RiotAccount } from "@/lib/types";
 
@@ -33,7 +32,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
-    const [currentSessionId, setCurrentSessionId] = useState("");
+    const [showAdvanced, setShowAdvanced] = useState(false);
     const currentSessionIdRef = useRef("");
 
     useEffect(() => {
@@ -46,7 +45,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             .catch(() => {});
     }, []);
 
-    // Listen for the redirect event from the Tauri main process when using the popup window
+    // Listen for the redirect event from the Tauri main process
     useEffect(() => {
         let unlisten: (() => void) | null = null;
 
@@ -102,7 +101,6 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             const { invoke } = await import("@tauri-apps/api/core");
             const tempSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             currentSessionIdRef.current = tempSessionId;
-            setCurrentSessionId(tempSessionId);
             await invoke("open_login_window", { authUrl: auth_url, sessionId: tempSessionId, visible: true });
             setStage("paste");
         } catch (err) {
@@ -119,63 +117,132 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     }
 
     return (
-        <div className="riot-login-overlay">
-            <div className="riot-login-card">
-                <h1 className="riot-brand-title">
-                    VALO<span style={{ color: "var(--accent-red)" }}>VAULT</span>
-                </h1>
-                <p className="riot-brand-subtitle">
-                    Connect your Riot Account to view your Daily Store and use ValoVault
-                </p>
-                {error && <div className="alert alert-danger py-2 text-center">{error}</div>}
-                {stage === "start" ? (
-                    <>
-                        {localAccount && (
+        <div className="login-immersive-container">
+            {/* Background Art */}
+            <div className="login-background-overlay" style={{ backgroundImage: 'url("/login-bg.jpg")' }} />
+
+            {/* Glassmorphic Login Sidebar */}
+            <div className="login-sidebar-pane">
+                <div className="login-sidebar-header">
+                    <span className="brand-mark-large">V</span>
+                    <h1 className="login-brand-title">
+                        VALO<span>VAULT</span>
+                    </h1>
+                    <p className="login-brand-subtitle">
+                        Connect your Riot account to sync skins, loadouts, and agent presets.
+                    </p>
+                </div>
+
+                <div className="login-card-content">
+                    {error && <div className="login-error-alert">{error}</div>}
+
+                    {stage === "start" ? (
+                        <div className="login-actions-stack">
+                            {localAccount ? (
+                                <button
+                                    type="button"
+                                    className="btn-tactical btn-tactical-success w-100"
+                                    onClick={() => {
+                                        const newAccount: RiotAccount = {
+                                            puuid: localAccount.puuid,
+                                            accessToken: "",
+                                            entitlementsToken: "",
+                                            expiresAt: 0,
+                                            region: localAccount.region,
+                                            gameName: localAccount.game_name,
+                                            tagLine: localAccount.tag_line,
+                                        };
+                                        activateAccount(newAccount);
+                                        onLoginSuccess(newAccount);
+                                    }}
+                                >
+                                    <span className="btn-inner">
+                                        <svg viewBox="0 0 24 24" className="btn-icon" fill="currentColor">
+                                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                                        </svg>
+                                        PLAY AS {localAccount.game_name.toUpperCase()}#{localAccount.tag_line.toUpperCase()}
+                                    </span>
+                                </button>
+                            ) : null}
+
                             <button
                                 type="button"
-                                className="btn btn-outline-success w-100 mb-3 d-flex align-items-center justify-content-center gap-2"
-                                onClick={() => {
-                                    const newAccount: RiotAccount = {
-                                        puuid: localAccount.puuid,
-                                        accessToken: "",
-                                        entitlementsToken: "",
-                                        expiresAt: 0,
-                                        region: localAccount.region,
-                                        gameName: localAccount.game_name,
-                                        tagLine: localAccount.tag_line,
-                                    };
-                                    activateAccount(newAccount);
-                                    onLoginSuccess(newAccount);
-                                }}
-                                style={{ borderColor: "#28a745", color: "#28a745" }}
+                                className="btn-tactical btn-tactical-primary w-100"
+                                onClick={handleStartLogin}
+                                disabled={isLoading}
                             >
-                                ⚡ Use Active Game Session ({localAccount.game_name}#{localAccount.tag_line})
+                                <span className="btn-inner">
+                                    {isLoading ? "LAUNCHING..." : "SIGN IN WITH RIOT"}
+                                </span>
                             </button>
-                        )}
-                        <button type="button" className="btn btn-danger w-100 mb-2" onClick={handleStartLogin} disabled={isLoading}>
-                            {isLoading ? "Opening…" : "Sign In with Riot"}
-                        </button>
-                        <p className="text-muted small text-center mt-3">
-                            A secure login popup has been opened. Complete your sign-in there to connect automatically.
-                        </p>
-                    </>
-                ) : (
-                    <form onSubmit={handleSubmitUrl}>
-                        <div className="text-center mb-3">
-                            <span className="spinner-border spinner-border-sm text-danger me-2" role="status" />
-                            <span className="small text-muted">Waiting for login popup...</span>
+
+                            <p className="login-stack-disclaimer">
+                                Clicking sign in opens a secure authorization window. Complete your Riot credentials there.
+                            </p>
                         </div>
-                        <label className="form-label small">Or paste redirect URL manually if it didn&apos;t connect</label>
-                        <textarea className="form-control mb-2" rows={3} value={pastedUrl} onChange={e => setPastedUrl(e.target.value)} placeholder="http://localhost/redirect#access_token=..." />
-                        <button type="submit" className="btn btn-danger w-100" disabled={isLoading || !pastedUrl.trim()}>
-                            {isLoading ? "Connecting…" : "Connect Account"}
+                    ) : (
+                        <div className="login-actions-stack">
+                            <div className="login-status-waiting">
+                                <span className="status-spinner" />
+                                <span>Waiting for authorization window...</span>
+                            </div>
+
+                            <button
+                                type="button"
+                                className="btn-link-advanced"
+                                onClick={() => setShowAdvanced(!showAdvanced)}
+                            >
+                                {showAdvanced ? "Hide Advanced Options" : "Advanced: Paste Redirect URL Manually"}
+                            </button>
+
+                            {showAdvanced && (
+                                <form onSubmit={handleSubmitUrl} className="login-advanced-form">
+                                    <p className="login-advanced-info">
+                                        If the login window didn&apos;t connect automatically, copy its URL after logging in and paste it below:
+                                    </p>
+                                    <textarea
+                                        className="form-control-tactical mb-2"
+                                        rows={3}
+                                        value={pastedUrl}
+                                        onChange={(e) => setPastedUrl(e.target.value)}
+                                        placeholder="http://localhost/redirect#access_token=..."
+                                    />
+                                    <button
+                                        type="submit"
+                                        className="btn-tactical btn-tactical-secondary w-100"
+                                        disabled={isLoading || !pastedUrl.trim()}
+                                    >
+                                        <span className="btn-inner">
+                                            {isLoading ? "CONNECTING..." : "CONNECT MANUALLY"}
+                                        </span>
+                                    </button>
+                                </form>
+                            )}
+
+                            <button
+                                type="button"
+                                className="btn-tactical btn-tactical-secondary w-100 mt-3"
+                                onClick={() => setStage("start")}
+                            >
+                                <span className="btn-inner">BACK</span>
+                            </button>
+                        </div>
+                    )}
+
+                    {onCancel && (
+                        <button
+                            type="button"
+                            className="btn-tactical btn-tactical-outline w-100 mt-2"
+                            onClick={onCancel}
+                        >
+                            <span className="btn-inner">CANCEL</span>
                         </button>
-                        <button type="button" className="btn btn-link w-100 mt-2" onClick={() => setStage("start")}>Back</button>
-                    </form>
-                )}
-                {onCancel && (
-                    <button type="button" className="btn btn-outline-secondary w-100 mt-2" onClick={onCancel}>Cancel</button>
-                )}
+                    )}
+                </div>
+
+                <div className="login-sidebar-footer">
+                    <span>VALOVAULT IS NOT ENDORSED BY RIOT GAMES.</span>
+                </div>
             </div>
         </div>
     );

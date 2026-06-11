@@ -1,10 +1,9 @@
 "use client";
 
-import Image from 'next/image';
-import { Preset, Agent } from '@/lib/types';
-import React, { useState, useEffect, useRef } from 'react';
+import { Preset, Agent } from "@/lib/types";
+import React, { useState, useEffect, useRef } from "react";
 
-type PresetListProps = {
+interface PresetListProps {
     presets: Preset[];
     selectedPreset: Preset | null;
     onPresetSelect: (preset: Preset) => void;
@@ -17,33 +16,29 @@ type PresetListProps = {
     agents: Agent[];
     onExportPreset?: (preset: Preset) => void;
     onImportPresetClick?: () => void;
-};
+    onNewPreset: () => void;
+}
 
 export default function PresetList({
-    presets, selectedPreset, onPresetSelect, onPresetDelete, onPresetApply,
-    onPresetRename, onCreateVariant, onTogglePreset, defaultPreset, agents,
-    onExportPreset, onImportPresetClick
+    presets,
+    selectedPreset,
+    onPresetSelect,
+    onPresetDelete,
+    onPresetApply,
+    onPresetRename,
+    onCreateVariant,
+    onTogglePreset,
+    defaultPreset,
+    agents,
+    onExportPreset,
+    onImportPresetClick,
+    onNewPreset,
 }: PresetListProps) {
-    const savedPresets = Array.isArray(presets) ? presets.filter(p => p.uuid !== 'default-preset') : [];
+    const savedPresets = Array.isArray(presets)
+        ? presets.filter((p) => p.uuid !== "default-preset")
+        : [];
 
-    const getAgentIcons = (agentIds: string[] | undefined) => {
-        if (!agentIds) return null;
-        if (agentIds.length > 3) {
-            const firstTwo = agentIds.slice(0, 2);
-            const icons = firstTwo.map(id => {
-                const agent = agents.find(a => a.uuid === id);
-                return agent ? <Image key={agent.uuid} src={agent.displayIcon} alt={agent.displayName} width={18} height={18} className="preset-card-agent-icon" unoptimized /> : null;
-            });
-            icons.push(<span key="plus" className="preset-card-agent-icon" style={{ background: 'rgba(255,255,255,0.08)', fontSize: '0.6rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#8b95a5' }}>+{agentIds.length - 2}</span>);
-            return icons;
-        }
-        return agentIds.map(id => {
-            const agent = agents.find(a => a.uuid === id);
-            return agent ? <Image key={agent.uuid} src={agent.displayIcon} alt={agent.displayName} width={18} height={18} className="preset-card-agent-icon" unoptimized /> : null;
-        });
-    };
-
-    const topLevelPresets = savedPresets.filter(p => !p.parentUuid);
+    const topLevelPresets = savedPresets.filter((p) => !p.parentUuid);
     const childrenByParent = savedPresets.reduce((acc, preset) => {
         if (preset.parentUuid) {
             (acc[preset.parentUuid] = acc[preset.parentUuid] || []).push(preset);
@@ -52,31 +47,64 @@ export default function PresetList({
     }, {} as Record<string, Preset[]>);
 
     return (
-        <div>
-            <button
-                type="button"
-                className={`preset-card${selectedPreset?.uuid === defaultPreset.uuid ? ' active' : ''}`}
-                onClick={() => onPresetSelect(defaultPreset)}
-            >
-                <div className="preset-card-info">
-                    <span className="preset-card-name">{defaultPreset.name}</span>
+        <div className="preset-dashboard">
+            {/* Header / Actions Row */}
+            <div className="dashboard-header-row">
+                <div>
+                    <span className="tactical-kicker">// LOADOUT PROFILES</span>
+                    <h1 className="dashboard-title">Preset Dashboard</h1>
                 </div>
-            </button>
-
-            <div className="d-flex justify-content-between align-items-center my-3">
-                <span className="tactical-kicker">Saved Presets</span>
-                <button type="button" className="btn-tactical" onClick={onImportPresetClick}>
-                    Import Code
-                </button>
+                <div className="dashboard-buttons">
+                    <button
+                        type="button"
+                        className="btn-tactical btn-tactical-secondary"
+                        onClick={onImportPresetClick}
+                    >
+                        Import Code
+                    </button>
+                    <button
+                        type="button"
+                        className="btn-tactical btn-tactical-danger"
+                        onClick={onNewPreset}
+                    >
+                        + Create Preset
+                    </button>
+                </div>
             </div>
 
-            {savedPresets.length === 0 ? (
-                <p className="text-muted small">No presets saved yet.</p>
-            ) : (
-                <div className="preset-list">
-                    {topLevelPresets.map((preset) => (
-                        <React.Fragment key={preset.uuid}>
-                            <PresetRow
+            <div className="preset-dashboard-grid">
+                {/* Current Loadout Prominent Card */}
+                <div
+                    className={`preset-dashboard-card current-loadout-card ${
+                        selectedPreset?.uuid === defaultPreset.uuid ? "active" : ""
+                    }`}
+                    onClick={() => onPresetSelect(defaultPreset)}
+                >
+                    <div className="card-top">
+                        <div className="card-badge">LIVE</div>
+                        <h3 className="card-name">{defaultPreset.name}</h3>
+                        <p className="card-desc">Your current in-game weapon skins and cosmetics.</p>
+                    </div>
+                    <div className="card-footer">
+                        <button
+                            type="button"
+                            className="btn-card-action"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onPresetSelect(defaultPreset);
+                            }}
+                        >
+                            View Live Loadout
+                        </button>
+                    </div>
+                </div>
+
+                {/* Saved Presets */}
+                {topLevelPresets.map((preset) => {
+                    const variants = childrenByParent[preset.uuid] || [];
+                    return (
+                        <div key={preset.uuid} className="preset-card-group">
+                            <PresetCard
                                 preset={preset}
                                 isSelected={selectedPreset?.uuid === preset.uuid}
                                 onSelect={onPresetSelect}
@@ -86,10 +114,12 @@ export default function PresetList({
                                 onCreateVariant={onCreateVariant}
                                 onToggle={onTogglePreset}
                                 onExport={onExportPreset}
-                                agentIcons={getAgentIcons(preset.agents)}
+                                agents={agents}
+                                variantCount={variants.length}
                             />
-                            {childrenByParent[preset.uuid]?.map(child => (
-                                <PresetRow
+
+                            {variants.map((child) => (
+                                <PresetCard
                                     key={child.uuid}
                                     preset={child}
                                     isSelected={selectedPreset?.uuid === child.uuid}
@@ -99,20 +129,41 @@ export default function PresetList({
                                     onDelete={onPresetDelete}
                                     onToggle={onTogglePreset}
                                     onExport={onExportPreset}
-                                    agentIcons={getAgentIcons(child.agents)}
+                                    agents={agents}
                                     isVariant
                                 />
                             ))}
-                        </React.Fragment>
-                    ))}
-                </div>
-            )}
+                        </div>
+                    );
+                })}
+
+                {savedPresets.length === 0 && (
+                    <div className="presets-empty-state">
+                        <div className="empty-icon">📂</div>
+                        <h3>No Presets Configured</h3>
+                        <p>Create a preset to save custom agent loadouts or import a configuration code.</p>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
 
-function PresetRow({
-    preset, isSelected, onSelect, onApply, onRename, onDelete, onCreateVariant, onToggle, onExport, agentIcons, isVariant
+/* ── Individual Preset Card Component ── */
+
+function PresetCard({
+    preset,
+    isSelected,
+    onSelect,
+    onApply,
+    onRename,
+    onDelete,
+    onCreateVariant,
+    onToggle,
+    onExport,
+    agents,
+    isVariant = false,
+    variantCount = 0,
 }: {
     preset: Preset;
     isSelected: boolean;
@@ -123,8 +174,9 @@ function PresetRow({
     onCreateVariant?: (p: Preset) => void;
     onToggle: (p: Preset, checked: boolean) => void;
     onExport?: (p: Preset) => void;
-    agentIcons: React.ReactNode;
+    agents: Agent[];
     isVariant?: boolean;
+    variantCount?: number;
 }) {
     const [menuOpen, setMenuOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
@@ -135,77 +187,167 @@ function PresetRow({
                 setMenuOpen(false);
             }
         }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
+    // Find the first assigned agent for background portrait
+    const assignedAgentId = preset.agents?.[0];
+    const assignedAgent = assignedAgentId
+        ? agents.find((a) => a.uuid === assignedAgentId)
+        : null;
+
+    const allAssignedAgents = (preset.agents || [])
+        .map((id) => agents.find((a) => a.uuid === id))
+        .filter((a): a is Agent => !!a);
+
     return (
-        <div className={`preset-card${isSelected ? ' active' : ''}${isVariant ? ' variant' : ''}`} style={isVariant ? { marginLeft: '1.25rem', position: 'relative' } : undefined}>
-            <div className="preset-card-info" onClick={() => onSelect(preset)}>
-                <span className="preset-card-name">{preset.name}</span>
-                {agentIcons && <div className="preset-card-agents">{agentIcons}</div>}
+        <div
+            className={`preset-dashboard-card ${isSelected ? "active" : ""} ${
+                isVariant ? "variant-card" : ""
+            } ${preset.disabled ? "disabled-preset" : ""}`}
+            onClick={() => onSelect(preset)}
+        >
+            {/* Faded Agent Portrait Background */}
+            {assignedAgent && (
+                <div className="card-bg-portrait">
+                    <img
+                        src={assignedAgent.displayIcon}
+                        alt={assignedAgent.displayName}
+                        draggable={false}
+                    />
+                </div>
+            )}
+
+            <div className="card-top">
+                <div className="card-header-actions">
+                    <div className="card-badge">{isVariant ? "VARIANT" : "PRESET"}</div>
+
+                    {/* Auto-apply toggle */}
+                    <label
+                        className="card-switch"
+                        title="Auto-apply when matches assigned agent"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={!preset.disabled}
+                            onChange={(e) => onToggle(preset, e.target.checked)}
+                        />
+                        <span className="card-switch-slider" />
+                    </label>
+                </div>
+
+                <h3 className="card-name">{preset.name}</h3>
+
+                {/* Assigned Agents list */}
+                {allAssignedAgents.length > 0 ? (
+                    <div className="card-assigned-agents">
+                        {allAssignedAgents.slice(0, 3).map((agent) => (
+                            <div key={agent.uuid} className="mini-agent-bubble" title={agent.displayName}>
+                                <img src={agent.displayIcon} alt={agent.displayName} />
+                            </div>
+                        ))}
+                        {allAssignedAgents.length > 3 && (
+                            <div className="mini-agent-bubble count">
+                                +{allAssignedAgents.length - 3}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="card-assigned-agents-empty">No agents assigned</div>
+                )}
             </div>
-            <div className="preset-card-actions">
-                <input
-                    type="checkbox"
-                    className="preset-toggle"
-                    checked={!preset.disabled}
-                    onChange={(e) => onToggle(preset, e.target.checked)}
-                    title="Toggle preset"
-                />
-                <button className="btn-tactical btn-tactical-success btn-tactical-icon" onClick={() => onApply(preset)} title="Apply">
-                    ✓
-                </button>
-                <div style={{ position: 'relative' }} ref={menuRef}>
-                    <button className="btn-tactical btn-tactical-icon" onClick={() => setMenuOpen(v => !v)} title="More">
-                        ⋮
-                    </button>
-                    {menuOpen && (
-                        <div style={{
-                            position: 'absolute',
-                            right: 0,
-                            top: 'calc(100% + 4px)',
-                            minWidth: '140px',
-                            background: 'rgba(13, 23, 30, 0.98)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '6px',
-                            overflow: 'hidden',
-                            zIndex: 100,
-                            boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-                        }}>
-                            <MenuItem onClick={() => { onRename(preset); setMenuOpen(false); }}>Rename</MenuItem>
-                            {!isVariant && <MenuItem onClick={() => { onCreateVariant?.(preset); setMenuOpen(false); }}>Create Variant</MenuItem>}
-                            <MenuItem onClick={() => { onExport?.(preset); setMenuOpen(false); }}>Export Code</MenuItem>
-                            <MenuItem onClick={() => { onDelete(preset.uuid); setMenuOpen(false); }} style={{ color: '#ff4655' }}>Delete</MenuItem>
-                        </div>
+
+            <div className="card-footer" onClick={(e) => e.stopPropagation()}>
+                <div className="card-left-info">
+                    {variantCount > 0 && (
+                        <span className="variant-count-indicator">
+                            {variantCount} variant{variantCount > 1 ? "s" : ""}
+                        </span>
                     )}
+                </div>
+
+                <div className="card-actions-group">
+                    {/* Apply Button */}
+                    <button
+                        type="button"
+                        className="btn-card-action apply"
+                        onClick={() => onApply(preset)}
+                        title="Apply Loadout"
+                    >
+                        ✓ Apply
+                    </button>
+
+                    {/* Edit Button */}
+                    <button
+                        type="button"
+                        className="btn-card-action edit"
+                        onClick={() => onSelect(preset)}
+                        title="Edit Loadout"
+                    >
+                        Edit
+                    </button>
+
+                    {/* More actions menu */}
+                    <div className="card-more-menu-container" ref={menuRef}>
+                        <button
+                            type="button"
+                            className="btn-card-action-more"
+                            onClick={() => setMenuOpen(!menuOpen)}
+                            title="More options"
+                        >
+                            ⋮
+                        </button>
+                        {menuOpen && (
+                            <div className="card-dropdown-menu">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        onRename(preset);
+                                        setMenuOpen(false);
+                                    }}
+                                >
+                                    Rename
+                                </button>
+                                {!isVariant && onCreateVariant && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            onCreateVariant(preset);
+                                            setMenuOpen(false);
+                                        }}
+                                    >
+                                        Create Variant
+                                    </button>
+                                )}
+                                {onExport && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            onExport(preset);
+                                            setMenuOpen(false);
+                                        }}
+                                    >
+                                        Export Code
+                                    </button>
+                                )}
+                                <hr />
+                                <button
+                                    type="button"
+                                    className="delete"
+                                    onClick={() => {
+                                        onDelete(preset.uuid);
+                                        setMenuOpen(false);
+                                    }}
+                                >
+                                    Delete
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
-    );
-}
-
-function MenuItem({ children, onClick, style }: { children: React.ReactNode; onClick: () => void; style?: React.CSSProperties }) {
-    return (
-        <button
-            onClick={onClick}
-            style={{
-                width: '100%',
-                background: 'transparent',
-                border: 'none',
-                padding: '0.5rem 0.75rem',
-                textAlign: 'left',
-                color: '#a8bac6',
-                fontSize: '0.78rem',
-                fontFamily: '"JetBrains Mono", monospace',
-                cursor: 'pointer',
-                transition: 'background 0.1s',
-                ...style,
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-        >
-            {children}
-        </button>
     );
 }

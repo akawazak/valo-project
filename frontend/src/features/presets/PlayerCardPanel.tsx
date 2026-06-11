@@ -32,64 +32,103 @@ export default function PlayerCardPanel({
         [playerTitles, currentTitleId]
     );
 
-    const titleText = selectedTitle?.titleText || selectedTitle?.displayName || 'No title';
+    const titleText = selectedTitle?.titleText || selectedTitle?.displayName || 'No Title';
     const portraitUrl = getPlayerCardPortraitUrl(selectedCard);
 
     return (
-        <div className="loadout-cosmetic-block loadout-cosmetic-block--card">
-            <div className="loadout-section-label">Preview</div>
+        <div className="cosmetics-panel-container" style={{ flex: '0 0 auto', borderBottom: '1px solid rgba(255, 255, 255, 0.05)', paddingBottom: '1rem' }}>
+            <div className="workspace-column-title" style={{ borderBottom: 'none', marginBottom: '0.5rem' }}>
+                Identity
+            </div>
+            
             <button
                 type="button"
                 className="player-card-slot"
                 onClick={() => setPickerOpen(true)}
-                title="Change player card"
+                title="Change player card & title"
+                style={{
+                    width: '100%',
+                    height: 'auto',
+                    flex: 'none',
+                    flexDirection: 'row',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '0.65rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    textAlign: 'left',
+                    transition: 'all var(--transition)',
+                    aspectRatio: 'unset'
+                }}
             >
-                <div className="player-card-slot-media">
+                <div 
+                    className="player-card-slot-media" 
+                    style={{ 
+                        width: '56px', 
+                        height: '38px', 
+                        position: 'relative', 
+                        borderRadius: '4px', 
+                        overflow: 'hidden', 
+                        background: 'var(--bg-elevated)',
+                        flexShrink: 0,
+                        flex: 'none'
+                    }}
+                >
                     {portraitUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                             src={portraitUrl}
-                            alt={selectedCard?.displayName ?? 'Player card'}
-                            className="player-card-slot-art"
+                            alt=""
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center top' }}
                             loading="lazy"
                             draggable={false}
                         />
                     ) : selectedCard?.displayIcon ? (
                         <Image
                             src={selectedCard.displayIcon}
-                            alt={selectedCard.displayName}
-                            width={72}
-                            height={72}
+                            alt=""
+                            width={56}
+                            height={56}
                             unoptimized
-                            className="player-card-slot-fallback-icon"
+                            style={{ objectFit: 'contain' }}
                         />
                     ) : (
-                        <span className="player-card-slot-empty">Select card</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifySelf: 'center', height: '100%' }}>Card</span>
                     )}
                 </div>
-                <div className="player-card-slot-footer">
-                    <span className="player-card-slot-name">{selectedCard?.displayName || 'No card'}</span>
-                    <span className="player-card-slot-title">{titleText}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: '0.52rem', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase' }}>Equipped Card</span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {selectedCard?.displayName || 'No Player Card'}
+                    </span>
+                    <span style={{ fontSize: '0.64rem', color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '0.05rem', fontWeight: 500 }}>
+                        {titleText}
+                    </span>
                 </div>
             </button>
 
             {pickerOpen && (
-                <div className="loadout-picker-modal" role="dialog" aria-modal="true" aria-label="Player card picker">
-                    <div className="loadout-picker-backdrop" onClick={() => setPickerOpen(false)} />
-                    <div className="loadout-picker-dialog">
-                        <div className="loadout-picker-header">
-                            <h3>Player card & title</h3>
-                            <button type="button" className="loadout-picker-close" onClick={() => setPickerOpen(false)} aria-label="Close">
-                                ×
-                            </button>
+                <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && setPickerOpen(false)}>
+                    <div className="unified-modal-container" style={{ maxWidth: '720px', height: 'min(80vh, 580px)' }}>
+                        <div className="unified-modal-header">
+                            <div className="unified-modal-title-wrap">
+                                <span className="kicker">// Select Identity</span>
+                                <h3 className="unified-modal-title">Player Card & Title</h3>
+                            </div>
+                            <button type="button" className="unified-modal-close-btn" onClick={() => setPickerOpen(false)}>✕</button>
                         </div>
-                        <IdentitySelector
-                            compact
-                            currentCardId={currentCardId}
-                            currentTitleId={currentTitleId}
-                            onSelectCard={onSelectCard}
-                            onSelectTitle={onSelectTitle}
-                        />
+                        
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+                            <IdentitySelector
+                                compact
+                                currentCardId={currentCardId}
+                                currentTitleId={currentTitleId}
+                                onSelectCard={onSelectCard}
+                                onSelectTitle={onSelectTitle}
+                            />
+                        </div>
                     </div>
                 </div>
             )}
