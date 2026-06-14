@@ -36,7 +36,7 @@ fn spawn_embedded_sidecar(app_handle: &tauri::AppHandle) -> Result<std::process:
             .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&sidecar_path, perms)
-            .map_err(|e| e.to_string())?;
+.map_err(|e: tauri::Error| e.to_string())?;
     }
     
     let mut cmd = std::process::Command::new(&sidecar_path);
@@ -114,7 +114,10 @@ async fn open_login_window(
     .resizable(true)
     .visible(is_visible)
     .data_directory(session_dir)
-    .on_navigation(move |url| {
+    // Disable third-party cookie blocking so the Riot OAuth session cookie
+    // is persisted to SQLite and can be read back via get_ssid_cookie.
+    .additional_browser_args("--disable-features=BlockThirdPartyCookies")
+    .on_navigation(move |url: &url::Url| {
         let host = url.host_str().unwrap_or("");
         let path = url.path();
         if (host == "localhost" || host == "127.0.0.1") && path == "/redirect" {
@@ -123,7 +126,11 @@ async fn open_login_window(
             
             let label_cloned = label.to_string();
             let app_handle_inner = cloned_handle.clone();
-            tauri::async_runtime::spawn(async move {
+            std::thread::spawn(move || {
+                // Give WebView2 time to flush cookies to SQLite before closing.
+                // Without this the popup window is destroyed before the write
+                // lands on disk, so get_ssid_cookie finds an empty DB.
+                std::thread::sleep(std::time::Duration::from_millis(500));
                 if let Some(window) = app_handle_inner.get_webview_window(&label_cloned) {
                     let _ = window.close();
                 }

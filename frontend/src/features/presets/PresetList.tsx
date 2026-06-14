@@ -151,7 +151,7 @@ export default function PresetList({
 
 /* ── Individual Preset Card Component ── */
 
-function PresetCard({
+export function PresetCard({
     preset,
     isSelected,
     onSelect,

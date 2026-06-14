@@ -130,6 +130,10 @@ interface DataContextType {
     
     // Storefront refresh signal — increment to trigger re-fetch in StorePanels
     storefrontRefreshKey: number;
+    // Local client import chooser
+    pendingLocalAccount: RiotAccount | null;
+    showLocalAccountChooser: boolean;
+    handleResolveLocalAccount: (useLocal: boolean) => void;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -163,6 +167,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     
     // Storefront re-fetch signal (no page reload needed)
     const [storefrontRefreshKey, setStorefrontRefreshKey] = useState(0);
+    const [pendingLocalAccount, setPendingLocalAccount] = useState<RiotAccount | null>(null);
     
     const weaponsRef = useRef<Weapon[]>([]);
     const gunBuddiesRef = useRef<GunBuddy[]>([]);
@@ -441,6 +446,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 let resolved = false;
                 let unlistenFn: (() => void) | null = null;
                 let unlistenCloseFn: (() => void) | null = null;
+                let savedRedirectResult: { redirectUrl: string; res: { access_token: string; entitlements_token: string; expires_in?: number; region?: string; game_name?: string; tag_line?: string }; updatedAcc: RiotAccount; stored: RiotAccount[]; updated: RiotAccount[] } | null = null;
 
                 const cleanup = () => {
                     resolved = true;
@@ -466,16 +472,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         const redirectUrl = event.payload;
                         const res = await submitTokenUrl(redirectUrl);
 
-                        // After successful login, grab the ssid cookies from the WebView2
-                        // session so we can silently reauth next time without any popup.
-                        let ssid: string | undefined;
-                        try {
-                            ssid = await invoke<string | null>("get_ssid_cookie", { sessionId }) ?? undefined;
-                        } catch {
-                            // ssid capture is optional — fall back gracefully
-                        }
-
-                        const updatedAcc: RiotAccount = {
+                        // Save the tokens immediately — we can't read ssid cookies yet
+                        // because the popup is still running and WebView2 hasn't flushed
+                        // them to SQLite. We'll read them after the window closes.
+                        let updatedAcc: RiotAccount = {
                             ...acc,
                             accessToken: res.access_token,
                             entitlementsToken: res.entitlements_token,
@@ -483,7 +483,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             region: res.region || acc.region,
                             gameName: res.game_name || acc.gameName,
                             tagLine: res.tag_line || acc.tagLine,
-                            ssid: ssid ?? acc.ssid,
+                            ssid: acc.ssid ?? undefined,
                             sessionId,
                         };
                         const stored = getStoredAccounts();
@@ -495,17 +495,53 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
                         }
-                        resolve(true);
+                        // Don't resolve yet — wait for riot-login-closed to read cookies
+                        savedRedirectResult = { redirectUrl, res, updatedAcc, stored, updated };
                     } catch (err) {
                         console.error("Error in token submit during auto-refresh:", err);
                         resolve(false);
                     }
                 }).then(fn => { unlistenFn = fn; });
 
-                listen<void>("riot-login-closed", () => {
+                // Read ssid cookies AFTER the popup window has fully closed.
+                // At this point WebView2 has released the DB lock and all cookies
+                // are safely flushed to SQLite.
+                listen<void>("riot-login-closed", async () => {
                     if (resolved) return;
-                    cleanup();
-                    resolve(false);
+                    if (!savedRedirectResult) {
+                        cleanup();
+                        resolve(false);
+                        return;
+                    }
+                    try {
+                        const { res, updatedAcc, stored, updated } = savedRedirectResult;
+                        let ssid: string | undefined;
+                        try {
+                            console.debug("get_ssid_cookie: attempting session", sessionId);
+                            const raw = await (async () => {
+                                for (let attempt = 0; attempt < 5; attempt++) {
+                                    const result = await invoke<string | null>("get_ssid_cookie", { sessionId }) ?? undefined;
+                                    if (result) return result;
+                                    if (attempt < 4) await new Promise(r => setTimeout(r, 300));
+                                }
+                                return undefined;
+                            })();
+                            ssid = raw;
+                            console.debug("get_ssid_cookie: result for session", sessionId, "->", ssid);
+                        } catch (err) {
+                            console.debug("get_ssid_cookie: error for session", sessionId, err);
+                        }
+                        const finalAcc = { ...updatedAcc, ssid: ssid ?? updatedAcc.ssid };
+                        const finalUpdated = stored.map(a => a.puuid === acc.puuid ? finalAcc : a);
+                        saveStoredAccounts(finalUpdated);
+                        setAccounts(finalUpdated);
+                        if (activeAccount?.puuid === acc.puuid) setActiveAccount(finalAcc);
+                        cleanup();
+                        resolve(true);
+                    } catch (err) {
+                        cleanup();
+                        resolve(false);
+                    }
                 }).then(fn => { unlistenCloseFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
@@ -519,6 +555,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return false;
         }
     }, [activeAccount]);
+
+    // Auto-refresh the active account token shortly before expiry to avoid
+    // user-visible expiration. Schedule a refresh 90 seconds before expiry.
+    useEffect(() => {
+        let timer: number | null = null;
+        if (activeAccount && activeAccount.expiresAt && activeAccount.expiresAt > Date.now()) {
+            const msUntil = activeAccount.expiresAt - Date.now();
+            const refreshMs = Math.max(5_000, msUntil - 90_000); // at least 5s
+            timer = window.setTimeout(() => {
+                // Attempt silent refresh; if it fails, leave token expired and UI will surface refresh option
+                void refreshAccountToken(activeAccount, false).catch((err) => console.error('Auto refresh failed:', err));
+            }, refreshMs);
+        }
+        return () => { if (timer) clearTimeout(timer); };
+    }, [activeAccount, refreshAccountToken]);
 
     // Initialize accounts list and load static data on mount
     useEffect(() => {
@@ -588,14 +639,37 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const current = getStoredAccounts();
             const deduped = current.filter(a => a.puuid !== newAcc.puuid);
             deduped.unshift(newAcc);
+            // Save the discovered account, but don't auto-activate when a remote SSO
+            // session or different active account exists — show chooser instead.
             saveStoredAccounts(deduped);
             setAccounts(deduped);
-            activateAccount(newAcc);
-            setActiveAccount(newAcc);
-            setIsTokenExpired(false);
-            setStorefrontRefreshKey(k => k + 1);
+
+            const hasRemoteSession = Boolean(localStorage.getItem('riot_access_token'));
+            const conflictWithActive = activeAccount && activeAccount.puuid.toLowerCase() !== newAcc.puuid.toLowerCase();
+
+            if (hasRemoteSession || conflictWithActive) {
+                // Defer activation and surface chooser to the UI
+                setPendingLocalAccount(newAcc);
+            } else {
+                activateAccount(newAcc);
+                setActiveAccount(newAcc);
+                setIsTokenExpired(false);
+                setStorefrontRefreshKey(k => k + 1);
+            }
         }).catch(() => {});
     }, [isLocalClientActive, localPuuid]);
+
+    const handleResolveLocalAccount = useCallback((useLocal: boolean) => {
+        if (!pendingLocalAccount) return;
+        if (useLocal) {
+            activateAccount(pendingLocalAccount);
+            setActiveAccount(pendingLocalAccount);
+            setIsTokenExpired(false);
+            setStorefrontRefreshKey(k => k + 1);
+        }
+        // Keep the discovered account in storage either way; user can switch later
+        setPendingLocalAccount(null);
+    }, [pendingLocalAccount]);
 
     // Health check and user inventory loading
     useEffect(() => {
@@ -634,6 +708,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken,
             storefrontRefreshKey,
+            pendingLocalAccount,
+            showLocalAccountChooser: pendingLocalAccount !== null,
+            handleResolveLocalAccount,
         }}>
             {children}
         </DataContext.Provider>

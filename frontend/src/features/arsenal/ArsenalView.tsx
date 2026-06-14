@@ -6,6 +6,7 @@ import WeaponCard from "@/features/gun-skins/WeaponCard";
 import PlayerCardPanel from "@/features/presets/PlayerCardPanel";
 import SprayWheelPanel from "@/features/presets/SprayWheelPanel";
 import PresetAgentStrip from "@/features/presets/PresetAgentStrip";
+import { PresetCard } from "@/features/presets/PresetList";
 import UnifiedSkinSelectorModal from "@/features/gun-skins/UnifiedSkinSelectorModal";
 import { useData } from "@/context/DataContext";
 
@@ -47,8 +48,9 @@ interface ArsenalViewProps {
     onUpdateSprays?: (sprays: SpraySlot[]) => void;
     showPresetExtras?: boolean;
     onRefresh?: () => void;
-    onBackToDashboard?: () => void;
     onAgentAssignment: (agentIds: string[], isAssigned: boolean) => void;
+    gameIdentity?: IdentityV1;
+    gameSprays?: SpraySlot[];
 }
 
 export default function ArsenalView({
@@ -70,8 +72,20 @@ export default function ArsenalView({
     currentSprays,
     onUpdateSprays,
     showPresetExtras,
-    onBackToDashboard,
     onAgentAssignment,
+    presets,
+    defaultPreset,
+    onPresetDelete,
+    onPresetRename,
+    onCreateVariant,
+    onTogglePreset,
+    onExportPreset,
+    onImportPresetClick,
+    onNewPreset,
+    onPresetSelect,
+    onPresetApply,
+    gameIdentity,
+    gameSprays,
 }: ArsenalViewProps) {
     const { loading } = useData();
 
@@ -79,13 +93,19 @@ export default function ArsenalView({
     const [activeWeapon, setActiveWeapon] = useState<Weapon | null>(null);
 
     const activePreset = editingPreset || selectedPreset;
+    const isViewingDefault = !activePreset || activePreset.uuid === "default-preset";
 
-    const identity: IdentityV1 = {
-        playerCardId: activePreset?.identity?.playerCardId || currentCardId || "",
-        playerTitleId: activePreset?.identity?.playerTitleId || currentTitleId || "",
-    };
+    // For current loadout, fall back to whatever the game has equipped right now
+    const identity: IdentityV1 = isViewingDefault
+        ? (gameIdentity || { playerCardId: currentCardId || "", playerTitleId: currentTitleId || "" })
+        : {
+            playerCardId: activePreset?.identity?.playerCardId || currentCardId || "",
+            playerTitleId: activePreset?.identity?.playerTitleId || currentTitleId || "",
+        };
 
-    const spraysList: SpraySlot[] = activePreset?.sprays || currentSprays || [];
+    const spraysList: SpraySlot[] = isViewingDefault
+        ? (gameSprays || currentSprays || [])
+        : (activePreset?.sprays || currentSprays || []);
 
     // Categorizing Weapons into columns matching the game loadout structure
     const sidearmsNames = ["classic", "shorty", "frenzy", "ghost", "sheriff"];
@@ -159,18 +179,41 @@ export default function ArsenalView({
         <div className="workspace-centered-wrapper">
             {/* Header */}
             <div className="workspace-header-row">
-                <button type="button" className="btn-back-dashboard" onClick={onBackToDashboard}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: '13px', height: '13px' }}>
-                        <line x1="19" y1="12" x2="5" y2="12"></line>
-                        <polyline points="12 19 5 12 12 5"></polyline>
-                    </svg>
-                    Back to Dashboard
-                </button>
                 <div className="workspace-title-area">
-                    <span className="tactical-kicker">// EDITING LOADOUT</span>
+                    <span className="tactical-kicker">
+                        // {isViewingDefault ? "CURRENT LOADOUT" : "EDITING PRESET"}
+                    </span>
                     <h2>{activePreset?.name || "Current Loadout"}</h2>
                 </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {/* Show "Switch to Current Loadout" only when viewing a saved preset */}
+                    {!isViewingDefault && (
+                        <button
+                            type="button"
+                            className="btn-tactical btn-tactical-secondary"
+                            onClick={() => onPresetSelect(defaultPreset)}
+                        >
+                            ← Current Loadout
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="btn-tactical btn-tactical-accent"
+                        onClick={onNewPreset}
+                    >
+                        + New Preset
+                    </button>
+                </div>
             </div>
+
+            {/* Current Loadout Reference Card — only show on the current loadout */}
+            {isViewingDefault && (
+                <div className="current-loadout-reference-card">
+                    <div className="clr-reference-badge">LIVE</div>
+                    <span className="clr-reference-label">Current Loadout</span>
+                    <span className="clr-reference-hint">Edit below, then click Apply to push to your game</span>
+                </div>
+            )}
 
             {showPresetExtras && activePreset && onAgentAssignment && (
                 <div className="workspace-agents-row mb-3">
@@ -204,6 +247,61 @@ export default function ArsenalView({
                     </div>
                 </div>
             </div>
+
+            {/* Preset List at the bottom */}
+            {presets && presets.length > 0 && (
+                <div className="workspace-presets-row">
+                    <div className="workspace-presets-header">
+                        <span className="workspace-presets-label">// SAVED PRESETS</span>
+                        <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 'auto', marginLeft: '0.5rem' }}>
+                            Click a card to edit · ✓ to apply to your game
+                        </span>
+                        <button type="button" className="btn-tactical btn-tactical-ghost btn-sm" onClick={onImportPresetClick}>
+                            Import
+                        </button>
+                        <button type="button" className="btn-tactical btn-tactical-accent btn-sm" onClick={onNewPreset}>
+                            + New
+                        </button>
+                    </div>
+                    <div className="workspace-presets-scroll">
+                        {presets.filter(p => p.uuid !== defaultPreset.uuid).map(preset => {
+                            const variants = presets.filter(c => c.parentUuid === preset.uuid);
+                            return (
+                                <div key={preset.uuid} className="workspace-preset-group">
+                                    <PresetCard
+                                        preset={preset}
+                                        isSelected={selectedPreset?.uuid === preset.uuid}
+                                        onSelect={onPresetSelect}
+                                        onApply={() => onPresetApply(preset)}
+                                        onRename={onPresetRename}
+                                        onDelete={onPresetDelete}
+                                        onCreateVariant={onCreateVariant}
+                                        onToggle={onTogglePreset}
+                                        onExport={onExportPreset}
+                                        agents={agents}
+                                        variantCount={variants.length}
+                                    />
+                                    {variants.map(child => (
+                                        <PresetCard
+                                            key={child.uuid}
+                                            preset={child}
+                                            isSelected={selectedPreset?.uuid === child.uuid}
+                                            onSelect={onPresetSelect}
+                                            onApply={() => onPresetApply(child)}
+                                            onRename={onPresetRename}
+                                            onDelete={onPresetDelete}
+                                            onToggle={onTogglePreset}
+                                            onExport={onExportPreset}
+                                            agents={agents}
+                                            isVariant
+                                        />
+                                    ))}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             {/* Unified Selector Modal */}
             {activeWeapon && (

@@ -67,6 +67,11 @@ export function usePresets(
         }
         lastRevisionRef.current = dataRevision;
 
+        // Only sync when this is a NEW data revision (i.e., real reload, not first mount with empty data)
+        if (dataRevision === 0) {
+            return;
+        }
+
         setPresets(initialPresets);
         setGameMeta(initialGameMeta);
         setGameLoadout(initialPlayerLoadout);
@@ -278,9 +283,13 @@ export function usePresets(
     };
 
     const handleCancel = () => {
-        if (originalPreset) {
+        if (originalPreset && originalPreset.uuid !== DEFAULT_PRESET_ID) {
             setSelectedPreset(originalPreset);
             setCurrentLoadout(mergePresetLoadout(originalPreset, presets, originalPreset.loadout));
+        } else {
+            // Default preset: revert local changes back to the live game state
+            setCurrentLoadout(gameLoadout);
+            setSelectedPreset({ ...defaultPreset, loadout: gameLoadout });
         }
         setIsEditing(false);
         setEditingPreset(null);
@@ -379,6 +388,10 @@ export function usePresets(
             }
             setCurrentLoadout(newLoadout);
             setGameLoadout(newLoadout);
+            // Surface the action bar so the user can Apply the change
+            setIsEditing(true);
+            setOriginalPreset({ ...defaultPreset, loadout: newLoadout });
+            setEditingPreset({ ...defaultPreset, loadout: newLoadout });
             return;
         }
 

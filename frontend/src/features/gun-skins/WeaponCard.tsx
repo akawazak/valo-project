@@ -31,8 +31,19 @@ export default function WeaponCard({
     let item: LoadoutItemV1;
     if (selectedItem) {
         item = selectedItem;
+    } else if (parentItem) {
+        item = parentItem;
     } else {
-        item = parentItem!;
+        const defaultSkin = weapon.skins.find(w => w.uuid === weapon.defaultSkinUuid);
+        if (defaultSkin) {
+            item = {
+                skinId: defaultSkin.uuid,
+                chromaId: defaultSkin.chromas[0]?.uuid || "",
+                skinLevelId: defaultSkin.levels[0]?.uuid || "",
+            };
+        } else {
+            item = { skinId: "", chromaId: "", skinLevelId: "" };
+        }
     }
 
     if (!item) {
@@ -40,17 +51,23 @@ export default function WeaponCard({
         item = { skinId: defaultSkin.uuid, chromaId: defaultSkin.chromas[0].uuid, skinLevelId: defaultSkin.levels[0].uuid };
     }
 
-    const skin = weapon.skins.find(w => w.uuid === item.skinId)!;
-    const chroma = skin.chromas.find(c => c.uuid === item.chromaId)!;
-    const level = skin.levels.find(l => l.uuid === item.skinLevelId)!;
+    const skin = weapon.skins.find(w => w.uuid === item.skinId);
+    const safeSkin = skin || weapon.skins.find(w => w.uuid === weapon.defaultSkinUuid) || weapon.skins[0];
+    if (!safeSkin) {
+        return null;
+    }
+    const firstChroma = safeSkin.chromas?.[0] || { uuid: "", displayName: "", fullRender: "" };
+    const firstLevel = safeSkin.levels?.[0] || { uuid: "", displayName: "", displayIcon: "" };
+    const chroma = safeSkin.chromas?.find(c => c.uuid === item.chromaId) || firstChroma;
+    const level = safeSkin.levels?.find(l => l.uuid === item.skinLevelId) || firstLevel;
 
-    const displayIcon = chroma.fullRender || skin.displayIcon || weapon.displayIcon;
-    let displayName = chroma.displayName || level.displayName || skin.displayName;
-    if (skin.chromas.indexOf(chroma) === 0) {
-        displayName = level.displayName || skin.displayName;
+    const displayIcon = chroma?.fullRender || safeSkin.displayIcon || weapon.displayIcon || "";
+    let displayName = chroma?.displayName || level?.displayName || safeSkin.displayName || weapon.displayName;
+    if (safeSkin.chromas && safeSkin.chromas.indexOf(chroma) === 0) {
+        displayName = level?.displayName || safeSkin.displayName || weapon.displayName;
     }
 
-    const tierColor = TIER_COLORS[skin.contentTierUuid] || "#6b7280";
+    const tierColor = TIER_COLORS[safeSkin.contentTierUuid] || "#6b7280";
 
     const { ownedBuddies } = useData();
     const buddy = ownedBuddies.find(b => b.levels[0].uuid === item.charmLevelID);
@@ -81,11 +98,15 @@ export default function WeaponCard({
                 <div className="valorant-weapon-card-tier" style={{ backgroundColor: tierColor }} />
 
                 <div className="valorant-weapon-card-media">
-                    <img 
-                        src={displayIcon} 
-                        alt={displayName} 
-                        className="valorant-weapon-card-image" 
-                    />
+                    {displayIcon ? (
+                        <img
+                            src={displayIcon}
+                            alt={displayName}
+                            className="valorant-weapon-card-image"
+                        />
+                    ) : (
+                        <div className="valorant-weapon-card-image" style={{ width: '60%', height: '60%', background: 'rgba(255,255,255,0.04)', borderRadius: '4px' }} />
+                    )}
                 </div>
 
                 <div className="valorant-weapon-card-footer">

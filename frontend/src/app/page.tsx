@@ -8,7 +8,7 @@ import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { getPlayerLoadout, getPresets } from '@/services/api';
+import { getPlayerLoadout, getPlayerLoadoutData, getPresets } from '@/services/api';
 import { getSettings, saveSettings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
@@ -22,6 +22,7 @@ import { exportPreset } from '@/lib/presetShare';
 import AppTopbar from '@/components/AppTopbar';
 import ImportPresetModal from '@/components/ImportPresetModal';
 import AccountManagerModal from '@/components/AccountManagerModal';
+import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 
 export default function Home() {
@@ -37,6 +38,9 @@ export default function Home() {
         handleAddNewAccount,
         refreshAccountToken,
         storefrontRefreshKey,
+        pendingLocalAccount,
+        showLocalAccountChooser,
+        handleResolveLocalAccount,
         refreshAccountsList,
         contentTiers,
         ownedLevelIDs,
@@ -45,7 +49,8 @@ export default function Home() {
 
     const { theme, toggleTheme } = useTheme();
 
-    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1> }>({ presets: [], playerLoadout: {} });
+    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: { sprays: any[], identity?: any } }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
+    const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
@@ -54,7 +59,7 @@ export default function Home() {
     
     // Core Layout State
     const [activeTab, setActiveTab] = useState<'skins' | 'store'>('skins');
-    const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+    const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     
     // Modals
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -74,7 +79,7 @@ export default function Home() {
         handleCloseConfirmationModal, handleCancel, handleOpenPresetNameModal, handleOpenRenameModal,
         handleDropdownVariant, handleVariant, handleClosePresetNameModal, handleTogglePreset,
         handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange,
-        handleImportPresetAction,
+        handleImportPresetAction, gameMeta,
     } = usePresets(initialData.presets, initialData.playerLoadout, (error) => {
         if (error instanceof LocalClientError) {
             setErrorMessage(error.message);
@@ -82,7 +87,7 @@ export default function Home() {
         } else {
             console.error(error);
         }
-    });
+    }, initialData.gameMeta, dataRevision);
 
     const [showImportModal, setShowImportModal] = useState(false);
     const [importCode, setImportCode] = useState('');
@@ -101,12 +106,16 @@ export default function Home() {
             setIsLoading(true);
             const [fetchedPresets, settings] = await Promise.all([getPresets(), getSettings()]);
             let playerLoadout: Record<string, LoadoutItemV1> = {};
+            let gameMeta: { sprays: any[], identity?: any } = { sprays: [] };
             try {
-                playerLoadout = await getPlayerLoadout();
+                const full = await getPlayerLoadoutData();
+                playerLoadout = full.loadout;
+                gameMeta = { sprays: full.sprays || [], identity: full.identity };
             } catch (error) {
                 if (!(error instanceof LocalClientError)) throw error;
             }
-            setInitialData({ playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [] });
+            setInitialData({ playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [], gameMeta });
+            setDataRevision(r => r + 1);
             setAutoSelectAgent(settings.autoSelectAgent);
             setUseLocalSso(settings.useLocalSso);
             prevSettingsRef.current = settings;
@@ -114,7 +123,7 @@ export default function Home() {
             setIsLoading(false);
         } catch (error) {
             if (error instanceof LocalClientError) {
-                setInitialData({ playerLoadout: {}, presets: [] });
+                setInitialData({ playerLoadout: {}, presets: [], gameMeta: { sprays: [] } });
                 setIsLoading(false);
             } else {
                 console.error(error);
@@ -251,12 +260,6 @@ export default function Home() {
         setIsWorkspaceOpen(true);
     };
 
-    const onBackToDashboard = () => {
-        setIsWorkspaceOpen(false);
-        handlePresetSelect(defaultPreset);
-        handleCancel();
-    };
-
     if (isLoading || dataContextLoading) {
         return (
             <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
@@ -279,6 +282,7 @@ export default function Home() {
                 onTabChange={(tab) => {
                     setActiveTab(tab);
                     if (tab === 'store') setIsWorkspaceOpen(false);
+                    if (tab === 'skins') setIsWorkspaceOpen(true);
                 }}
                 activeAccount={activeAccount}
                 useLocalSso={useLocalSso || false}
@@ -333,8 +337,9 @@ export default function Home() {
                                 currentSprays={activePreset?.sprays}
                                 onUpdateSprays={handleSpraysChange}
                                 showPresetExtras={showPresetExtras || false}
-                                onBackToDashboard={onBackToDashboard}
                                 onAgentAssignment={handleAgentAssignment}
+                                gameIdentity={gameMeta.identity}
+                                gameSprays={gameMeta.sprays}
                             />
                         ) : (
                             <PresetList
@@ -444,6 +449,14 @@ export default function Home() {
                 importCode={importCode}
                 onChangeImportCode={(v) => { setImportCode(v); setImportError(''); }}
                 importError={importError}
+            />
+
+            <LocalAccountChooser
+                isOpen={showLocalAccountChooser}
+                pending={pendingLocalAccount}
+                active={activeAccount}
+                onChooseLocal={(useLocal) => handleResolveLocalAccount(useLocal)}
+                onClose={() => handleResolveLocalAccount(false)}
             />
         </div>
     );
