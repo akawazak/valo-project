@@ -36,7 +36,7 @@ fn spawn_embedded_sidecar(app_handle: &tauri::AppHandle) -> Result<std::process:
             .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&sidecar_path, perms)
-.map_err(|e: tauri::Error| e.to_string())?;
+            .map_err(|e| e.to_string())?;
     }
     
     let mut cmd = std::process::Command::new(&sidecar_path);
