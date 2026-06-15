@@ -12,6 +12,7 @@ interface AccountManagerModalProps {
     onRequestDeleteAccount: (puuid: string) => void;
     onAddAccount: () => void;
     onRefreshAccount: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
+    onCancelRefresh: (acc: RiotAccount) => void;
     onToggleFavorite: (puuid: string) => void;
 }
 
@@ -24,6 +25,7 @@ export default function AccountManagerModal({
     onRequestDeleteAccount,
     onAddAccount,
     onRefreshAccount,
+    onCancelRefresh,
     onToggleFavorite,
 }: AccountManagerModalProps) {
     const [refreshingPuuids, setRefreshingPuuids] = useState<Record<string, boolean>>({});
@@ -176,17 +178,28 @@ export default function AccountManagerModal({
                                         </div>
 
                                         <div className="settings-account-actions">
-                                            <button
-                                                type="button"
-                                                className={`settings-account-action-btn refresh-btn ${
-                                                    isRefreshing ? "refreshing" : ""
-                                                }`}
-                                                onClick={(e) => handleRefreshAccount(e, acc)}
-                                                disabled={isRefreshing}
-                                                title="Refresh session"
-                                            >
-                                                ↻
-                                            </button>
+                                            {isRefreshing ? (
+                                                <button
+                                                    type="button"
+                                                    className="settings-account-action-btn refresh-btn cancel-refresh-btn"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onCancelRefresh(acc);
+                                                    }}
+                                                    title="Cancel refresh"
+                                                >
+                                                    ✕
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="settings-account-action-btn refresh-btn"
+                                                    onClick={(e) => handleRefreshAccount(e, acc)}
+                                                    title="Refresh session"
+                                                >
+                                                    ↻
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 className="settings-account-action-btn delete-btn"

@@ -37,6 +37,7 @@ export default function Home() {
         handleDeleteAccount,
         handleAddNewAccount,
         refreshAccountToken,
+        cancelAccountRefresh,
         storefrontRefreshKey,
         pendingLocalAccount,
         showLocalAccountChooser,
@@ -407,6 +408,7 @@ export default function Home() {
                     setShowAddAccount(true);
                 }}
                 onRefreshAccount={refreshAccountToken}
+                onCancelRefresh={cancelAccountRefresh}
                 onToggleFavorite={handleToggleFavorite}
             />
 
@@ -433,9 +435,19 @@ export default function Home() {
             {showAddAccount && (
                 <div className="login-modal-layer">
                     <RiotLoginCard
-                        onLoginSuccess={(acc) => {
+                        onLoginSuccess={async (acc) => {
                             setShowAddAccount(false);
-                            if (acc) handleAddNewAccount(acc);
+                            if (!acc) return;
+
+                            const stableAcc = {
+                                ...acc,
+                                sessionId: `session_${acc.puuid}`,
+                            };
+                            handleAddNewAccount(stableAcc);
+
+                            if (!stableAcc.ssid) {
+                                await refreshAccountToken(stableAcc, true);
+                            }
                         }}
                         onCancel={() => setShowAddAccount(false)}
                     />

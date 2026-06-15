@@ -127,6 +127,7 @@ interface DataContextType {
     handleAddNewAccount: (acc: RiotAccount) => void;
     refreshAccountsList: () => void;
     refreshAccountToken: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
+    cancelAccountRefresh: (acc: RiotAccount) => void;
     
     // Storefront refresh signal — increment to trigger re-fetch in StorePanels
     storefrontRefreshKey: number;
@@ -142,6 +143,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // Per-session refresh lock: prevents overlapping refreshAccountToken calls
     // (manual + auto + cross-account races) from clobbering the same window.
     const refreshInFlightRef = useRef<Set<string>>(new Set());
+    // Per-session cancel handle so the UI can abort an in-flight refresh
+    // (e.g. user clicked refresh by mistake). The cancel function closes the
+    // login window, releases the lock, and resolves the promise as false.
+    const refreshCancelRef = useRef<Map<string, () => void>>(new Map());
 
     const [agents, setAgents] = useState<Agent[]>([]);
     const [weapons, setWeapons] = useState<Weapon[]>([]);
@@ -403,7 +408,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return false;
         }
         refreshInFlightRef.current.add(sessionKey);
-        const releaseLock = () => { refreshInFlightRef.current.delete(sessionKey); };
+        const releaseLock = () => {
+            refreshInFlightRef.current.delete(sessionKey);
+            refreshCancelRef.current.delete(sessionKey);
+        };
 
         let sessionId = acc.sessionId;
         if (!sessionId) {
@@ -459,6 +467,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return new Promise<boolean>((resolve) => {
                 let resolved = false;
                 let unlistenFn: (() => void) | null = null;
+
+                // Register a cancel handle so the UI can abort this refresh.
+                refreshCancelRef.current.set(sessionKey, () => {
+                    if (resolved) return;
+                    finish(false);
+                    // Close the window so the popup doesn't linger.
+                    invoke("close_login_window", { sessionId }).catch(() => {});
+                });
 
                 const cleanup = () => {
                     resolved = true;
@@ -565,6 +581,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return false;
         }
     }, [activeAccount]);
+
+    const cancelAccountRefresh = useCallback((acc: RiotAccount) => {
+        const sessionKey = acc.sessionId || `session_${acc.puuid}`;
+        const cancel = refreshCancelRef.current.get(sessionKey);
+        if (cancel) {
+            cancel();
+        }
+    }, []);
 
     // Auto-refresh the active account token shortly before expiry to avoid
     // user-visible expiration. Schedule a refresh 90 seconds before expiry.
@@ -716,7 +740,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             agents, weapons, ownedBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
             sprays, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
-            handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken,
+            handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,
             storefrontRefreshKey,
             pendingLocalAccount,
             showLocalAccountChooser: pendingLocalAccount !== null,

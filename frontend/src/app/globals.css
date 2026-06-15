@@ -8948,6 +8948,18 @@ div#__next>div {
   cursor: not-allowed;
 }
 
+.cancel-refresh-btn {
+  color: #ff4055;
+  border-color: rgba(255, 64, 85, 0.4);
+  animation: none;
+}
+
+.cancel-refresh-btn:hover:not(:disabled) {
+  background: rgba(255, 64, 85, 0.15);
+  border-color: #ff4055;
+  color: #ff4055;
+}
+
 .delete-btn:hover {
   background: rgba(255, 64, 85, 0.12);
   border-color: var(--border-accent);
