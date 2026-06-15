@@ -17,6 +17,8 @@ import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
 import { useLoadout } from '@/hooks/useLoadout';
 import RiotLoginCard from '@/components/RiotLoginCard';
 import StorePanels from '@/features/dashboard/StorePanels';
+import RankTrackerPanel from '@/features/profile/RankTrackerPanel';
+import MatchHistoryPanel from '@/features/profile/MatchHistoryPanel';
 import { useTheme } from '@/context/ThemeContext';
 import { exportPreset } from '@/lib/presetShare';
 import AppTopbar from '@/components/AppTopbar';
@@ -59,7 +61,7 @@ export default function Home() {
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     
     // Core Layout State
-    const [activeTab, setActiveTab] = useState<'skins' | 'store'>('skins');
+    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'rank' | 'matches'>('rank');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     
     // Modals
@@ -282,7 +284,7 @@ export default function Home() {
                 activeTab={activeTab}
                 onTabChange={(tab) => {
                     setActiveTab(tab);
-                    if (tab === 'store') setIsWorkspaceOpen(false);
+                    if (tab === 'store' || tab === 'rank' || tab === 'matches') setIsWorkspaceOpen(false);
                     if (tab === 'skins') setIsWorkspaceOpen(true);
                 }}
                 activeAccount={activeAccount}
@@ -297,6 +299,10 @@ export default function Home() {
                 <main className="app-main-content">
                     {activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
+                    ) : activeTab === 'rank' ? (
+                        <RankTrackerPanel onConnectAccount={() => setIsAccountsOpen(true)} />
+                    ) : activeTab === 'matches' ? (
+                        <MatchHistoryPanel onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : (
                         isWorkspaceOpen ? (
                             <ArsenalView

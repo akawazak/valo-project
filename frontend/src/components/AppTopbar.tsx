@@ -3,8 +3,8 @@
 import { RiotAccount } from "@/lib/types";
 
 interface AppTopbarProps {
-    activeTab: "store" | "skins";
-    onTabChange: (tab: "store" | "skins") => void;
+    activeTab: "store" | "skins" | "rank" | "matches";
+    onTabChange: (tab: "store" | "skins" | "rank" | "matches") => void;
     activeAccount: RiotAccount | null;
     useLocalSso: boolean;
     isLocalClientActive: boolean;
@@ -46,6 +46,20 @@ export default function AppTopbar({
                         onClick={() => onTabChange("store")}
                     >
                         Storefront
+                    </button>
+                    <button
+                        type="button"
+                        className={activeTab === "rank" ? "active" : ""}
+                        onClick={() => onTabChange("rank")}
+                    >
+                        Rank
+                    </button>
+                    <button
+                        type="button"
+                        className={activeTab === "matches" ? "active" : ""}
+                        onClick={() => onTabChange("matches")}
+                    >
+                        Matches
                     </button>
                     <button
                         type="button"

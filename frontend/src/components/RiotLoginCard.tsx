@@ -154,7 +154,10 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                     };
                     ssid = refreshed.cookies || ssid;
                 } catch (refreshErr) {
-                    console.error("Captured Riot session failed validation; account will be saved and refresh setup will continue:", refreshErr);
+                    // Backend rejected the captured cookies (cookies_expired / not yet
+                    // recognized by Riot). The account is still saved with the OAuth
+                    // tokens we already have — silent reauth will retry on next refresh.
+                    console.debug("Silent reauth skipped (cookies not yet accepted); account will be saved with OAuth tokens.");
                 }
             }
 

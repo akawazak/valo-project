@@ -286,7 +286,25 @@ export async function getAuthUrl(): Promise<{ auth_url: string }> {
     return response.json();
 }
 
-export async function submitTokenUrl(url: string): Promise<{ access_token: string; entitlements_token: string; expires_in: number; puuid: string; region: string; game_name: string; tag_line: string }> {
+export interface AuthTokenResponse {
+    access_token: string;
+    entitlements_token: string;
+    expires_in: number;
+    puuid: string;
+    region: string;
+    game_name: string;
+    tag_line: string;
+    cookies?: string;
+}
+
+export interface ReauthTokenResponse {
+    access_token: string;
+    entitlements_token: string;
+    expires_in: number;
+    cookies?: string;
+}
+
+export async function submitTokenUrl(url: string): Promise<AuthTokenResponse> {
     const response = await fetch(LOCAL_URL + '/auth/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -295,6 +313,19 @@ export async function submitTokenUrl(url: string): Promise<{ access_token: strin
     if (!response.ok) {
         const text = await response.text();
         throw new Error(text || 'Failed to submit tokens.');
+    }
+    return response.json();
+}
+
+export async function refreshRiotSession(cookies: string): Promise<ReauthTokenResponse> {
+    const response = await fetch(LOCAL_URL + '/auth/ssid-reauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookies }),
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Captured Riot session cookies were not accepted.');
     }
     return response.json();
 }
@@ -398,4 +429,206 @@ export async function getPlayerTitles(): Promise<PlayerTitleAsset[]> {
         console.error(error);
         return [];
     }
+}
+
+// ============================================================================
+// Profile / Career (Rank, Match History, Match Details)
+// ============================================================================
+
+export interface PlayerMMRResponse {
+    Version: number;
+    Subject: string;
+    LatestCompetitiveUpdate?: {
+        MatchID: string;
+        MapID: string;
+        SeasonID: string;
+        MatchStartTime: number;
+        TierAfterUpdate: number;
+        TierBeforeUpdate: number;
+        RankedRatingAfterUpdate: number;
+        RankedRatingBeforeUpdate: number;
+        RankedRatingEarned: number;
+        AFKPenalty: number;
+        // ... other fields preserved as-is
+        [key: string]: any;
+    };
+    QueueSkills?: {
+        [queue: string]: {
+            TotalGamesNeededForRating: number;
+            TotalGamesWon: number;
+            RankedRating: number;
+            CurrentSeasonGamesPlayed: number;
+            SeasonalInfoBySeasonID?: {
+                [seasonId: string]: {
+                    WinsByTier: { [tier: string]: number };
+                    GamesNeededForRating: number;
+                    TotalWins: number;
+                    RankedRating: number;
+                    NumberOfWinsWithPlacements: number;
+                    NumberOfGames: number;
+                    FinalRank: number;
+                    FinalRankPlacements: number;
+                    RankedRatingPeak: number;
+                    PeakRank: number;
+                    Wins: number;
+                    [key: string]: any;
+                };
+            };
+            [key: string]: any;
+        };
+    };
+    LatestPlacement?: any;
+    [key: string]: any;
+}
+
+export interface AccountXPResponse {
+    Version: number;
+    Subject: string;
+    // Total XP earned across all seasons (cumulative)
+    TotalXP: number;
+    // XP history per season
+    History: Array<{
+        ID: string;
+        MatchStartTime: number;
+        StartXP: number;
+        EndXP: number;
+        XPDelta: number;
+        XPMultiplier: number;
+        TierBeforeChange?: number;
+        TierAfterChange?: number;
+        LevelBeforeChange?: number;
+        LevelAfterChange?: number;
+        [key: string]: any;
+    }>;
+    [key: string]: any;
+}
+
+export interface MatchHistoryResponse {
+    Subject: string;
+    BeginIndex: number;
+    EndIndex: number;
+    Total: number;
+    History: Array<{
+        MatchID: string;
+        GameStartTime: number;
+        QueueID: string;
+        MapID: string;
+        SeasonID: string;
+        IsRanked: boolean;
+        MatchResult: string; // "Victory" | "Defeat" | "Draw"
+        RoundsWon: number;
+        RoundsLost: number;
+        TeamID: string;
+        // Some servers include a precomputed KDA summary
+        Kills?: number;
+        Deaths?: number;
+        Assists?: number;
+        Score?: number;
+        [key: string]: any;
+    }>;
+}
+
+export interface MatchDetailsResponse {
+    matchInfo: {
+        matchId: string;
+        mapId: string;
+        gamePodId?: string;
+        gameLoopId?: string;
+        gameServerAddress?: string;
+        gameVersion?: string;
+        gameStartMillis: number;
+        gameLengthMillis: number;
+        queueId: string;
+        isRanked: boolean;
+        seasonId: string;
+        completionState: string; // "Completed" | "Surrendered" etc.
+        // "TeamRed" | "TeamBlue" — or sometimes "Blue"/"Red"
+        teams: Array<{
+            teamId: string;
+            won: boolean;
+            roundsWon: number;
+            roundsLost: number;
+            numPoints: number;
+            [key: string]: any;
+        }>;
+        // Sometimes present
+        winningTeam?: string;
+        [key: string]: any;
+    };
+    players: Array<{
+        subject: string;
+        gameName: string;
+        tagLine: string;
+        teamId: string;
+        platformInfo?: any;
+        partyId?: string;
+        characterId: string;
+        stats: {
+            score: number;
+            roundsPlayed: number;
+            kills: number;
+            deaths: number;
+            assists: number;
+            playtimeMillis: number;
+            abilityCasts?: { [ability: string]: number };
+            [key: string]: any;
+        };
+        competitiveTier: number;
+        accountLevel: number;
+        // Premade party size from same team (if available)
+        premierPresenceInfo?: any;
+        [key: string]: any;
+    }>;
+    coaches?: any[];
+    teams?: any[];
+    // Sometimes 'roundResults' / 'kills' are huge — we ignore them in this client
+    [key: string]: any;
+}
+
+export async function getPlayerMMR(): Promise<PlayerMMRResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/career/mmr');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch player MMR.');
+    }
+    return response.json();
+}
+
+export async function getAccountXP(): Promise<AccountXPResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/career/account-xp');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch account XP.');
+    }
+    return response.json();
+}
+
+export async function getMatchHistory(startIndex = 0, endIndex = 20, queue?: string): Promise<MatchHistoryResponse> {
+    const params = new URLSearchParams({ startIndex: String(startIndex), endIndex: String(endIndex) });
+    if (queue) params.set('queue', queue);
+    const response = await fetchWithAuth(`${LOCAL_URL}/career/match-history?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch match history.');
+    }
+    return response.json();
+}
+
+export async function getMatchDetails(matchID: string): Promise<MatchDetailsResponse> {
+    const response = await fetchWithAuth(`${LOCAL_URL}/career/matches/${encodeURIComponent(matchID)}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch match details.');
+    }
+    return response.json();
+}
+
+export async function getCompetitiveUpdates(startIndex = 0, endIndex = 20): Promise<any> {
+    const params = new URLSearchParams({ startIndex: String(startIndex), endIndex: String(endIndex) });
+    const response = await fetchWithAuth(`${LOCAL_URL}/career/competitive-updates?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch competitive updates.');
+    }
+    return response.json();
 }
