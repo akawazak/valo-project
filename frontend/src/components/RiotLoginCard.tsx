@@ -26,6 +26,35 @@ export function activateAccount(account: RiotAccount) {
     localStorage.setItem("riot_region", account.region);
 }
 
+async function closeLoginWindowAndWait(sessionId: string) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { listen } = await import("@tauri-apps/api/event");
+
+    const listener = { unlisten: null as null | (() => void) };
+    const closed = new Promise<void>((resolve) => {
+        const timeoutId = window.setTimeout(resolve, 3500);
+        listen("riot-login-closed", () => {
+            window.clearTimeout(timeoutId);
+            resolve();
+        })
+            .then((unlisten) => {
+                listener.unlisten = unlisten;
+            })
+            .catch(() => {
+                window.clearTimeout(timeoutId);
+                resolve();
+            });
+    });
+
+    await invoke("close_login_window", { sessionId }).catch(() => {});
+    await closed;
+    listener.unlisten?.();
+}
+
+function hasSsidCookie(cookies: string | null | undefined): cookies is string {
+    return Boolean(cookies && /(?:^|;\s*)ssid=/.test(cookies));
+}
+
 export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCardProps) {
     const [stage, setStage] = useState<Stage>("start");
     const [pastedUrl, setPastedUrl] = useState("");
@@ -34,6 +63,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const currentSessionIdRef = useRef("");
+    const capturedCookiesRef = useRef<string | null>(null);
 
     useEffect(() => {
         api.getLocalAccount()
@@ -47,16 +77,20 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
 
     // Listen for the redirect event from the Tauri main process
     useEffect(() => {
-        let unlisten: (() => void) | null = null;
+        let unlistenFns: Array<() => void> = [];
 
         async function setupListener() {
             try {
                 const { listen } = await import("@tauri-apps/api/event");
-                const fn = await listen<string>("riot-login-redirect", (event) => {
+                const redirectUnlisten = await listen<string>("riot-login-redirect", (event) => {
                     const redirectUrl = event.payload;
                     connectWithUrl(redirectUrl);
                 });
-                unlisten = fn;
+                const cookiesUnlisten = await listen<string>("riot-login-cookies", (event) => {
+                    capturedCookiesRef.current = event.payload;
+                    console.debug("riot-login-cookies: captured cookies from popup event");
+                });
+                unlistenFns = [redirectUnlisten, cookiesUnlisten];
             } catch (err) {
                 console.error("Failed to setup Tauri redirect event listener:", err);
             }
@@ -65,7 +99,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         setupListener();
 
         return () => {
-            if (unlisten) unlisten();
+            unlistenFns.forEach((unlisten) => unlisten());
         };
     }, []);
 
@@ -73,7 +107,57 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         setIsLoading(true);
         setError(null);
         try {
-            const res = await api.submitTokenUrl(url);
+            let res = await api.submitTokenUrl(url);
+            const { invoke } = await import("@tauri-apps/api/core");
+
+            let ssid: string | undefined = undefined;
+            const tempSessionId = currentSessionIdRef.current;
+            await closeLoginWindowAndWait(tempSessionId);
+
+            if (tempSessionId) {
+                try {
+                    const capturedCookies = capturedCookiesRef.current;
+                    const raw = hasSsidCookie(capturedCookies)
+                        ? capturedCookies
+                        : await invoke<string | null>("get_ssid_cookie", {
+                              sessionId: tempSessionId,
+                              waitMs: 8000,
+                          });
+                    ssid = raw ?? undefined;
+                    console.debug("get_ssid_cookie: result for temp session", tempSessionId, "->", raw);
+                } catch (cookieErr) {
+                    console.error("Failed to read ssid cookie for temp session:", cookieErr);
+                }
+            }
+
+            const stableSessionId = `session_${res.puuid}`;
+            if (tempSessionId) {
+                try {
+                    await invoke("persist_login_session", {
+                        fromSessionId: tempSessionId,
+                        toSessionId: stableSessionId,
+                    });
+                } catch (persistErr) {
+                    console.error("Failed to persist login session:", persistErr);
+                }
+            }
+
+            if (hasSsidCookie(ssid)) {
+                try {
+                    const refreshed = await api.refreshRiotSession(ssid);
+                    res = {
+                        ...res,
+                        access_token: refreshed.access_token,
+                        entitlements_token: refreshed.entitlements_token,
+                        expires_in: refreshed.expires_in,
+                        cookies: refreshed.cookies,
+                    };
+                    ssid = refreshed.cookies || ssid;
+                } catch (refreshErr) {
+                    console.error("Captured Riot session failed validation; account will be saved and refresh setup will continue:", refreshErr);
+                }
+            }
+
             const newAccount: RiotAccount = {
                 puuid: res.puuid,
                 accessToken: res.access_token,
@@ -82,7 +166,8 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 region: res.region,
                 gameName: res.game_name || "Unknown",
                 tagLine: res.tag_line || "",
-                sessionId: currentSessionIdRef.current || undefined,
+                sessionId: stableSessionId,
+                ssid: ssid,
             };
             activateAccount(newAccount);
             onLoginSuccess(newAccount);
@@ -101,6 +186,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             const { invoke } = await import("@tauri-apps/api/core");
             const tempSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             currentSessionIdRef.current = tempSessionId;
+            capturedCookiesRef.current = null;
             await invoke("open_login_window", { authUrl: auth_url, sessionId: tempSessionId, visible: true });
             setStage("paste");
         } catch (err) {

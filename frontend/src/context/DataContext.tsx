@@ -139,6 +139,10 @@ interface DataContextType {
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export function DataProvider({ children }: { children: ReactNode }) {
+    // Per-session refresh lock: prevents overlapping refreshAccountToken calls
+    // (manual + auto + cross-account races) from clobbering the same window.
+    const refreshInFlightRef = useRef<Set<string>>(new Set());
+
     const [agents, setAgents] = useState<Agent[]>([]);
     const [weapons, setWeapons] = useState<Weapon[]>([]);
     const [ownedBuddies, setOwnedBuddies] = useState<GunBuddy[]>([]);
@@ -392,6 +396,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const refreshAccountToken = useCallback(async (acc: RiotAccount, visible: boolean = false): Promise<boolean> => {
+        const sessionKey = acc.sessionId || `session_${acc.puuid}`;
+        if (refreshInFlightRef.current.has(sessionKey)) {
+            // Another refresh is already running for this session — wait for it
+            // instead of opening a second login window.
+            return false;
+        }
+        refreshInFlightRef.current.add(sessionKey);
+        const releaseLock = () => { refreshInFlightRef.current.delete(sessionKey); };
+
         let sessionId = acc.sessionId;
         if (!sessionId) {
             sessionId = `session_${acc.puuid}`;
@@ -427,6 +440,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
                         }
+                        releaseLock();
                         return true;
                     }
                 }
@@ -445,29 +459,32 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return new Promise<boolean>((resolve) => {
                 let resolved = false;
                 let unlistenFn: (() => void) | null = null;
-                let unlistenCloseFn: (() => void) | null = null;
-                let savedRedirectResult: { redirectUrl: string; res: { access_token: string; entitlements_token: string; expires_in?: number; region?: string; game_name?: string; tag_line?: string }; updatedAcc: RiotAccount; stored: RiotAccount[]; updated: RiotAccount[] } | null = null;
 
                 const cleanup = () => {
                     resolved = true;
                     clearTimeout(timeoutId);
                     if (unlistenFn) unlistenFn();
-                    if (unlistenCloseFn) unlistenCloseFn();
+                };
+
+                const finish = (ok: boolean) => {
+                    cleanup();
+                    releaseLock();
+                    resolve(ok);
                 };
 
                 const timeoutId = setTimeout(async () => {
                     if (resolved) return;
                     if (!visible) {
-                        await invoke("show_login_window").catch(() => {});
+                        await invoke("show_login_window", { sessionId }).catch(() => {});
                     } else {
-                        cleanup();
-                        resolve(false);
+                        finish(false);
                     }
                 }, 10000);
 
                 listen<string>("riot-login-redirect", async (event) => {
                     if (resolved) return;
                     cleanup();
+
                     try {
                         const redirectUrl = event.payload;
                         const res = await submitTokenUrl(redirectUrl);
@@ -475,7 +492,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         // Save the tokens immediately — we can't read ssid cookies yet
                         // because the popup is still running and WebView2 hasn't flushed
                         // them to SQLite. We'll read them after the window closes.
-                        let updatedAcc: RiotAccount = {
+                        const updatedAcc: RiotAccount = {
                             ...acc,
                             accessToken: res.access_token,
                             entitlementsToken: res.entitlements_token,
@@ -495,63 +512,56 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
                         }
-                        // Don't resolve yet — wait for riot-login-closed to read cookies
-                        savedRedirectResult = { redirectUrl, res, updatedAcc, stored, updated };
-                    } catch (err) {
-                        console.error("Error in token submit during auto-refresh:", err);
-                        resolve(false);
-                    }
-                }).then(fn => { unlistenFn = fn; });
 
-                // Read ssid cookies AFTER the popup window has fully closed.
-                // At this point WebView2 has released the DB lock and all cookies
-                // are safely flushed to SQLite.
-                listen<void>("riot-login-closed", async () => {
-                    if (resolved) return;
-                    if (!savedRedirectResult) {
-                        cleanup();
-                        resolve(false);
-                        return;
-                    }
-                    try {
-                        const { res, updatedAcc, stored, updated } = savedRedirectResult;
-                        let ssid: string | undefined;
-                        try {
-                            console.debug("get_ssid_cookie: attempting session", sessionId);
-                            const raw = await (async () => {
-                                for (let attempt = 0; attempt < 5; attempt++) {
-                                    const result = await invoke<string | null>("get_ssid_cookie", { sessionId }) ?? undefined;
-                                    if (result) return result;
-                                    if (attempt < 4) await new Promise(r => setTimeout(r, 300));
-                                }
-                                return undefined;
-                            })();
-                            ssid = raw;
-                            console.debug("get_ssid_cookie: result for session", sessionId, "->", ssid);
-                        } catch (err) {
-                            console.debug("get_ssid_cookie: error for session", sessionId, err);
-                        }
-                        const finalAcc = { ...updatedAcc, ssid: ssid ?? updatedAcc.ssid };
+                        // Close the login window first to force WebView2 to flush all cookies to disk and release locks
+                        const closedPromise = new Promise<void>((resVal) => {
+                            let unlistenClose: (() => void) | null = null;
+                            const timeoutIdClose = setTimeout(() => {
+                                if (unlistenClose) unlistenClose();
+                                resVal();
+                            }, 3500);
+                            listen("riot-login-closed", () => {
+                                clearTimeout(timeoutIdClose);
+                                if (unlistenClose) unlistenClose();
+                                resVal();
+                            }).then(fn => { unlistenClose = fn; }).catch(() => {
+                                clearTimeout(timeoutIdClose);
+                                resVal();
+                            });
+                        });
+
+                        await invoke("close_login_window", { sessionId }).catch(() => {});
+                        await closedPromise;
+
+                        // Fetch the ssid cookie from the session directory now that the lock is released
+                        const raw = await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
+                        console.debug("get_ssid_cookie: result for session", sessionId, "->", raw);
+
+                        const finalAcc = { ...updatedAcc, ssid: raw ?? updatedAcc.ssid };
                         const finalUpdated = stored.map(a => a.puuid === acc.puuid ? finalAcc : a);
                         saveStoredAccounts(finalUpdated);
                         setAccounts(finalUpdated);
                         if (activeAccount?.puuid === acc.puuid) setActiveAccount(finalAcc);
-                        cleanup();
+
                         resolve(true);
+                        releaseLock();
                     } catch (err) {
-                        cleanup();
+                        console.error("Error in token submit during auto-refresh:", err);
                         resolve(false);
+                        releaseLock();
                     }
-                }).then(fn => { unlistenCloseFn = fn; });
+                }).then(fn => { unlistenFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
                     console.error("Failed to open login window:", err);
                     cleanup();
+                    releaseLock();
                     resolve(false);
                 });
             });
         } catch (err) {
             console.error("Failed to start refreshAccountToken:", err);
+            releaseLock();
             return false;
         }
     }, [activeAccount]);

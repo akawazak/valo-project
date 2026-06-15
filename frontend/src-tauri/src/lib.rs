@@ -4,54 +4,48 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, RunEvent, State, WindowEvent,
 };
-
-#[cfg(target_os = "windows")]
-const SIDECAR_BYTES: &[u8] = include_bytes!("../../../backend/tmp/valovault-backend-x86_64-pc-windows-msvc.exe");
-
-#[cfg(not(target_os = "windows"))]
-const SIDECAR_BYTES: &[u8] = include_bytes!("../../../backend/tmp/valovault-backend-x86_64-unknown-linux-gnu");
+use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
 
 struct AppState {
-    child: Mutex<Option<std::process::Child>>,
+    child: Mutex<Option<CommandChild>>,
 }
 
-fn spawn_embedded_sidecar(app_handle: &tauri::AppHandle) -> Result<std::process::Child, String> {
-    let cache_dir = app_handle.path().app_cache_dir().map_err(|e| e.to_string())?;
-    
-    #[cfg(target_os = "windows")]
-    let sidecar_name = "valovault-backend-temp.exe";
-    #[cfg(not(target_os = "windows"))]
-    let sidecar_name = "valovault-backend-temp";
-    
-    let sidecar_path = cache_dir.join(sidecar_name);
-    
-    std::fs::write(&sidecar_path, SIDECAR_BYTES)
-        .map_err(|e| format!("Failed to write embedded sidecar: {}", e))?;
-        
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&sidecar_path)
-            .map_err(|e| e.to_string())?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&sidecar_path, perms)
-            .map_err(|e| e.to_string())?;
+// ---------------------------------------------------------------------------
+// Startup cleanup — only removes old *temporary* session directories
+// (session_<timestamp>_<random>) while leaving stable PUUID-based sessions
+// (session_<uuid>) untouched.  This avoids the race condition where an
+// active account's cookie directory was deleted mid-use.
+// ---------------------------------------------------------------------------
+fn cleanup_stale_sessions(config_dir: &std::path::Path) {
+    let sessions_dir = config_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return;
     }
-    
-    let mut cmd = std::process::Command::new(&sidecar_path);
-    
-    #[cfg(target_os = "windows")]
+
+    for entry in std::fs::read_dir(&sessions_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
     {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("session_") || !entry.path().is_dir() {
+            continue;
+        }
+        // Temp sessions look like: session_<digits>_<alphanum>
+        let after_prefix = &name["session_".len()..];
+        if let Some(underscore_pos) = after_prefix.find('_') {
+            let timestamp_part = &after_prefix[..underscore_pos];
+            if timestamp_part.chars().all(|c| c.is_ascii_digit()) && !timestamp_part.is_empty() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
     }
-    
-    let child = cmd.spawn()
-        .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
-        
-    Ok(child)
 }
+
+// ---------------------------------------------------------------------------
+// Tauri Commands
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 async fn open_login_window(
@@ -60,10 +54,13 @@ async fn open_login_window(
     session_id: Option<String>,
     visible: Option<bool>,
 ) -> Result<(), String> {
-    let label = "riot_login";
-    
+    let window_label = format!(
+        "riot_login_{}",
+        session_id.as_deref().unwrap_or("default")
+    );
+
     // Close existing login window if open
-    if let Some(window) = app_handle.get_webview_window(label) {
+    if let Some(window) = app_handle.get_webview_window(&window_label) {
         let _ = window.close();
     }
     // Tauri defers window destruction — wait so the label is freed before we
@@ -71,25 +68,16 @@ async fn open_login_window(
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     let cloned_handle = app_handle.clone();
-    
-    let config_dir = app_handle.path().app_config_dir().map_err(|e| e.to_string())?;
-    let mut sessions_base = config_dir.clone();
-    sessions_base.push("sessions");
 
-    // Clean up ALL old session directories before creating a new one.
-    // Leftover WebView2 lock files from crashed/unclosed sessions cause
-    // "The parameter is incorrect" (0x80070057) on subsequent launches.
-    if sessions_base.exists() {
-        for entry in std::fs::read_dir(&sessions_base).into_iter().flatten().filter_map(Result::ok) {
-            let path = entry.path();
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    let sessions_base = config_dir.join("sessions");
 
-            // Keep the current session dir if it was provided; nuke everything else
-            let is_current = session_id.as_ref().map_or(false, |sid| path.to_string_lossy().ends_with(sid));
-            if !is_current && path.is_dir() {
-                let _ = std::fs::remove_dir_all(&path);
-            }
-        }
-    }
+    // NOTE: No aggressive cleanup here — we only clean stale temp sessions at
+    // startup (see cleanup_stale_sessions).  This prevents deletion of active
+    // account cookie directories while they are in use.
 
     let mut session_dir = sessions_base.clone();
     if let Some(ref sid) = session_id {
@@ -97,45 +85,59 @@ async fn open_login_window(
     } else {
         session_dir.push("default");
     }
+    let cookie_capture_config_dir = config_dir.clone();
+    let cookie_capture_session_id = session_id.clone().unwrap_or_else(|| "default".to_string());
 
     // Ensure the directory exists — WebView fails silently if it doesn't
     std::fs::create_dir_all(&session_dir)
         .map_err(|e| format!("Failed to create session directory: {}", e))?;
 
     let is_visible = visible.unwrap_or(true);
-    
-    let window = tauri::webview::WebviewWindowBuilder::new(
+
+let window = tauri::webview::WebviewWindowBuilder::new(
         &app_handle,
-        label,
-        tauri::WebviewUrl::External(url::Url::parse(&auth_url).map_err(|e| format!("Invalid URL: {}", e))?),
+        &window_label,
+        tauri::WebviewUrl::External(
+            url::Url::parse(&auth_url).map_err(|e| format!("Invalid URL: {}", e))?,
+        ),
     )
-    .title("Riot Sign In")
-    .inner_size(600.0, 800.0)
-    .resizable(true)
+    .title("Riot Login")
+    .inner_size(500.0, 650.0)
     .visible(is_visible)
     .data_directory(session_dir)
-    // Disable third-party cookie blocking so the Riot OAuth session cookie
+    // Disable third-party-cookie blocking so the Riot OAuth session cookie
     // is persisted to SQLite and can be read back via get_ssid_cookie.
     .additional_browser_args("--disable-features=BlockThirdPartyCookies")
     .on_navigation(move |url: &url::Url| {
         let host = url.host_str().unwrap_or("");
         let path = url.path();
-        if (host == "localhost" || host == "127.0.0.1") && path == "/redirect" {
+        if host == "localhost" || host == "127.0.0.1" && path == "/redirect" {
             let redirect_url_str = url.as_str().to_string();
             let _ = cloned_handle.emit("riot-login-redirect", redirect_url_str);
-            
-            let label_cloned = label.to_string();
-            let app_handle_inner = cloned_handle.clone();
+
+            // Spawn background thread to read cookies from the WebView2 DB
+            let cookie_handle = cloned_handle.clone();
+            let cookie_config_dir = cookie_capture_config_dir.clone();
+            let cookie_session_id = cookie_capture_session_id.clone();
             std::thread::spawn(move || {
-                // Give WebView2 time to flush cookies to SQLite before closing.
-                // Without this the popup window is destroyed before the write
-                // lands on disk, so get_ssid_cookie finds an empty DB.
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                if let Some(window) = app_handle_inner.get_webview_window(&label_cloned) {
-                    let _ = window.close();
+                match read_session_cookies_with_wait(&cookie_config_dir, &cookie_session_id, 15000)
+                {
+                    Ok(Some(cookie_str)) => {
+                        let _ = cookie_handle.emit("riot-login-cookies", cookie_str);
+                    }
+                    Ok(None) => {
+                        let _ = cookie_handle.emit("riot-login-cookies-missing", cookie_session_id);
+                    }
+                    Err(err) => {
+                        let _ = cookie_handle.emit("riot-login-cookies-error", err);
+                    }
                 }
             });
-            
+
+            // Navigate the popup to a neutral Riot URL to force cookie commit.
+            if let Some(window) = cloned_handle.get_webview_window(&window_label) {
+                let _ = window.eval("window.location.href = 'https://www.riotgames.com/';");
+            }
             false
         } else {
             true
@@ -150,100 +152,431 @@ async fn open_login_window(
             let _ = cloned_handle_for_close.emit("riot-login-closed", ());
         }
     });
-    
+
     Ok(())
 }
 
 #[tauri::command]
-async fn show_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window("riot_login") {
+async fn show_login_window(app_handle: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
+    let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
+    if let Some(window) = app_handle.get_webview_window(&window_label) {
         let _ = window.show().map_err(|e| e.to_string())?;
         let _ = window.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
+#[tauri::command]
+async fn close_login_window(app_handle: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
+    let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
+    if let Some(window) = app_handle.get_webview_window(&window_label) {
+        let _ = window.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Reads the WebView2 cookie database for a given session and extracts the
-/// Riot `ssid` cookie value (decrypted via Windows DPAPI).
+/// Riot `ssid` cookie value (decrypted via Windows DPAPI / AES-GCM).
 /// Returns `None` if the cookie is not found or cannot be decrypted.
 #[tauri::command]
 async fn get_ssid_cookie(
     app_handle: tauri::AppHandle,
     session_id: String,
+    wait_ms: Option<u64>,
 ) -> Result<Option<String>, String> {
     let config_dir = app_handle
         .path()
         .app_config_dir()
         .map_err(|e| e.to_string())?;
 
-    // WebView2 stores its cookie DB under EBWebView/Default/Network/Cookies
-    let cookie_db = config_dir
-        .join("sessions")
-        .join(&session_id)
+    read_session_cookies_with_wait(&config_dir, &session_id, wait_ms.unwrap_or(0))
+}
+
+#[tauri::command]
+async fn persist_login_session(
+    app_handle: tauri::AppHandle,
+    from_session_id: String,
+    to_session_id: String,
+) -> Result<(), String> {
+    if from_session_id == to_session_id {
+        return Ok(());
+    }
+
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    let sessions_dir = config_dir.join("sessions");
+    let source = sessions_dir.join(&from_session_id);
+    let target = sessions_dir.join(&to_session_id);
+
+    if !source.exists() {
+        return Err(format!(
+            "Login session '{}' does not exist",
+            from_session_id
+        ));
+    }
+
+    if target.exists() {
+        remove_dir_all_with_retry(&target)
+            .map_err(|e| format!("Failed to replace existing login session: {}", e))?;
+    }
+
+    copy_dir_recursive_with_retry(&source, &target)
+        .map_err(|e| format!("Failed to persist login session: {}", e))?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cookie helpers
+// ---------------------------------------------------------------------------
+
+/// Polls the WebView2 cookie database until the `ssid` cookie is found or
+/// the timeout expires.
+fn read_session_cookies_with_wait(
+    config_dir: &std::path::Path,
+    session_id: &str,
+    timeout_ms: u64,
+) -> Result<Option<String>, String> {
+    let session_dir = config_dir.join("sessions").join(session_id);
+    let cookie_db = session_dir
         .join("EBWebView")
         .join("Default")
         .join("Network")
         .join("Cookies");
 
-    if !cookie_db.exists() {
-        return Ok(None);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
+    let temp_path = config_dir
+        .join("sessions")
+        .join(format!("{}_cookies_tmp", session_id));
+
+    loop {
+        if cookie_db.exists() {
+            match std::fs::copy(&cookie_db, &temp_path) {
+                Ok(_) => {
+                    let result = read_cookies_from_db(&temp_path, &session_dir);
+                    let _ = std::fs::remove_file(&temp_path);
+
+                    if let Ok(Some(ref cookie_str)) = result {
+                        if cookie_str.contains("ssid=") {
+                            return result;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // likely locked by WebView2; keep polling until timeout
+                }
+            }
+        }
+
+        if timeout_ms == 0 || start.elapsed() >= timeout {
+            // Attempt one final read before giving up
+            if cookie_db.exists() {
+                if let Ok(_) = std::fs::copy(&cookie_db, &temp_path) {
+                    let result = read_cookies_from_db(&temp_path, &session_dir);
+                    let _ = std::fs::remove_file(&temp_path);
+                    if let Ok(Some(ref cookie_str)) = result {
+                        if cookie_str.contains("ssid=") {
+                            return result;
+                        }
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
-
-    // We need to copy the DB to a temp path because WebView2 may hold a lock on it
-    let temp_path = config_dir.join("sessions").join(format!("{}_cookies_tmp", session_id));
-    std::fs::copy(&cookie_db, &temp_path)
-        .map_err(|e| format!("Failed to copy cookie DB: {}", e))?;
-
-        let result = read_cookies_from_db(&temp_path);
-    let _ = std::fs::remove_file(&temp_path);
-    result
 }
 
-fn read_cookies_from_db(db_path: &std::path::Path) -> Result<Option<String>, String> {
+fn read_cookies_from_db(
+    db_path: &std::path::Path,
+    session_dir: &std::path::Path,
+) -> Result<Option<String>, String> {
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open cookie DB: {}", e))?;
 
-    // Query for all cookies on riotgames.com
+    #[cfg(target_os = "windows")]
+    let cookie_key = load_chromium_cookie_key(session_dir).ok();
+    #[cfg(not(target_os = "windows"))]
+    let cookie_key: Option<Vec<u8>> = {
+        let _ = session_dir;
+        None
+    };
+
+    // Query for all cookies on riotgames.com sorted by creation time so
+    // duplicates are overwritten by the newest
     let mut stmt = conn
         .prepare(
-            "SELECT name, value, encrypted_value FROM cookies \
-             WHERE host_key LIKE '%riotgames.com'",
+            "SELECT host_key, name, value, encrypted_value FROM cookies \
+             WHERE host_key LIKE '%riotgames.com' \
+             ORDER BY creation_utc ASC",
         )
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
-    let mut cookies = Vec::new();
-    let mut rows = stmt.query([])
+    let mut cookie_map = std::collections::HashMap::new();
+    let mut rows = stmt
+        .query([])
         .map_err(|e| format!("Failed to execute query: {}", e))?;
 
-    while let Some(row) = rows.next().map_err(|e| format!("Failed to fetch next row: {}", e))? {
-        let name: String = row.get(0).unwrap_or_default();
-        let value: String = row.get(1).unwrap_or_default();
-        let encrypted: Vec<u8> = row.get(2).unwrap_or_default();
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to fetch next row: {}", e))?
+    {
+        let host_key: String = row.get(0).unwrap_or_default();
+        let name: String = row.get(1).unwrap_or_default();
+        let value: String = row.get(2).unwrap_or_default();
+        let encrypted: Vec<u8> = row.get(3).unwrap_or_default();
 
         let mut cookie_value = value;
         if cookie_value.is_empty() && !encrypted.is_empty() {
             #[cfg(target_os = "windows")]
             {
-                if let Ok(decrypted) = dpapi_decrypt(&encrypted) {
-                    if let Ok(decrypted_str) = String::from_utf8(decrypted) {
-                        cookie_value = decrypted_str;
+                if encrypted.starts_with(b"v10") || encrypted.starts_with(b"v11") {
+                    // AES-256-GCM encrypted cookie (Chromium 80+)
+                    if let Some(ref key) = cookie_key {
+                        match aes_gcm_decrypt_cookie(&encrypted, key) {
+                            Ok(decrypted) => {
+                                match chromium_cookie_plaintext_to_string(&host_key, decrypted) {
+                                    Ok(decrypted_str) => {
+                                        cookie_value = decrypted_str;
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                            "Decoded cookie '{}' but value is not text: {}",
+                                            name, err
+                                        );
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("AES-GCM decrypt failed for cookie '{}' : {}", name, err);
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "Missing Chromium cookie key for encrypted cookie '{}'",
+                            name
+                        );
+                    }
+                } else {
+                    // Legacy DPAPI-encrypted cookie
+                    match dpapi_decrypt(&encrypted) {
+                        Ok(decrypted) => {
+                            match chromium_cookie_plaintext_to_string(&host_key, decrypted) {
+                                Ok(decrypted_str) => {
+                                    cookie_value = decrypted_str;
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "DPAPI decoded cookie '{}' but value is not text: {}",
+                                        name, err
+                                    );
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("DPAPI decrypt failed for cookie '{}' : {}", name, err);
+                        }
                     }
                 }
             }
         }
 
         if !name.is_empty() && !cookie_value.is_empty() {
-            cookies.push(format!("{}={}", name, cookie_value));
+            cookie_map.insert(name, cookie_value);
         }
     }
 
-    if cookies.is_empty() {
+    if cookie_map.is_empty() {
         Ok(None)
     } else {
+        let cookies: Vec<String> = cookie_map
+            .into_iter()
+            .map(|(name, value)| format!("{}={}", name, value))
+            .collect();
         Ok(Some(cookies.join("; ")))
     }
 }
 
+fn remove_dir_all_with_retry(path: &std::path::Path) -> std::io::Result<()> {
+    let mut last_error = None;
+
+    for attempt in 0..20 {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                last_error = Some(err);
+                if attempt < 19 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Other, "failed to remove directory")
+    }))
+}
+
+fn copy_dir_recursive_with_retry(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive_with_retry(&source_path, &target_path)?;
+        } else {
+            copy_file_with_retry(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_file_with_retry(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    let mut last_error = None;
+
+    for attempt in 0..20 {
+        match std::fs::copy(source, target) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                last_error = Some(err);
+                if attempt < 19 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "failed to copy file")))
+}
+
+// ---------------------------------------------------------------------------
+// Cookie decryption — Chromium AES-256-GCM + Windows DPAPI
+// ---------------------------------------------------------------------------
+
+/// Loads the AES-256 key from the WebView2 `Local State` file.  The key
+/// is stored base64-encoded inside `os_crypt.encrypted_key` and itself is
+/// DPAPI-encrypted (with a "DPAPI" prefix that must be stripped first).
+#[cfg(target_os = "windows")]
+fn load_chromium_cookie_key(session_dir: &std::path::Path) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+
+    let local_state_path = session_dir.join("EBWebView").join("Local State");
+    let raw = std::fs::read_to_string(&local_state_path)
+        .map_err(|e| format!("Failed to read Local State: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse Local State: {}", e))?;
+    let encrypted_key = json
+        .get("os_crypt")
+        .and_then(|v| v.get("encrypted_key"))
+        .and_then(|v| v.as_str())
+        .ok_or("Local State missing os_crypt.encrypted_key")?;
+    let mut key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_key)
+        .map_err(|e| format!("Failed to decode encrypted key: {}", e))?;
+
+    // Strip the "DPAPI" prefix added by Chromium
+    if key_bytes.starts_with(b"DPAPI") {
+        key_bytes.drain(..5);
+    }
+
+    dpapi_decrypt(&key_bytes)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_chromium_cookie_key(_session_dir: &std::path::Path) -> Result<Vec<u8>, String> {
+    Err("Chromium cookie key loading is only implemented on Windows".to_string())
+}
+
+/// Decrypts a v10/v11 AES-256-GCM-encrypted cookie value.
+/// Layout: "v10" | nonce (12 bytes) | ciphertext+tag
+#[cfg(target_os = "windows")]
+fn aes_gcm_decrypt_cookie(encrypted: &[u8], key: &[u8]) -> Result<Vec<u8>, String> {
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Nonce,
+    };
+
+    // 3 (prefix) + 12 (nonce) + 16 (tag) = 31 minimum
+    if encrypted.len() <= 3 + 12 + 16 {
+        return Err("Encrypted cookie is too short".to_string());
+    }
+
+    let nonce = Nonce::from_slice(&encrypted[3..15]);
+    let ciphertext_and_tag = &encrypted[15..];
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid AES key: {}", e))?;
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext_and_tag)
+        .map_err(|e| format!("AES-GCM decrypt failed: {}", e))?;
+
+    Ok(plaintext)
+}
+
+fn chromium_cookie_plaintext_to_string(
+    host_key: &str,
+    plaintext: Vec<u8>,
+) -> Result<String, String> {
+    let value_bytes = strip_chromium_host_key_hash(host_key, &plaintext);
+    String::from_utf8(value_bytes.to_vec())
+        .map_err(|e| format!("Cookie value was not UTF-8: {}", e))
+}
+
+fn strip_chromium_host_key_hash<'a>(host_key: &str, plaintext: &'a [u8]) -> &'a [u8] {
+    if plaintext.len() < 32 || host_key.is_empty() {
+        return plaintext;
+    }
+
+    use sha2::{Digest, Sha256};
+
+    let expected = Sha256::digest(host_key.as_bytes());
+    if plaintext[..32] == expected[..] {
+        &plaintext[32..]
+    } else {
+        plaintext
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_chromium_host_key_hash;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn strips_chromium_cookie_host_key_hash_prefix() {
+        let host_key = ".riotgames.com";
+        let cookie_value = b"ssid=abc123";
+        let mut plaintext = Sha256::digest(host_key.as_bytes()).to_vec();
+        plaintext.extend_from_slice(cookie_value);
+
+        assert_eq!(
+            strip_chromium_host_key_hash(host_key, &plaintext),
+            cookie_value
+        );
+    }
+
+    #[test]
+    fn leaves_plain_cookie_values_unchanged() {
+        let cookie_value = b"ssid=abc123";
+
+        assert_eq!(
+            strip_chromium_host_key_hash(".riotgames.com", cookie_value),
+            cookie_value
+        );
+    }
+}
+
+/// Decrypts data using the Windows DPAPI (CryptUnprotectData).
+/// Handles the optional "v10"/"v11" prefix that Chromium sometimes adds to
+/// DPAPI blobs.
 #[cfg(target_os = "windows")]
 fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
     use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
@@ -252,9 +585,25 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Empty encrypted data".to_string());
     }
 
+    // Chrome/Edge/WebView2 sometimes prefix DPAPI blobs with a version
+    // header like "v10" or "v11".  If present, skip the 3-byte prefix.
+    let payload: &[u8] = if data.len() > 3
+        && data[0] == b'v'
+        && data[1] == b'1'
+        && (data[2] == b'0' || data[2] == b'1')
+    {
+        &data[3..]
+    } else {
+        data
+    };
+
+    if payload.is_empty() {
+        return Err("Empty encrypted payload after stripping prefix".to_string());
+    }
+
     let mut input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
+        cbData: payload.len() as u32,
+        pbData: payload.as_ptr() as *mut u8,
     };
     let mut output = CRYPT_INTEGER_BLOB {
         cbData: 0,
@@ -262,21 +611,14 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
     };
 
     unsafe {
-        CryptUnprotectData(
-            &mut input,
-            None,
-            None,
-            None,
-            None,
-            0,
-            &mut output,
-        ).map_err(|e| format!("DPAPI decryption failed: {}", e))?;
+        CryptUnprotectData(&mut input, None, None, None, None, 0, &mut output)
+            .map_err(|e| format!("DPAPI decryption failed: {}", e))?;
     }
 
-    let result = unsafe {
-        std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec()
-    };
+    let result =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
 
+    // Free the buffer allocated by CryptUnprotectData
     #[link(name = "kernel32")]
     extern "system" {
         fn LocalFree(hmem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
@@ -289,96 +631,13 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-
-#[tauri::command]
-async fn is_portable() -> Result<bool, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir_str = exe_path.to_string_lossy().to_lowercase();
-    let is_p = !(exe_dir_str.contains("appdata\\local\\programs") || exe_dir_str.contains("program files"));
-    Ok(is_p)
-}
-
-#[tauri::command]
-async fn install_portable_update(app_handle: tauri::AppHandle, version: String) -> Result<(), String> {
-    let download_url = format!(
-        "https://github.com/akawazak/valo-project/releases/download/v{}/ValoVault.exe",
-        version
-    );
-
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_name = exe_path.file_name().ok_or("Cannot get executable name")?.to_string_lossy().to_string();
-    
-    // Create temporary directory
-    let cache_dir = app_handle.path().app_cache_dir().map_err(|e| e.to_string())?;
-    let temp_dir = cache_dir.join(format!("update_{}", version));
-    if temp_dir.exists() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    
-    let temp_exe_path = temp_dir.join("ValoVault.exe");
-
-    // Use PowerShell to download
-    let download_script = format!(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}'",
-        download_url,
-        temp_exe_path.to_string_lossy()
-    );
-    let output_download = std::process::Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &download_script])
-        .output()
-        .map_err(|e| format!("Failed to download update: {}", e))?;
-    
-    if !output_download.status.success() {
-        return Err(format!(
-            "Download failed: {}",
-            String::from_utf8_lossy(&output_download.stderr)
-        ));
-    }
-
-    // Create the update.bat script in the temp directory
-    let bat_content = format!(
-        r#"@echo off
-title ValoVault Update
-echo Waiting for {} to close...
-timeout /t 2 /nobreak > nul
-:loop
-tasklist /nh /fi "imagename eq {}" | find /i "{}" > nul
-if %errorlevel% == 0 (
-    timeout /t 1 /nobreak > nul
-    goto loop
-)
-echo Applying update...
-copy /y "{}" "{}"
-echo Relaunching...
-start "" "{}"
-exit
-"#,
-        exe_name,
-        exe_name,
-        exe_name,
-        temp_exe_path.to_string_lossy(),
-        exe_path.to_string_lossy(),
-        exe_path.to_string_lossy()
-    );
-
-    let bat_path = temp_dir.join("update.bat");
-    std::fs::write(&bat_path, bat_content).map_err(|e| e.to_string())?;
-
-    // Spawn the batch script
-    std::process::Command::new("cmd.exe")
-        .args(&["/c", "start", "", &bat_path.to_string_lossy()])
-        .spawn()
-        .map_err(|e| format!("Failed to run update script: {}", e))?;
-
-    // Exit the app immediately
-    std::process::exit(0);
-}
+// ---------------------------------------------------------------------------
+// Main application entry point
+// ---------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             child: Mutex::new(None),
@@ -388,25 +647,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_login_window,
             show_login_window,
+            close_login_window,
             get_ssid_cookie,
-            is_portable,
-            install_portable_update
+            persist_login_session,
         ])
         .setup(|app| {
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(cache_dir) = handle.path().app_cache_dir() {
-                    if let Ok(entries) = std::fs::read_dir(cache_dir) {
-                        for entry in entries.filter_map(Result::ok) {
-                            if let Some(name) = entry.file_name().to_str() {
-                                if name.starts_with("update_") {
-                                    let _ = std::fs::remove_dir_all(entry.path());
-                                }
-                            }
-                        }
-                    }
-                }
-            });
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -415,14 +660,16 @@ pub fn run() {
                 )?;
             }
 
-            let state = app.state::<AppState>();
-            match spawn_embedded_sidecar(app.handle()) {
-                Ok(child) => {
-                    *state.child.lock().unwrap() = Some(child);
-                }
-                Err(err) => {
-                    eprintln!("Failed to spawn embedded sidecar: {}", err);
-                }
+            // Safe cleanup: only remove stale temp session dirs at startup
+            if let Ok(config_dir) = app.handle().path().app_config_dir() {
+                cleanup_stale_sessions(&config_dir);
+            }
+
+            if !cfg!(dev) {
+                let state = app.state::<AppState>();
+                let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
+                let (_rx, child) = sidecar_command.spawn().expect("Failed to spawn sidecar");
+                *state.child.lock().unwrap() = Some(child);
             }
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -463,11 +710,13 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = &event {
-            let state: State<AppState> = app_handle.state();
-            if let Some(mut child) = state.child.lock().unwrap().take() {
-                let _ = child.kill();
-            };
+        if !cfg!(dev) {
+            if let RunEvent::ExitRequested { .. } = &event {
+                let state: State<AppState> = app_handle.state();
+                if let Some(child) = state.child.lock().unwrap().take() {
+                    child.kill().expect("Failed to kill sidecar");
+                };
+            }
         }
 
         if let RunEvent::WindowEvent {
