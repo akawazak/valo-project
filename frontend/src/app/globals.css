@@ -9768,3 +9768,319 @@ div#__next>div {
   color: var(--text-muted, rgba(255,255,255,0.55));
   font-size: 0.72rem;
 }
+
+/* ============================================================================
+   Profile (Rank + Match) v2 — new endpoints + sync
+   ============================================================================ */
+
+/* --- Sync indicator --- */
+.sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, rgba(255,255,255,0.55));
+  padding: 0.3rem 0.65rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 4px;
+}
+.sync-indicator .sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green, #2ecc71);
+  box-shadow: 0 0 6px rgba(46, 204, 113, 0.6);
+}
+.sync-indicator[data-inflight="true"] .sync-dot {
+  background: var(--accent, #ff4655);
+  box-shadow: 0 0 6px rgba(255, 70, 85, 0.6);
+  animation: sync-pulse 1.2s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* --- Toast --- */
+.profile-toast {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary, #f5f5f7);
+  background: rgba(255, 64, 85, 0.08);
+  border: 1px solid rgba(255, 64, 85, 0.25);
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  margin-bottom: 0.75rem;
+}
+
+/* --- Raw JSON debug block --- */
+.raw-json-block {
+  background: rgba(0,0,0,0.4);
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  padding: 1rem 1.25rem;
+  margin-top: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary, #cdd1d4);
+  max-height: 480px;
+  overflow: auto;
+}
+.raw-json-block pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.35rem 0 0 0;
+}
+
+/* --- RR history chart --- */
+.rr-chart-wrap {
+  background: var(--surface-1, #14141a);
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  padding: 0.75rem 1rem 0.5rem;
+  margin-top: 0.5rem;
+}
+.rr-chart {
+  width: 100%;
+  display: block;
+}
+.rr-chart svg {
+  display: block;
+  width: 100%;
+}
+.rr-chart-grid {
+  stroke: rgba(255,255,255,0.06);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+.rr-chart-axis-label {
+  fill: var(--text-muted, rgba(255,255,255,0.5));
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+.rr-chart-line {
+  fill: none;
+  stroke: var(--accent, #ff4655);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.rr-chart-dot {
+  fill: var(--text-secondary, #cdd1d4);
+  stroke: rgba(0,0,0,0.4);
+  stroke-width: 1;
+}
+.rr-chart-dot.win { fill: var(--green, #2ecc71); }
+.rr-chart-dot.loss { fill: var(--accent, #ff4655); }
+.rr-chart-point-label {
+  fill: var(--text-primary, #f5f5f7);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.rr-chart.empty {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  background: rgba(255,255,255,0.02);
+  border: 1px dashed var(--border, rgba(255,255,255,0.1));
+}
+.rr-chart-empty-msg {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted, rgba(255,255,255,0.5));
+}
+
+/* --- Filter bar --- */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--surface-1, #14141a);
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  font-size: 0.82rem;
+}
+.filter-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #cdd1d4);
+}
+.filter-bar-label select {
+  min-width: 130px;
+}
+.filter-bar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #cdd1d4);
+  cursor: pointer;
+}
+.filter-bar-check input { accent-color: var(--accent, #ff4655); }
+.filter-bar-check input:disabled { opacity: 0.4; }
+
+/* --- Match history expand --- */
+.match-card-wrap {
+  display: flex;
+  flex-direction: column;
+}
+.match-card-wrap + .match-card-wrap { margin-top: 0.5rem; }
+.match-card-wrap.expanded .match-history-row {
+  border-bottom: none;
+}
+.match-history-row {
+  cursor: pointer;
+}
+.match-expand-btn {
+  background: transparent;
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  color: var(--text-secondary, #cdd1d4);
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  transition: all var(--transition, 0.18s ease);
+  align-self: center;
+}
+.match-expand-btn:hover {
+  border-color: var(--accent, #ff4655);
+  color: var(--text-primary, #f5f5f7);
+}
+
+.expanded-detail-row {
+  background: var(--surface-2, #1a1a22);
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-top: none;
+  padding: 0.85rem 1rem 1rem;
+  margin-top: -0.5rem;
+  margin-bottom: 0;
+}
+.expanded-detail-header {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #cdd1d4);
+  margin-bottom: 0.5rem;
+}
+.expanded-players-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.45rem;
+}
+.expanded-player {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-left: 3px solid var(--text-muted, rgba(255,255,255,0.2));
+  background: rgba(255,255,255,0.02);
+  font-size: 0.78rem;
+}
+.expanded-player.win { border-left-color: var(--green, #2ecc71); }
+.expanded-player.loss { border-left-color: var(--accent, #ff4655); }
+.expanded-player-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.4);
+}
+.expanded-player-name {
+  font-weight: 600;
+  color: var(--text-primary, #f5f5f7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expanded-player-kda {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #cdd1d4);
+  font-size: 0.74rem;
+}
+.expanded-player-ratio {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #ff4655);
+  font-size: 0.74rem;
+}
+
+/* --- Stats tables (agent / map) --- */
+.stats-table-empty {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted, rgba(255,255,255,0.5));
+  padding: 0.75rem 0.25rem;
+}
+.stats-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  background: var(--surface-1, #14141a);
+}
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.stats-table thead th {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted, rgba(255,255,255,0.55));
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+}
+.stats-table tbody td {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.05));
+  color: var(--text-primary, #f5f5f7);
+  vertical-align: middle;
+}
+.stats-table tbody tr:last-child td { border-bottom: none; }
+.stats-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.stats-table-icon-col { width: 48px; }
+.stats-table-icon-cell { width: 48px; padding-right: 0 !important; }
+.stats-table-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  color: var(--text-secondary, #cdd1d4);
+  white-space: nowrap;
+}
+.stats-table-agent-name {
+  font-weight: 600;
+  color: var(--text-primary, #f5f5f7);
+}
+.stats-table-agent-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.4);
+}
+.stats-table-map-thumb {
+  width: 48px;
+  height: 28px;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.4);
+  object-fit: cover;
+}
+.wr-good { color: var(--green, #2ecc71); font-weight: 700; }
+.wr-bad  { color: var(--accent, #ff4655); font-weight: 700; }
