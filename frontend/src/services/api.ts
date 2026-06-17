@@ -632,3 +632,325 @@ export async function getCompetitiveUpdates(startIndex = 0, endIndex = 20): Prom
     }
     return response.json();
 }
+
+// ============================================================================
+// Profile (local-cache-backed /v1/profile/* endpoints)
+// ============================================================================
+// These endpoints are served by the local Go backend, backed by a persistent
+// SQLite cache. They are distinct from /v1/career/* (which hits Riot live).
+// Auth is supplied via X-Riot-* headers by fetchWithAuth().
+// All field names below mirror backend/tracking/types.go exactly.
+
+export interface ProfileCurrentRank {
+    competitiveTier: number;
+    tierName: string;
+    rankedRating: number;
+    numberOfWins: number;
+    numberOfGames: number;
+    leaderboardRank: number;
+}
+
+export interface ProfilePeakRank {
+    competitiveTier: number;
+    tierName: string;
+    seasonId: string;
+}
+
+export interface ProfileAccountSummary {
+    level: number;
+    totalXp: number;
+}
+
+export interface ProfileRRSnapshot {
+    matchId: string;
+    seasonId: string;
+    tierBefore: number;
+    tierAfter: number;
+    rrBefore: number;
+    rrAfter: number;
+    rrEarned: number;
+    afkPenalty: number;
+    matchStartTime: number;
+}
+
+export interface ProfileSeasonSummary {
+    matches: number;
+    wins: number;
+    winrate: number;
+    avgKda: number;
+    avgHsPct: number;
+    topAgent: string;
+    topAgentCharacterId: string;
+}
+
+export interface ProfileOverview {
+    puuid: string;
+    region: string;
+    currentSeasonId: string;
+    currentRank: ProfileCurrentRank;
+    peakRank: ProfilePeakRank;
+    account: ProfileAccountSummary;
+    lastDeltas: ProfileRRSnapshot[];
+    seasonSummary: ProfileSeasonSummary | null;
+}
+
+export interface ProfileRRHistory {
+    puuid: string;
+    region: string;
+    seasonId: string;
+    snapshots: ProfileRRSnapshot[];
+}
+
+export interface ProfileAgentStat {
+    characterId: string;
+    matches: number;
+    wins: number;
+    winrate: number;
+    kills: number;
+    deaths: number;
+    assists: number;
+    kd: number;
+    kda: number;
+    headshots: number;
+    hsPct: number;
+    timePlayedMillis: number;
+}
+
+export interface ProfileAgentStatsResponse {
+    puuid: string;
+    region: string;
+    queue: string;
+    agents: ProfileAgentStat[];
+}
+
+export interface ProfileMapStat {
+    mapID: string;
+    matches: number;
+    wins: number;
+    winrate: number;
+}
+
+export interface ProfileMapStatsResponse {
+    puuid: string;
+    region: string;
+    queue: string;
+    maps: ProfileMapStat[];
+}
+
+export interface ProfilePlayerStats {
+    characterId: string;
+    kills: number;
+    deaths: number;
+    assists: number;
+    score: number;
+    headshots: number;
+    bodyshots: number;
+    legshots: number;
+    damageDealt: number;
+    roundsPlayed: number;
+    isLocal: boolean;
+    kd: number;
+    kda: number;
+    adr: number;
+    acs: number;
+    hsPct: number;
+}
+
+export interface ProfileMatchInfo {
+    matchId: string;
+    mapID: string;
+    gameStartMillis: number;
+    gameLengthMillis: number;
+    isRanked: boolean;
+    queueID: string;
+    gameMode: string;
+    seasonId: string;
+    completionState: string;
+    blueRoundsWon: number;
+    redRoundsWon: number;
+    blueWins: boolean;
+}
+
+export interface ProfileMatchSummary {
+    matchId: string;
+    queueID: string;
+    mapID: string;
+    gameMode: string;
+    gameStartMillis: number;
+    gameLengthMillis: number;
+    seasonId: string;
+    isRanked: boolean;
+    win: boolean;
+    localPlayer: ProfilePlayerStats;
+}
+
+export interface ProfileMatchHistoryResponse {
+    puuid: string;
+    region: string;
+    startIndex: number;
+    endIndex: number;
+    total: number;
+    queue: string;
+    matches: ProfileMatchSummary[];
+}
+
+export interface ProfileMatchDetails {
+    matchId: string;
+    matchInfo: ProfileMatchInfo;
+    players: ProfilePlayerStats[];
+    servedFrom: string;
+}
+
+export interface ProfileSyncStatus {
+    puuid: string;
+    lastSyncedAt: number;
+    inFlight: boolean;
+    totalMatches: number;
+}
+
+export interface ProfileSyncResponse {
+    started: boolean;
+    inFlight?: boolean;
+    startedAt?: number;
+}
+
+function appendProfileParams(
+    params: URLSearchParams,
+    opts: { puuid?: string; region?: string },
+): void {
+    if (opts.puuid) params.set("puuid", opts.puuid);
+    if (opts.region) params.set("region", opts.region);
+}
+
+export async function getProfileOverview(
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileOverview> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/overview${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch profile overview.');
+    }
+    return response.json();
+}
+
+export async function getRRHistory(
+    seasonId?: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileRRHistory> {
+    const params = new URLSearchParams();
+    if (seasonId) params.set("seasonId", seasonId);
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/rr-history${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch RR history.');
+    }
+    return response.json();
+}
+
+export async function getAgentStats(
+    queue?: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileAgentStatsResponse> {
+    const params = new URLSearchParams();
+    if (queue) params.set("queue", queue);
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/agent-stats${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch agent stats.');
+    }
+    return response.json();
+}
+
+export async function getMapStats(
+    queue?: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileMapStatsResponse> {
+    const params = new URLSearchParams();
+    if (queue) params.set("queue", queue);
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/map-stats${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch map stats.');
+    }
+    return response.json();
+}
+
+export async function getProfileMatchHistory(
+    startIndex = 0,
+    endIndex = 20,
+    queue?: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileMatchHistoryResponse> {
+    const params = new URLSearchParams({
+        startIndex: String(startIndex),
+        endIndex: String(endIndex),
+    });
+    if (queue) params.set("queue", queue);
+    appendProfileParams(params, opts);
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/match-history?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch profile match history.');
+    }
+    return response.json();
+}
+
+export async function getProfileMatchDetails(
+    matchID: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileMatchDetails> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/match-details/${encodeURIComponent(matchID)}${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch match details.');
+    }
+    return response.json();
+}
+
+export async function postProfileSync(
+    opts: { puuid?: string; region?: string; force?: boolean } = {},
+): Promise<ProfileSyncResponse> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    if (opts.force) params.set("force", "true");
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/sync${qs ? `?${qs}` : ""}`, {
+        method: "POST",
+    });
+    // 202 = sync already in flight; treat as a normal response payload.
+    if (response.status === 202 || response.ok) {
+        try {
+            return await response.json();
+        } catch {
+            return { started: false, inFlight: true };
+        }
+    }
+    const text = await response.text();
+    throw new Error(text || 'Failed to start profile sync.');
+}
+
+export async function getProfileSyncStatus(
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileSyncStatus> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/sync-status${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch sync status.');
+    }
+    return response.json();
+}
