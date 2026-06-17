@@ -3,9 +3,14 @@ package handlers
 import (
 	"backend/presets"
 	"backend/tick"
+	"backend/tracking"
+	"database/sql"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/truearken/valclient/valclient"
@@ -15,6 +20,22 @@ type Handler struct {
 	Val    *valclient.ValClient
 	Ticker *tick.Ticker
 	mu     sync.RWMutex // also used by remote.go
+
+	// trackingConn holds the lazy-initialized handle to the local
+	// tracking DB (backend/tracking). The first call to
+	// h.trackingDB() opens the DB; subsequent calls reuse the cached
+	// handle. Protected by mu for safe concurrent access.
+	//
+	// trackingAppDir is the app config dir used by the tracking
+	// package for raw-match JSON persistence.
+	//
+	// syncInFlight tracks puuids with an active background sync so
+	// duplicate POST /v1/profile/sync calls return 202 even when
+	// different SyncManager instances (we construct one per request
+	// so the per-puuid Riot fetcher is request-scoped) are involved.
+	syncInFlight   map[string]struct{}
+	trackingConn   *sql.DB
+	trackingAppDir string
 }
 
 func NewHandler(Val *valclient.ValClient) *Handler {
@@ -32,6 +53,99 @@ func (h *Handler) SetTicker(ticker *tick.Ticker) {
 func (h *Handler) RestartTicker(newVal *valclient.ValClient) {
 	h.Ticker.Stop()
 	h.Ticker.Start()
+}
+
+// trackingDB returns the lazily-initialized tracking DB handle. The
+// DB lives at <os.UserConfigDir()>/valovault/tracking.db per the
+// design doc §0. On first call it creates the dir + opens the DB.
+// Concurrent callers all block on the mutex; subsequent calls reuse
+// the cached handle.
+func (h *Handler) trackingDB() (*sql.DB, error) {
+	h.mu.RLock()
+	if h.trackingConn != nil {
+		defer h.mu.RUnlock()
+		return h.trackingConn, nil
+	}
+	h.mu.RUnlock()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// Double-check after acquiring the write lock.
+	if h.trackingConn != nil {
+		return h.trackingConn, nil
+	}
+
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	dbDir := filepath.Join(configDir, "valovault")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	db, err := tracking.OpenTrackingDB(dbDir)
+	if err != nil {
+		return nil, err
+	}
+	h.trackingConn = db
+	h.trackingAppDir = dbDir
+	log.Printf("tracking: opened DB at %s", filepath.Join(dbDir, "tracking.db"))
+	return h.trackingConn, nil
+}
+
+// trackingSyncManager returns the lazily-initialized SyncManager
+// bound to the same DB returned by trackingDB(). The fetcher is
+// created on demand from the per-request auth headers — the
+// SyncManager is per-request, not per-process, because the Riot
+// fetcher must carry the calling user's tokens. The per-puuid mutex
+// inside the manager still prevents the same user from triggering
+// two concurrent syncs (e.g. from double-clicking the Sync button).
+func (h *Handler) trackingSyncManagerForRequest(r *http.Request) (*tracking.SyncManager, error) {
+	db, err := h.trackingDB()
+	if err != nil {
+		return nil, err
+	}
+	headers := r.Header
+	return tracking.NewSyncManager(db, tracking.NewRiotFetcher(headers), h.trackingAppDir), nil
+}
+
+// isSyncInFlight reports whether a background sync is currently
+// running for the given puuid. Backed by a per-process map so the
+// answer is consistent across requests (and across per-request
+// SyncManager instances).
+func (h *Handler) isSyncInFlight(puuid string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.syncInFlight == nil {
+		return false
+	}
+	_, ok := h.syncInFlight[puuid]
+	return ok
+}
+
+// markSyncInFlight records that a sync is running for the given
+// puuid. Returns true if the puuid was not previously in flight
+// (caller may proceed); false if it was already in flight.
+func (h *Handler) markSyncInFlight(puuid string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.syncInFlight == nil {
+		h.syncInFlight = map[string]struct{}{}
+	}
+	if _, ok := h.syncInFlight[puuid]; ok {
+		return false
+	}
+	h.syncInFlight[puuid] = struct{}{}
+	return true
+}
+
+// unmarkSyncInFlight clears the in-flight flag for the given puuid.
+// Called from a goroutine that monitors the SyncManager's run.
+func (h *Handler) unmarkSyncInFlight(puuid string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.syncInFlight, puuid)
 }
 
 type OwnedSkinsResponse struct {

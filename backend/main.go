@@ -69,6 +69,18 @@ func main() {
 	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
 	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
 
+	// /v1/profile/* — rank tracker + match history + sync control
+	// (see valovault/.mavis/plans/tracking-design.md §2).
+	mux.HandleFunc("GET /v1/profile/overview", h.GetProfileOverview)
+	mux.HandleFunc("GET /v1/profile/rr-history", h.GetRRHistory)
+	mux.HandleFunc("GET /v1/profile/agent-stats", h.GetAgentStats)
+	mux.HandleFunc("GET /v1/profile/map-stats", h.GetMapStats)
+	mux.HandleFunc("GET /v1/profile/match-history", h.GetProfileMatchHistory)
+	// Match details: ServeMux exact prefix + handler extracts match ID.
+	mux.HandleFunc("GET /v1/profile/match-details/", h.GetProfileMatchDetails)
+	mux.HandleFunc("POST /v1/profile/sync", h.PostProfileSync)
+	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
+
 	slog.Info("starting server")
 	if err := http.ListenAndServe(":31719", logMiddleware(corsMiddleware(mux))); err != nil {
 		panic(err)
