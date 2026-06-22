@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/truearken/valclient/valclient"
@@ -39,7 +40,11 @@ type LoadoutItemV1 struct {
 }
 
 func Get() ([]*PresetV1, error) {
-	data, err := GetRaw()
+	return GetForOwner("")
+}
+
+func GetForOwner(owner string) ([]*PresetV1, error) {
+	data, err := GetRawForOwner(owner)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +58,11 @@ func Get() ([]*PresetV1, error) {
 }
 
 func GetRaw() ([]byte, error) {
-	path, err := getPath()
+	return GetRawForOwner("")
+}
+
+func GetRawForOwner(owner string) ([]byte, error) {
+	path, err := getPath(owner)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +76,11 @@ func GetRaw() ([]byte, error) {
 }
 
 func SaveRaw(bytes []byte) error {
-	path, err := getPath()
+	return SaveRawForOwner("", bytes)
+}
+
+func SaveRawForOwner(owner string, bytes []byte) error {
+	path, err := getPath(owner)
 	if err != nil {
 		return err
 	}
@@ -165,7 +178,7 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 	return nil
 }
 
-func getPath() (string, error) {
+func getPath(owner string) (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -174,6 +187,17 @@ func getPath() (string, error) {
 	if err := os.MkdirAll(valovaultDir, 0755); err != nil {
 		return "", err
 	}
-	return filepath.Join(valovaultDir, "presets_v1.json"), nil
+	owner = sanitizeOwner(owner)
+	if owner == "" {
+		return filepath.Join(valovaultDir, "presets_v1.json"), nil
+	}
+	return filepath.Join(valovaultDir, "presets_"+owner+"_v1.json"), nil
 }
 
+func sanitizeOwner(owner string) string {
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	if owner == "" {
+		return ""
+	}
+	return regexp.MustCompile(`[^a-z0-9_-]+`).ReplaceAllString(owner, "")
+}

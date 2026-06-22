@@ -17,6 +17,10 @@ package tracking
 // Derived fields (KD, KDA, ADR, ACS, HSPct) are precomputed on the
 // backend at row-serialization time (see design doc §3).
 type PlayerStats struct {
+	Subject      string  `json:"subject"`
+	TeamID       string  `json:"teamId"`
+	GameName     string  `json:"gameName"`
+	TagLine      string  `json:"tagLine"`
 	CharacterID  string  `json:"characterId"`
 	Kills        int     `json:"kills"`
 	Deaths       int     `json:"deaths"`
@@ -24,12 +28,13 @@ type PlayerStats struct {
 	Score        int     `json:"score"`
 	Headshots    int     `json:"headshots"`
 	Bodyshots    int     `json:"bodyshots"`
-	Legshots     int     `json:"legshots"`
-	DamageDealt  int     `json:"damageDealt"`
-	RoundsPlayed int     `json:"roundsPlayed"`
-	IsLocal      bool    `json:"isLocal"`
-	KD           float64 `json:"kd"`
-	KDA          float64 `json:"kda"`
+	Legshots        int     `json:"legshots"`
+	DamageDealt     int     `json:"damageDealt"`
+	RoundsPlayed    int     `json:"roundsPlayed"`
+	IsLocal         bool    `json:"isLocal"`
+	CompetitiveTier int     `json:"competitiveTier"`
+	KD              float64 `json:"kd"`
+	KDA             float64 `json:"kda"`
 	ADR          float64 `json:"adr"`
 	ACS          float64 `json:"acs"`
 	HSPct        float64 `json:"hsPct"`
@@ -46,11 +51,14 @@ type MatchSummary struct {
 	SeasonID         string      `json:"seasonId"`
 	IsRanked         bool        `json:"isRanked"`
 	Win              bool        `json:"win"`
+	TierAfter        int         `json:"tierAfter"`
+	RREarned         int         `json:"rrEarned"`
 	LocalPlayer      PlayerStats `json:"localPlayer"`
 }
 
 // RRSnapshot is one row of `rr_snapshots` plus the API-shaped JSON.
 type RRSnapshot struct {
+	Puuid          string `json:"puuid"`
 	MatchID        string `json:"matchId"`
 	SeasonID       string `json:"seasonId"`
 	TierBefore     int    `json:"tierBefore"`
@@ -105,10 +113,10 @@ type MatchInfo struct {
 
 // MatchDetails is the payload of `GET /v1/profile/match-details/:matchID`.
 type MatchDetails struct {
-	MatchID    string         `json:"matchId"`
-	MatchInfo  MatchInfo      `json:"matchInfo"`
-	Players    []PlayerStats  `json:"players"`
-	ServedFrom string         `json:"servedFrom"`
+	MatchID    string        `json:"matchId"`
+	MatchInfo  MatchInfo     `json:"matchInfo"`
+	Players    []PlayerStats `json:"players"`
+	ServedFrom string        `json:"servedFrom"`
 }
 
 // CurrentRank mirrors the Riot
@@ -135,6 +143,15 @@ type AccountSummary struct {
 	TotalXp int `json:"totalXp"`
 }
 
+type RankActSummary struct {
+	SeasonID     string `json:"seasonId"`
+	Wins         int    `json:"wins"`
+	Games        int    `json:"games"`
+	RankedRating int    `json:"rankedRating"`
+	PeakRank     int    `json:"peakRank"`
+	FinalRank    int    `json:"finalRank"`
+}
+
 // SeasonSummary is the aggregates block of `GET /v1/profile/overview`.
 type SeasonSummary struct {
 	Matches             int     `json:"matches"`
@@ -148,14 +165,19 @@ type SeasonSummary struct {
 
 // Overview is the payload of `GET /v1/profile/overview`.
 type Overview struct {
-	Puuid           string          `json:"puuid"`
-	Region          string          `json:"region"`
-	CurrentSeasonID string          `json:"currentSeasonId"`
-	CurrentRank     CurrentRank     `json:"currentRank"`
-	PeakRank        PeakRank        `json:"peakRank"`
-	Account         AccountSummary  `json:"account"`
-	LastDeltas      []RRSnapshot    `json:"lastDeltas"`
-	SeasonSummary   *SeasonSummary  `json:"seasonSummary"`
+	Puuid                   string           `json:"puuid"`
+	Region                  string           `json:"region"`
+	CurrentSeasonID         string           `json:"currentSeasonId"`
+	CurrentRank             CurrentRank      `json:"currentRank"`
+	PeakRank                PeakRank         `json:"peakRank"`
+	Account                 AccountSummary   `json:"account"`
+	LastDeltas              []RRSnapshot     `json:"lastDeltas"`
+	RankActs                []RankActSummary `json:"rankActs"`
+	GameName                string           `json:"gameName,omitempty"`
+	TagLine                 string           `json:"tagLine,omitempty"`
+	LastCacheSyncedAt       int64            `json:"lastCacheSyncedAt"`
+	LastLiveRankRefreshedAt int64            `json:"lastLiveRankRefreshedAt"`
+	SeasonSummary           *SeasonSummary   `json:"seasonSummary"`
 }
 
 // SyncState is one row of `sync_state`.
@@ -167,10 +189,14 @@ type SyncState struct {
 
 // SyncStatus is the payload of `GET /v1/profile/sync-status`.
 type SyncStatus struct {
-	Puuid        string `json:"puuid"`
-	LastSyncedAt int64  `json:"lastSyncedAt"`
-	InFlight     bool   `json:"inFlight"`
-	TotalMatches int    `json:"totalMatches"`
+	Puuid          string `json:"puuid"`
+	Status         string `json:"status"`
+	LastSyncedAt   int64  `json:"lastSyncedAt"`
+	LastFinishedAt int64  `json:"lastFinishedAt"`
+	InFlight       bool   `json:"inFlight"`
+	TotalMatches   int    `json:"totalMatches"`
+	ErrorKind      string `json:"errorKind,omitempty"`
+	LastError      string `json:"lastError,omitempty"`
 }
 
 // --- internal row types used by db.go ---
@@ -204,6 +230,8 @@ type PlayerRow struct {
 	MatchID         string
 	Subject         string
 	TeamID          string
+	GameName        string
+	TagLine         string
 	CharacterID     string
 	AccountLevel    int
 	CompetitiveTier int

@@ -24,13 +24,12 @@ var DefaultSettings = &Settings{
 func Get() (*Settings, error) {
 	data, err := GetRaw()
 	if err != nil {
+		return nil, err
 	}
-
 	settings := new(Settings)
 	if err := json.Unmarshal(data, settings); err != nil {
 		return nil, err
 	}
-
 	return settings, nil
 }
 

@@ -1,15 +1,51 @@
 import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot, RiotAccount } from '@/lib/types';
 import { LocalClientError } from '@/lib/errors';
-import { fetch } from '@tauri-apps/plugin-http';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
 const PUBLIC_API_TIMEOUT_MS = 8000;
+
+export async function appFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    return window.fetch(input, init);
+}
+
+/**
+ * Activate an account in localStorage: writes riot_puuid / riot_region /
+ * riot_access_token / riot_entitlements. Used by both the login card
+ * (initial local-client login) and the DataContext switch/refresh paths.
+ *
+ * Note: tokens with `expiresAt` already in the past are NOT written —
+ * the caller is expected to use the active Riot account through local
+ * client SSO in that case.
+ */
+export function activateAccount(account: {
+    puuid: string;
+    accessToken: string;
+    entitlementsToken: string;
+    expiresAt?: number;
+    region: string;
+}) {
+    localStorage.setItem("riot_puuid", account.puuid);
+    localStorage.setItem("riot_region", account.region);
+    const expiresAt = account.expiresAt ?? 0;
+    if (expiresAt > 0 && Date.now() >= expiresAt - 60_000) {
+        localStorage.removeItem("riot_access_token");
+        localStorage.removeItem("riot_entitlements");
+    } else if (account.accessToken) {
+        localStorage.setItem("riot_access_token", account.accessToken);
+        localStorage.setItem("riot_entitlements", account.entitlementsToken);
+    } else {
+        // No tokens yet — likely a local-client-only account. Clear so the
+        // storefront fetch doesn't send empty Bearer headers.
+        localStorage.removeItem("riot_access_token");
+        localStorage.removeItem("riot_entitlements");
+    }
+}
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEOUT_MS): Promise<T> {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await fetch(url, { signal: controller.signal });
+        const response = await appFetch(url, { signal: controller.signal });
         if (!response.ok) {
             throw new Error(`Request failed with status ${response.status}`);
         }
@@ -36,7 +72,7 @@ async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response>
             }
         }
     }
-    return fetch(url, { ...init, headers });
+    return appFetch(url, { ...init, headers });
 }
 
 export interface HealthStatus {
@@ -47,7 +83,7 @@ export interface HealthStatus {
 
 export async function getHealth(): Promise<HealthStatus> {
     try {
-        const response = await fetch(LOCAL_URL + '/health');
+        const response = await appFetch(LOCAL_URL + '/health');
         if (!response.ok) {
             return { online: false, localClientActive: false, localPuuid: "" };
         }
@@ -70,7 +106,7 @@ export interface LocalAccountResponse {
 }
 
 export async function getLocalAccount(): Promise<LocalAccountResponse> {
-    const response = await fetch(LOCAL_URL + '/accounts/local');
+    const response = await appFetch(LOCAL_URL + '/accounts/local');
     if (!response.ok) {
         const text = await response.text();
         throw new Error(text || 'Failed to fetch local game details.');
@@ -137,8 +173,7 @@ export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
             sprays: (data.sprays ?? []) as SpraySlot[],
             identity: data.identity as IdentityV1 | undefined,
         };
-    } catch (error) {
-        console.error(error);
+    } catch {
         throw new LocalClientError();
     }
 }
@@ -210,7 +245,7 @@ export async function getOwnedAgents(): Promise<OwnedAgentsResponse> {
 
 export async function getPresets(): Promise<Preset[]> {
     try {
-        const response = await fetch(LOCAL_URL+'/presets');
+        const response = await fetchWithAuth(LOCAL_URL+'/presets');
         if (!response.ok) {
             throw new Error('Failed to fetch presets. The local client might not be running or there was a server error.');
         }
@@ -223,7 +258,7 @@ export async function getPresets(): Promise<Preset[]> {
 
 export async function savePresets(presets: Preset[]): Promise<void> {
     try {
-        const response = await fetch(LOCAL_URL+'/presets', {
+        const response = await fetchWithAuth(LOCAL_URL+'/presets', {
             method: 'POST',
             body: JSON.stringify(presets),
         });
@@ -238,7 +273,7 @@ export async function savePresets(presets: Preset[]): Promise<void> {
 
 export async function getPersistedAccounts(): Promise<RiotAccount[]> {
     try {
-        const response = await fetch(LOCAL_URL + '/accounts');
+        const response = await appFetch(LOCAL_URL + '/accounts');
         if (!response.ok) return [];
         const data = await response.json();
         return Array.isArray(data) ? data as RiotAccount[] : [];
@@ -249,7 +284,7 @@ export async function getPersistedAccounts(): Promise<RiotAccount[]> {
 
 export async function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
     try {
-        await fetch(LOCAL_URL + '/accounts', {
+        await appFetch(LOCAL_URL + '/accounts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(accounts),
@@ -281,7 +316,7 @@ export async function applyLoadout(request: ApplyLoadoutRequest): Promise<void> 
 }
 
 export async function getAuthUrl(): Promise<{ auth_url: string }> {
-    const response = await fetch(LOCAL_URL + '/auth/url');
+    const response = await appFetch(LOCAL_URL + '/auth/url');
     if (!response.ok) throw new Error('Failed to get Riot login URL.');
     return response.json();
 }
@@ -305,7 +340,7 @@ export interface ReauthTokenResponse {
 }
 
 export async function submitTokenUrl(url: string): Promise<AuthTokenResponse> {
-    const response = await fetch(LOCAL_URL + '/auth/token', {
+    const response = await appFetch(LOCAL_URL + '/auth/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
@@ -318,7 +353,7 @@ export async function submitTokenUrl(url: string): Promise<AuthTokenResponse> {
 }
 
 export async function refreshRiotSession(cookies: string): Promise<ReauthTokenResponse> {
-    const response = await fetch(LOCAL_URL + '/auth/ssid-reauth', {
+    const response = await appFetch(LOCAL_URL + '/auth/ssid-reauth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cookies }),
@@ -450,7 +485,7 @@ export interface PlayerMMRResponse {
         RankedRatingEarned: number;
         AFKPenalty: number;
         // ... other fields preserved as-is
-        [key: string]: any;
+        [key: string]: unknown;
     };
     QueueSkills?: {
         [queue: string]: {
@@ -471,14 +506,14 @@ export interface PlayerMMRResponse {
                     RankedRatingPeak: number;
                     PeakRank: number;
                     Wins: number;
-                    [key: string]: any;
+                    [key: string]: unknown;
                 };
             };
-            [key: string]: any;
+            [key: string]: unknown;
         };
     };
-    LatestPlacement?: any;
-    [key: string]: any;
+    LatestPlacement?: unknown;
+    [key: string]: unknown;
 }
 
 export interface AccountXPResponse {
@@ -498,9 +533,9 @@ export interface AccountXPResponse {
         TierAfterChange?: number;
         LevelBeforeChange?: number;
         LevelAfterChange?: number;
-        [key: string]: any;
+        [key: string]: unknown;
     }>;
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
 export interface MatchHistoryResponse {
@@ -524,7 +559,7 @@ export interface MatchHistoryResponse {
         Deaths?: number;
         Assists?: number;
         Score?: number;
-        [key: string]: any;
+        [key: string]: unknown;
     }>;
 }
 
@@ -549,18 +584,18 @@ export interface MatchDetailsResponse {
             roundsWon: number;
             roundsLost: number;
             numPoints: number;
-            [key: string]: any;
+            [key: string]: unknown;
         }>;
         // Sometimes present
         winningTeam?: string;
-        [key: string]: any;
+        [key: string]: unknown;
     };
     players: Array<{
         subject: string;
         gameName: string;
         tagLine: string;
         teamId: string;
-        platformInfo?: any;
+        platformInfo?: unknown;
         partyId?: string;
         characterId: string;
         stats: {
@@ -571,18 +606,18 @@ export interface MatchDetailsResponse {
             assists: number;
             playtimeMillis: number;
             abilityCasts?: { [ability: string]: number };
-            [key: string]: any;
+            [key: string]: unknown;
         };
         competitiveTier: number;
         accountLevel: number;
         // Premade party size from same team (if available)
-        premierPresenceInfo?: any;
-        [key: string]: any;
+        premierPresenceInfo?: unknown;
+        [key: string]: unknown;
     }>;
-    coaches?: any[];
-    teams?: any[];
+    coaches?: unknown[];
+    teams?: unknown[];
     // Sometimes 'roundResults' / 'kills' are huge — we ignore them in this client
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
 export async function getPlayerMMR(): Promise<PlayerMMRResponse> {
@@ -623,7 +658,7 @@ export async function getMatchDetails(matchID: string): Promise<MatchDetailsResp
     return response.json();
 }
 
-export async function getCompetitiveUpdates(startIndex = 0, endIndex = 20): Promise<any> {
+export async function getCompetitiveUpdates(startIndex = 0, endIndex = 20): Promise<unknown> {
     const params = new URLSearchParams({ startIndex: String(startIndex), endIndex: String(endIndex) });
     const response = await fetchWithAuth(`${LOCAL_URL}/career/competitive-updates?${params.toString()}`);
     if (!response.ok) {
@@ -661,6 +696,15 @@ export interface ProfileAccountSummary {
     totalXp: number;
 }
 
+export interface ProfileRankActSummary {
+    seasonId: string;
+    wins: number;
+    games: number;
+    rankedRating: number;
+    peakRank: number;
+    finalRank: number;
+}
+
 export interface ProfileRRSnapshot {
     matchId: string;
     seasonId: string;
@@ -686,11 +730,14 @@ export interface ProfileSeasonSummary {
 export interface ProfileOverview {
     puuid: string;
     region: string;
+    gameName?: string;
+    tagLine?: string;
     currentSeasonId: string;
     currentRank: ProfileCurrentRank;
     peakRank: ProfilePeakRank;
     account: ProfileAccountSummary;
     lastDeltas: ProfileRRSnapshot[];
+    rankActs: ProfileRankActSummary[];
     seasonSummary: ProfileSeasonSummary | null;
 }
 
@@ -738,6 +785,10 @@ export interface ProfileMapStatsResponse {
 }
 
 export interface ProfilePlayerStats {
+    subject: string;
+    teamId: string;
+    gameName: string;
+    tagLine: string;
     characterId: string;
     kills: number;
     deaths: number;
@@ -749,6 +800,7 @@ export interface ProfilePlayerStats {
     damageDealt: number;
     roundsPlayed: number;
     isLocal: boolean;
+    competitiveTier: number;
     kd: number;
     kda: number;
     adr: number;
@@ -781,6 +833,8 @@ export interface ProfileMatchSummary {
     seasonId: string;
     isRanked: boolean;
     win: boolean;
+    tierAfter: number;
+    rrEarned: number;
     localPlayer: ProfilePlayerStats;
 }
 
@@ -806,6 +860,7 @@ export interface ProfileSyncStatus {
     lastSyncedAt: number;
     inFlight: boolean;
     totalMatches: number;
+    lastError?: string;
 }
 
 export interface ProfileSyncResponse {
@@ -951,6 +1006,61 @@ export async function getProfileSyncStatus(
     if (!response.ok) {
         const text = await response.text();
         throw new Error(text || 'Failed to fetch sync status.');
+    }
+    return response.json();
+}
+
+export interface LiveMatchResponse {
+    phase: "pregame" | "coregame" | "none";
+    matchId: string;
+    mapId: string;
+    queueId: string;
+    timeLeft: number;
+    allyTeam?: LivePlayer[];
+    enemyTeam?: LivePlayer[];
+}
+
+export interface LivePlayer {
+    puuid: string;
+    name: string;
+    agentId: string;
+    selectionState: "selected" | "locked" | "none";
+    accountLevel: number;
+    cardId: string;
+    isLocal: boolean;
+    competitiveTier: number;
+    rankedRating: number;
+}
+
+export async function getLiveMatch(): Promise<LiveMatchResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/livematch');
+        if (!response.ok) {
+            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0 };
+        }
+        return await response.json();
+    } catch {
+        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0 };
+    }
+}
+
+export interface RiotMissionsResponse {
+    Missions: {
+        ID: string;
+        Objectives: Record<string, number>;
+        Complete: boolean;
+        ExpirationTime: string;
+    }[];
+    MissionMetadata: {
+        WeeklyRefillTime: string;
+    };
+}
+
+export async function getMissions(): Promise<RiotMissionsResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/missions');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch player missions.');
     }
     return response.json();
 }

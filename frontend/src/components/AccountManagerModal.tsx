@@ -32,6 +32,7 @@ export default function AccountManagerModal({
     const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
     const [bulkProgressCurrent, setBulkProgressCurrent] = useState(0);
     const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
+    const refreshTimeoutMs = 30_000;
 
     if (!isOpen) return null;
 
@@ -44,7 +45,10 @@ export default function AccountManagerModal({
         e.stopPropagation();
         setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
         try {
-            await onRefreshAccount(acc, false);
+            await Promise.race([
+                onRefreshAccount(acc, false),
+                new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
+            ]);
         } catch (err) {
             console.error("Refresh account error:", err);
         } finally {
@@ -65,7 +69,10 @@ export default function AccountManagerModal({
             setBulkProgressCurrent(i + 1);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
-                await onRefreshAccount(acc, false);
+                await Promise.race([
+                    onRefreshAccount(acc, false),
+                    new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
+                ]);
             } catch (err) {
                 console.error(`Failed to refresh token for ${acc.gameName}:`, err);
             } finally {
@@ -184,6 +191,7 @@ export default function AccountManagerModal({
                                                     className="settings-account-action-btn refresh-btn cancel-refresh-btn"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
+                                                        setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
                                                         onCancelRefresh(acc);
                                                     }}
                                                     title="Cancel refresh"

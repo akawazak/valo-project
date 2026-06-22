@@ -29,9 +29,9 @@ function tierLabel(tier: number, fallback: string): string {
     if (!tier || tier <= 0) return "Unranked";
     if (tier >= 27) return "Radiant";
     const groupIdx = Math.floor((tier - 3) / 3);
-    const sub = tier % 3; // 0,1,2 → 3,2,1
+    const sub = (tier - 3) % 3;
     const name = RANK_GROUPS[Math.min(groupIdx, RANK_GROUPS.length - 1)] ?? fallback;
-    const num = sub === 0 ? 3 : sub === 1 ? 2 : 1;
+    const num = sub + 1;
     return `${name} ${num}`;
 }
 

@@ -1,4 +1,5 @@
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -9,6 +10,33 @@ use tauri_plugin_shell::ShellExt;
 
 struct AppState {
     child: Mutex<Option<CommandChild>>,
+    /// Per-window-label mutex map. Each label (`riot_login_<session_id>`)
+    /// gets its own `Arc<Mutex<()>>` so concurrent calls to
+    /// `open_login_window` with the SAME label queue up instead of
+    /// racing — preventing the "label already exists" crash and the
+    /// cookie loss that happens when two windows try to read the same
+    /// SQLite file simultaneously.
+    window_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Per-stable-session mutex used by `persist_login_session` to
+    /// serialise cookie-directory copy/delete operations on the same
+    /// stable session. Without this, two concurrent logins for the
+    /// same PUUID can clobber each other's stable directory mid-persist.
+    session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl AppState {
+    fn lock_for_window(&self, label: &str) -> Arc<Mutex<()>> {
+        let mut map = self.window_locks.lock().unwrap();
+        map.entry(label.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+    fn lock_for_session(&self, session_id: &str) -> Arc<Mutex<()>> {
+        let mut map = self.session_locks.lock().unwrap();
+        map.entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +78,7 @@ fn cleanup_stale_sessions(config_dir: &std::path::Path) {
 #[tauri::command]
 async fn open_login_window(
     app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
     auth_url: String,
     session_id: Option<String>,
     visible: Option<bool>,
@@ -58,6 +87,13 @@ async fn open_login_window(
         "riot_login_{}",
         session_id.as_deref().unwrap_or("default")
     );
+
+    // Serialise per-label: if another caller is already opening/closing
+    // the same session, wait for them. This prevents the "label already
+    // exists" race and the cookie loss that happens when two windows try
+    // to read the same SQLite file at the same time.
+    let lock = state.lock_for_window(&window_label);
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
 
     // Close existing login window if open
     if let Some(window) = app_handle.get_webview_window(&window_label) {
@@ -111,7 +147,13 @@ let window = tauri::webview::WebviewWindowBuilder::new(
     .on_navigation(move |url: &url::Url| {
         let host = url.host_str().unwrap_or("");
         let path = url.path();
-        if host == "localhost" || host == "127.0.0.1" && path == "/redirect" {
+        // NOTE: previous code was `host == "localhost" || host == "127.0.0.1" && path == "/redirect"`,
+        // which parses as `host == "localhost" || (host == "127.0.0.1" && path == "/redirect")`
+        // — a precedence bug that would emit the redirect event for ANY
+        // localhost URL. Fixed here.
+        let is_oauth_redirect =
+            (host == "localhost" || host == "127.0.0.1") && path == "/redirect";
+        if is_oauth_redirect {
             let redirect_url_str = url.as_str().to_string();
             let _ = cloned_handle.emit("riot-login-redirect", redirect_url_str);
 
@@ -195,12 +237,20 @@ async fn get_ssid_cookie(
 #[tauri::command]
 async fn persist_login_session(
     app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
     from_session_id: String,
     to_session_id: String,
 ) -> Result<(), String> {
     if from_session_id == to_session_id {
         return Ok(());
     }
+
+    // Serialise per stable-session: two concurrent logins for the same
+    // PUUID would otherwise delete+copy the stable directory in parallel,
+    // and one side would race ahead and wipe the other's freshly-persisted
+    // cookies. The lock is held for the entire delete+copy window.
+    let lock = state.lock_for_session(&to_session_id);
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
 
     let config_dir = app_handle
         .path()
@@ -211,10 +261,7 @@ async fn persist_login_session(
     let target = sessions_dir.join(&to_session_id);
 
     if !source.exists() {
-        return Err(format!(
-            "Login session '{}' does not exist",
-            from_session_id
-        ));
+        return Ok(());
     }
 
     if target.exists() {
@@ -641,6 +688,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             child: Mutex::new(None),
+            window_locks: Mutex::new(HashMap::new()),
+            session_locks: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())

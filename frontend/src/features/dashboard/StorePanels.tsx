@@ -26,6 +26,7 @@ type StoreOfferCard = {
     priceValue: number;
     discount?: number;
     isOwned?: boolean;
+    nightMarket?: boolean;
 };
 
 type AccessoryOfferCard = {
@@ -87,6 +88,61 @@ function findSkinOffer(
     return null;
 }
 
+function findBundleOffer(
+    itemId: string, weapons: Weapon[], tierMap: Record<string, ContentTier>,
+    priceValue: number, ownedLevelIDs: string[],
+    sprayMap: Record<string, SprayAsset>, playerCardMap: Record<string, PlayerCardAsset>,
+    buddyMap: Record<string, GunBuddy>, discount?: number
+): StoreOfferCard | null {
+    const skinOffer = findSkinOffer(itemId, weapons, tierMap, priceValue, ownedLevelIDs, discount);
+    if (skinOffer) return skinOffer;
+
+    const target = itemId.toLowerCase();
+    const spray = sprayMap[target];
+    if (spray) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            name: spray.displayName,
+            weaponName: "Spray",
+            image: spray.displayIcon || spray.fullIcon || spray.fullTransparentIcon || "",
+            tierName: "Accessory",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+
+    const card = playerCardMap[target];
+    if (card) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            name: card.displayName,
+            weaponName: "Player Card",
+            image: card.largeArt || card.smallArt || card.displayIcon || card.wideArt || "",
+            tierName: "Accessory",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+
+    const buddy = buddyMap[target];
+    if (buddy) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            name: buddy.displayName,
+            weaponName: "Gun Buddy",
+            image: buddy.levels[0]?.displayIcon || "",
+            tierName: "Accessory",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+
+    return null;
+}
+
 function cardFromOffer(
     offer: StorefrontOffer, weapons: Weapon[], tierMap: Record<string, ContentTier>,
     ownedLevelIDs: string[], discount?: number, discountedCost?: Record<string, number>
@@ -122,7 +178,7 @@ function OfferCard({ offer }: { offer: StoreOfferCard }) {
     const tc = offer.tierColor || "ffffff";
     return (
         <div
-            className={`store-card${offer.isOwned ? " owned" : ""}`}
+            className={`store-card${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
             style={{
                 "--tier-color-border": hexToRgba(tc, 0.25),
                 "--tier-color-hover-border": hexToRgba(tc, 0.6),
@@ -130,6 +186,7 @@ function OfferCard({ offer }: { offer: StoreOfferCard }) {
                 "--tier-color-raw": hexToRgba(tc, 1),
             } as React.CSSProperties}
         >
+            {offer.nightMarket && <div className="night-market-ribbon">Night Market</div>}
             <div className="store-card-header">
                 <div className="store-card-tier-badge" style={{ color: hexToRgba(tc, 0.9) }}>
                     {offer.tierIcon && (
@@ -174,7 +231,7 @@ interface StorePanelsProps {
 }
 
 export default function StorePanels({ refreshKey = 0, onConnectAccount }: StorePanelsProps) {
-    const { weapons, contentTiers, bundles, ownedLevelIDs, ownedBuddies, sprays, playerCards, activeAccount, isTokenExpired, setIsTokenExpired } = useData();
+    const { weapons, contentTiers, bundles, ownedLevelIDs, sprays, playerCards, activeAccount, isTokenExpired, setIsTokenExpired, allBuddies } = useData();
     const [storefront, setStorefront] = useState<StorefrontResponse | null>(null);
     const [wallet, setWallet] = useState<Record<string, number> | null>(null);
     const [storefrontError, setStorefrontError] = useState("");
@@ -185,6 +242,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     const [bundleOpen, setBundleOpen] = useState(false);
 
     const lastRefreshKeyRef = useRef(-1);
+    const didAutoRefreshAtZeroRef = useRef(false);
 
     const tierMap = useMemo(() =>
         contentTiers.reduce<Record<string, ContentTier>>((acc, t) => {
@@ -211,14 +269,14 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     );
 
     const buddyMap = useMemo(() =>
-        ownedBuddies.reduce<Record<string, GunBuddy>>((acc, buddy) => {
+        allBuddies.reduce<Record<string, GunBuddy>>((acc, buddy) => {
             acc[buddy.uuid.toLowerCase()] = buddy;
             for (const level of buddy.levels) {
                 acc[level.uuid.toLowerCase()] = buddy;
             }
             return acc;
         }, {}),
-        [ownedBuddies]
+        [allBuddies]
     );
 
     const refreshStorefront = useCallback(() => {
@@ -236,6 +294,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 setStorefront(sf);
                 setWallet(w);
                 setSecondsUntilReset(sf.SkinsPanelLayout?.SingleItemOffersRemainingDurationInSeconds || 0);
+                didAutoRefreshAtZeroRef.current = false;
                 const rawB = sf.FeaturedBundle?.Bundles?.[0] ?? sf.FeaturedBundle?.Bundle;
                 setBundleSeconds(rawB?.DurationRemainingInSeconds || 0);
                 setNightMarketSeconds(sf.BonusStore?.BonusStoreRemainingDurationInSeconds || 0);
@@ -267,6 +326,16 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         return () => clearInterval(t);
     }, []);
 
+    useEffect(() => {
+        if (secondsUntilReset > 0) {
+            didAutoRefreshAtZeroRef.current = false;
+            return;
+        }
+        if (!activeAccount || isLoadingStorefront || !storefront || didAutoRefreshAtZeroRef.current) return;
+        didAutoRefreshAtZeroRef.current = true;
+        refreshStorefront();
+    }, [activeAccount, isLoadingStorefront, refreshStorefront, secondsUntilReset, storefront]);
+
     const dailyOffers = useMemo(() =>
         (storefront?.SkinsPanelLayout?.SingleItemStoreOffers ?? [])
             .map(o => cardFromOffer(o, weapons, tierMap, ownedLevelIDs))
@@ -278,7 +347,8 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         (storefront?.BonusStore?.BonusStoreOffers ?? [])
             .map((o: StorefrontBonusOffer) =>
                 cardFromOffer(o.Offer, weapons, tierMap, ownedLevelIDs, o.DiscountPercent, o.DiscountCosts))
-            .filter((o): o is StoreOfferCard => o !== null),
+            .filter((o): o is StoreOfferCard => o !== null)
+            .map(o => ({ ...o, nightMarket: true })),
         [storefront, weapons, tierMap, ownedLevelIDs]
     );
 
@@ -298,7 +368,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         const meta: BundleInfo | undefined = assetId ? bundles.find(b => b.uuid.toLowerCase() === assetId) : undefined;
         const items = rawBundle.Items
             .map((item: StorefrontBundleItem) => {
-                const card = findSkinOffer(item.Item.ItemID, weapons, tierMap, item.DiscountedPrice ?? item.BasePrice, ownedLevelIDs);
+                const card = findBundleOffer(item.Item.ItemID, weapons, tierMap, item.DiscountedPrice ?? item.BasePrice, ownedLevelIDs, sprayMap, playerCardMap, buddyMap);
                 return card ? { ...card, priceValue: item.DiscountedPrice ?? item.BasePrice } : null;
             })
             .filter((i): i is StoreOfferCard => i !== null);
@@ -306,7 +376,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         const totalDisc = rawBundle.Items.reduce((s, i) => s + (i.DiscountedPrice ?? i.BasePrice), 0);
         const bannerImage = meta?.displayIcon2 || meta?.displayIcon || "";
         return { name: meta?.displayName || "Featured Bundle", description: meta?.description ?? "", banner: bannerImage, items, totalBase, totalDisc };
-    }, [storefront, weapons, tierMap, ownedLevelIDs, bundles]);
+    }, [storefront, weapons, tierMap, ownedLevelIDs, bundles, sprayMap, playerCardMap, buddyMap]);
 
     const vpBalance = wallet?.[VP_ID] ?? 0;
     const rpBalance = wallet?.[RP_ID] ?? 0;
@@ -411,6 +481,9 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                             <div className="storefront-bundle-left">
                                 <div className="storefront-bundle-label">FEATURED BUNDLE</div>
                                 <div className="storefront-bundle-name">{resolvedBundle.name}</div>
+                                {resolvedBundle.description && (
+                                    <div className="storefront-bundle-description">{resolvedBundle.description}</div>
+                                )}
                                 {bundleSeconds > 0 && (
                                     <div className="storefront-bundle-timer">Ends in {formatDuration(bundleSeconds)}</div>
                                 )}

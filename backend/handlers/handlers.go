@@ -34,13 +34,26 @@ type Handler struct {
 	// different SyncManager instances (we construct one per request
 	// so the per-puuid Riot fetcher is request-scoped) are involved.
 	syncInFlight   map[string]struct{}
+	syncLastError  map[string]string
 	trackingConn   *sql.DB
 	trackingAppDir string
+
+	namesCache map[string]string
+	namesMu    sync.RWMutex
+	mmrCache   map[string]CachedMMR
+	mmrMu      sync.RWMutex
+}
+
+type CachedMMR struct {
+	Tier int
+	RR   int
 }
 
 func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
-		Val: Val,
+		Val:        Val,
+		namesCache: make(map[string]string),
+		mmrCache:   make(map[string]CachedMMR),
 	}
 }
 
@@ -106,7 +119,19 @@ func (h *Handler) trackingSyncManagerForRequest(r *http.Request) (*tracking.Sync
 	if err != nil {
 		return nil, err
 	}
-	headers := r.Header
+	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
+	if err != nil {
+		return nil, err
+	}
+	if hasRemoteAuth {
+		return tracking.NewSyncManager(db, tracking.NewRiotFetcher(buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken)), h.trackingAppDir), nil
+	}
+
+	client, err := h.getClient(r)
+	if err != nil {
+		return nil, err
+	}
+	headers := client.Header
 	return tracking.NewSyncManager(db, tracking.NewRiotFetcher(headers), h.trackingAppDir), nil
 }
 
@@ -137,6 +162,9 @@ func (h *Handler) markSyncInFlight(puuid string) bool {
 		return false
 	}
 	h.syncInFlight[puuid] = struct{}{}
+	if h.syncLastError != nil {
+		delete(h.syncLastError, puuid)
+	}
 	return true
 }
 
@@ -146,6 +174,28 @@ func (h *Handler) unmarkSyncInFlight(puuid string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.syncInFlight, puuid)
+}
+
+func (h *Handler) setSyncLastError(puuid string, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.syncLastError == nil {
+		h.syncLastError = map[string]string{}
+	}
+	if err == nil {
+		delete(h.syncLastError, puuid)
+		return
+	}
+	h.syncLastError[puuid] = err.Error()
+}
+
+func (h *Handler) syncLastErrorFor(puuid string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.syncLastError == nil {
+		return ""
+	}
+	return h.syncLastError[puuid]
 }
 
 type OwnedSkinsResponse struct {
@@ -265,7 +315,7 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 
 	type PlayerLoadoutResp struct {
 		Loadout  map[string]presets.LoadoutItemV1 `json:"loadout"`
-		Sprays   []SpraySlotResp                    `json:"sprays"`
+		Sprays   []SpraySlotResp                  `json:"sprays"`
 		Identity *presets.IdentityV1              `json:"identity,omitempty"`
 	}
 

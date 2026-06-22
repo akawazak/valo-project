@@ -17,6 +17,141 @@ function checkTokenExpired(account: RiotAccount | null, localActive: boolean, lo
     return isAccountExpired(account);
 }
 
+function hasSsidCookie(cookies: string | null | undefined): cookies is string {
+    return Boolean(cookies && /(?:^|;\s*)ssid=/.test(cookies));
+}
+
+/**
+ * closeLoginWindowAndWait asks Tauri to close the popup for the given
+ * sessionId and waits up to `timeoutMs` for the matching
+ * `riot-login-closed` event so we don't race ahead and read the cookie
+ * DB before WebView2 has released its lock.
+ */
+async function closeLoginWindowAndWait(sessionId: string, timeoutMs: number = 5000) {
+    if (!sessionId) return;
+    const [{ invoke }, { listen }] = await Promise.all([
+        import("@tauri-apps/api/core"),
+        import("@tauri-apps/api/event"),
+    ]);
+    const closed = new Promise<void>((resolve) => {
+        const timer = window.setTimeout(resolve, timeoutMs);
+        listen("riot-login-closed", () => {
+            window.clearTimeout(timer);
+            resolve();
+        }).then((unlisten) => {
+            // If close already fired before we attached the listener, the
+            // setTimeout still resolves us on timeout — acceptable.
+            void unlisten;
+        }).catch(() => {
+            window.clearTimeout(timer);
+            resolve();
+        });
+    });
+    await invoke("close_login_window", { sessionId }).catch(() => {});
+    await closed;
+}
+
+/**
+ * completeLoginFlow performs the *full* login chain atomically. It does
+ * NOT call activateAccount or onLoginSuccess — that's the caller's job
+ * after this returns the new account. This function only RETURNS the
+ * account; the caller is responsible for committing it.
+ *
+ * Throws on any failure (and the caller will reject the startLoginFlow
+ * promise). Does NOT swallow persist failures — if the cookie cannot be
+ * persisted, the caller surfaces the error and the account is NOT saved.
+ */
+async function completeLoginFlow(
+    ctx: LoginFlowState,
+    redirectUrl: string,
+): Promise<RiotAccount> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const submitTokenUrl = (await import("@/services/api")).submitTokenUrl;
+    const refreshRiotSession = (await import("@/services/api")).refreshRiotSession;
+
+    // 1. Exchange the redirect URL for an access token + entitlements.
+    const res = await submitTokenUrl(redirectUrl);
+    if (!res?.puuid || !res?.access_token || !res?.entitlements_token) {
+        throw new Error("Token exchange did not return a valid Riot session.");
+    }
+
+    const tempSessionId = ctx.sessionId;
+    const stableSessionId = `session_${res.puuid}`;
+
+    // 2. Close the popup and wait for WebView2 to release its lock on
+    //    the cookie DB. Without this, get_ssid_cookie copies will fail.
+    await closeLoginWindowAndWait(tempSessionId, 5000);
+
+    // 3. Read the ssid cookie — prefer the cookies captured via the
+    //    event (faster + more reliable), fall back to a direct read.
+    let ssid: string | undefined;
+    if (tempSessionId) {
+        try {
+            const raw = hasSsidCookie(ctx.capturedCookies)
+                ? ctx.capturedCookies
+                : await invoke<string | null>("get_ssid_cookie", {
+                      sessionId: tempSessionId,
+                      waitMs: 15000,
+                  });
+            ssid = raw ?? undefined;
+        } catch (err) {
+            console.error("Failed to read ssid cookie:", err);
+            // Non-fatal — we still have OAuth tokens. Silent reauth just
+            // won't work until the user manually signs in again.
+        }
+    }
+
+    // 4. Persist the temp session dir → stable session dir. This MUST
+    //    succeed for silent reauth to ever work; if it fails we abort.
+    if (tempSessionId && tempSessionId !== stableSessionId) {
+        try {
+            await invoke("persist_login_session", {
+                fromSessionId: tempSessionId,
+                toSessionId: stableSessionId,
+            });
+        } catch (err) {
+            throw new Error(
+                "Could not persist the login session. The account was NOT saved to avoid losing the cookie. " +
+                    "Please try again — if the issue persists, restart the app. (" +
+                    (err instanceof Error ? err.message : String(err)) +
+                    ")",
+            );
+        }
+    }
+
+    // 5. If we got an ssid, try a silent reauth to get fresh tokens.
+    //    Failures here are non-fatal — we still have OAuth tokens.
+    let finalTokens = res;
+    let finalSsid: string | undefined = ssid;
+    if (hasSsidCookie(ssid)) {
+        try {
+            const refreshed = await refreshRiotSession(ssid!);
+            finalTokens = {
+                ...res,
+                access_token: refreshed.access_token,
+                entitlements_token: refreshed.entitlements_token,
+                expires_in: refreshed.expires_in,
+                cookies: refreshed.cookies,
+            };
+            finalSsid = refreshed.cookies || ssid;
+        } catch (err) {
+            console.debug("Silent reauth skipped (cookies not yet accepted):", err);
+        }
+    }
+
+    return {
+        puuid: res.puuid,
+        accessToken: finalTokens.access_token,
+        entitlementsToken: finalTokens.entitlements_token,
+        expiresAt: Date.now() + Math.max(0, (finalTokens.expires_in || 3600) - 60) * 1000,
+        region: res.region,
+        gameName: res.game_name || "Unknown",
+        tagLine: res.tag_line || "",
+        sessionId: stableSessionId,
+        ssid: finalSsid,
+    };
+}
+
 function mergeAccounts(localAccounts: RiotAccount[], persistedAccounts: RiotAccount[]) {
     const merged = new Map<string, RiotAccount>();
     for (const account of persistedAccounts) {
@@ -96,10 +231,22 @@ export function activateAccount(account: RiotAccount) {
     }
 }
 
+export interface LoginFlowState {
+    sessionId: string;
+    startedAt: number;
+    /** Resolved when the popup redirects and the new account is committed. */
+    resolve: (account: RiotAccount) => void;
+    /** Resolved on cancel / window-closed / error. */
+    reject: (err: Error) => void;
+    /** Captured ssid cookies from the popup (set by the `riot-login-cookies` event). */
+    capturedCookies: string | null;
+}
+
 interface DataContextType {
     agents: Agent[];
     weapons: Weapon[];
     ownedBuddies: GunBuddy[];
+    allBuddies: GunBuddy[];
     contentTiers: ContentTier[];
     ownedLevelIDs: string[];
     ownedChromaIDs: string[];
@@ -116,7 +263,7 @@ interface DataContextType {
     isClientHealthy: boolean;
     isBackendOnline: boolean;
     refreshLoadout: () => Promise<void>;
-    
+
     // Accounts management state
     accounts: RiotAccount[];
     activeAccount: RiotAccount | null;
@@ -128,7 +275,27 @@ interface DataContextType {
     refreshAccountsList: () => void;
     refreshAccountToken: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
     cancelAccountRefresh: (acc: RiotAccount) => void;
-    
+
+    /**
+     * Start a brand-new Riot login (the "Add account" / "Sign in" flow).
+     *
+     * Resolves ONLY when the full chain completes successfully:
+     *   popup → redirect → token exchange → window close → cookie read →
+     *   session persist → optional silent reauth → account stored.
+     *
+     * Rejects on:
+     *   - Another login or refresh is already in flight.
+     *   - The user cancels via cancelLoginFlow().
+     *   - The popup window is closed before redirect.
+     *   - Any step in the chain fails (and the account is NOT added).
+     *
+     * UI components should show a loading overlay for the entire duration.
+     */
+    startLoginFlow: () => Promise<RiotAccount>;
+    cancelLoginFlow: () => void;
+    /** True while a login (or any per-session refresh that needs the WebView) is in flight. */
+    loginInFlight: LoginFlowState | null;
+
     // Storefront refresh signal — increment to trigger re-fetch in StorePanels
     storefrontRefreshKey: number;
     // Local client import chooser
@@ -143,14 +310,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // Per-session refresh lock: prevents overlapping refreshAccountToken calls
     // (manual + auto + cross-account races) from clobbering the same window.
     const refreshInFlightRef = useRef<Set<string>>(new Set());
+    const globalRefreshInFlightRef = useRef(false);
     // Per-session cancel handle so the UI can abort an in-flight refresh
     // (e.g. user clicked refresh by mistake). The cancel function closes the
     // login window, releases the lock, and resolves the promise as false.
     const refreshCancelRef = useRef<Map<string, () => void>>(new Map());
+    // Single-flight login handle. While non-null, no other login OR refresh
+    // may open a popup. The resolved value is the freshly-committed account;
+    // on error/cancel the promise rejects with a descriptive Error and the
+    // popup is closed and the temp session is NOT promoted to a stable one.
+    const loginInFlightRef = useRef<LoginFlowState | null>(null);
+    const [loginInFlight, setLoginInFlight] = useState<LoginFlowState | null>(null);
 
     const [agents, setAgents] = useState<Agent[]>([]);
     const [weapons, setWeapons] = useState<Weapon[]>([]);
     const [ownedBuddies, setOwnedBuddies] = useState<GunBuddy[]>([]);
+    const [allBuddies, setAllBuddies] = useState<GunBuddy[]>([]);
     const [contentTiers, setContentTiers] = useState<ContentTier[]>([]);
     const [ownedLevelIDs, setOwnedLevelIDs] = useState<string[]>([]);
     const [ownedChromaIDs, setOwnedChromaIDs] = useState<string[]>([]);
@@ -166,14 +341,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true);
     const [isClientHealthy, setIsClientHealthy] = useState(false);
     const [isBackendOnline, setIsBackendOnline] = useState(false);
-    
+
     // Lifted accounts state
     const [accounts, setAccounts] = useState<RiotAccount[]>([]);
     const [activeAccount, setActiveAccount] = useState<RiotAccount | null>(null);
     const [isTokenExpired, setIsTokenExpired] = useState(false);
     const [isLocalClientActive, setIsLocalClientActive] = useState(false);
     const [localPuuid, setLocalPuuid] = useState("");
-    
+
     // Storefront re-fetch signal (no page reload needed)
     const [storefrontRefreshKey, setStorefrontRefreshKey] = useState(0);
     const [pendingLocalAccount, setPendingLocalAccount] = useState<RiotAccount | null>(null);
@@ -195,23 +370,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const found = stored.find(a => a.puuid === puuid) || stored[0] || null;
         if (found) {
             activateAccount(found);
-            setIsTokenExpired(checkTokenExpired(found, isLocalClientActive, localPuuid));
+            const expired = checkTokenExpired(found, isLocalClientActive, localPuuid);
+            setIsTokenExpired(prev => prev === expired ? prev : expired);
         } else {
             localStorage.removeItem("riot_access_token");
             localStorage.removeItem("riot_entitlements");
             localStorage.removeItem("riot_puuid");
             localStorage.removeItem("riot_region");
-            setIsTokenExpired(false);
+            setIsTokenExpired(prev => prev === false ? prev : false);
         }
-        setActiveAccount(found);
+        setActiveAccount(prev => prev?.puuid === found?.puuid ? prev : found);
     }, [isLocalClientActive, localPuuid]);
 
     useEffect(() => {
-        if (activeAccount) {
-            setIsTokenExpired(checkTokenExpired(activeAccount, isLocalClientActive, localPuuid));
-        } else {
-            setIsTokenExpired(false);
-        }
+        const expired = activeAccount
+            ? checkTokenExpired(activeAccount, isLocalClientActive, localPuuid)
+            : false;
+        setIsTokenExpired(prev => prev === expired ? prev : expired);
     }, [activeAccount, isLocalClientActive, localPuuid]);
 
     // 1. Load Public Static Catalog (unconditional, immediate)
@@ -237,6 +412,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 allAgentsRef.current = agentsData;
 
                 setWeapons(weaponsData);
+                setAllBuddies(gunBuddiesData);
                 setContentTiers(contentTiersData);
                 setBundles(bundlesData);
                 setSprays(spraysData);
@@ -348,6 +524,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const handleSwitchAccount = useCallback((acc: RiotAccount) => {
         activateAccount(acc);
         setActiveAccount(acc);
+        hasLoadedUserRef.current = false;
         if (isAccountExpired(acc)) {
             setIsTokenExpired(true);
         } else {
@@ -355,7 +532,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
             // Bump the storefront refresh key so StorePanels re-fetches silently
             setStorefrontRefreshKey(k => k + 1);
         }
-    }, []);
+        void loadUserData();
+    }, [loadUserData]);
 
     const handleDeleteAccount = useCallback((puuid: string) => {
         const stored = getStoredAccounts();
@@ -396,21 +574,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
         activateAccount(stableAcc);
         setActiveAccount(stableAcc);
         setIsTokenExpired(false);
+        hasLoadedUserRef.current = false;
+        void loadUserData();
         // Bump storefront refresh key so store loads fresh for new account
         setStorefrontRefreshKey(k => k + 1);
-    }, []);
+    }, [loadUserData]);
 
     const refreshAccountToken = useCallback(async (acc: RiotAccount, visible: boolean = false): Promise<boolean> => {
         const sessionKey = acc.sessionId || `session_${acc.puuid}`;
-        if (refreshInFlightRef.current.has(sessionKey)) {
+        if (loginInFlightRef.current) {
+            // A brand-new login is in flight — don't compete with it for the
+            // WebView lock.
+            return false;
+        }
+        if (globalRefreshInFlightRef.current || refreshInFlightRef.current.has(sessionKey)) {
             // Another refresh is already running for this session — wait for it
             // instead of opening a second login window.
             return false;
         }
+        globalRefreshInFlightRef.current = true;
         refreshInFlightRef.current.add(sessionKey);
         const releaseLock = () => {
             refreshInFlightRef.current.delete(sessionKey);
             refreshCancelRef.current.delete(sessionKey);
+            globalRefreshInFlightRef.current = false;
         };
 
         let sessionId = acc.sessionId;
@@ -444,6 +631,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         saveStoredAccounts(updated);
                         setAccounts(updated);
                         if (activeAccount?.puuid === acc.puuid) {
+                            activateAccount(updatedAcc);
                             setActiveAccount(updatedAcc);
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
@@ -467,6 +655,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return new Promise<boolean>((resolve) => {
                 let resolved = false;
                 let unlistenFn: (() => void) | null = null;
+                let unlistenCloseFn: (() => void) | null = null;
+                let timeoutId: number | null = null;
+
+                const cleanup = () => {
+                    resolved = true;
+                    if (timeoutId !== null) window.clearTimeout(timeoutId);
+                    if (unlistenFn) unlistenFn();
+                    if (unlistenCloseFn) unlistenCloseFn();
+                    refreshCancelRef.current.delete(sessionKey);
+                };
+
+                const finish = (ok: boolean) => {
+                    if (resolved) return;
+                    cleanup();
+                    releaseLock();
+                    resolve(ok);
+                };
 
                 // Register a cancel handle so the UI can abort this refresh.
                 refreshCancelRef.current.set(sessionKey, () => {
@@ -476,24 +681,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     invoke("close_login_window", { sessionId }).catch(() => {});
                 });
 
-                const cleanup = () => {
-                    resolved = true;
-                    clearTimeout(timeoutId);
-                    if (unlistenFn) unlistenFn();
-                };
-
-                const finish = (ok: boolean) => {
-                    cleanup();
-                    releaseLock();
-                    resolve(ok);
-                };
-
-                const timeoutId = setTimeout(async () => {
+                timeoutId = window.setTimeout(async () => {
                     if (resolved) return;
                     if (!visible) {
                         await invoke("show_login_window", { sessionId }).catch(() => {});
-                    } else {
-                        finish(false);
                     }
                 }, 10000);
 
@@ -524,6 +715,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         saveStoredAccounts(updated);
                         setAccounts(updated);
                         if (activeAccount?.puuid === acc.puuid) {
+                            activateAccount(updatedAcc);
                             setActiveAccount(updatedAcc);
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
@@ -554,10 +746,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         console.debug("get_ssid_cookie: result for session", sessionId, "->", raw);
 
                         const finalAcc = { ...updatedAcc, ssid: raw ?? updatedAcc.ssid };
-                        const finalUpdated = stored.map(a => a.puuid === acc.puuid ? finalAcc : a);
+                        const finalUpdated = getStoredAccounts().map(a => a.puuid === acc.puuid ? finalAcc : a);
                         saveStoredAccounts(finalUpdated);
                         setAccounts(finalUpdated);
-                        if (activeAccount?.puuid === acc.puuid) setActiveAccount(finalAcc);
+                        if (activeAccount?.puuid === acc.puuid) {
+                            activateAccount(finalAcc);
+                            setActiveAccount(finalAcc);
+                        }
 
                         resolve(true);
                         releaseLock();
@@ -567,6 +762,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         releaseLock();
                     }
                 }).then(fn => { unlistenFn = fn; });
+
+                listen("riot-login-closed", () => {
+                    if (resolved) return;
+                    finish(false);
+                }).then(fn => { unlistenCloseFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
                     console.error("Failed to open login window:", err);
@@ -588,7 +788,140 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (cancel) {
             cancel();
         }
+        refreshCancelRef.current.delete(sessionKey);
     }, []);
+
+    /**
+     * Settle the in-flight login flow: either resolve with the new account
+     * or reject with an error. ALWAYS clears the lock and the login state so
+     * the next attempt can run. Idempotent — calling twice is a no-op.
+     */
+    const settleLoginFlow = useCallback((account: RiotAccount | null, err: Error | null) => {
+        const ctx = loginInFlightRef.current;
+        if (!ctx) return;
+        loginInFlightRef.current = null;
+        setLoginInFlight(null);
+        if (account) ctx.resolve(account);
+        else if (err) ctx.reject(err);
+    }, []);
+
+    /**
+     * Cancel an in-flight login. Closes the popup and rejects the promise.
+     * Safe to call when nothing is in flight.
+     */
+    const cancelLoginFlow = useCallback(() => {
+        const ctx = loginInFlightRef.current;
+        if (!ctx) return;
+        // Close the popup window before rejecting so it can't linger.
+        void import("@tauri-apps/api/core").then(({ invoke }) =>
+            invoke("close_login_window", { sessionId: ctx.sessionId }).catch(() => {}),
+        );
+        settleLoginFlow(null, new Error("Login cancelled."));
+    }, [settleLoginFlow]);
+
+    /**
+     * startLoginFlow opens the Riot OAuth popup and resolves only once the
+     * full chain completes:
+     *
+     *   popup → user signs in → redirect → token exchange → window close →
+     *   ssid cookie read → session persist (temp → stable) → optional
+     *   silent reauth → account stored → resolve(new account)
+     *
+     * While this is in flight, ALL other logins and refreshes are blocked
+     * (refreshAccountToken will return false immediately). This is the
+     * single source of truth for the "is something happening with a popup?"
+     * state — UI components should gate every action on loginInFlight.
+     *
+     * The popup redirect listener is set up INSIDE this function so that
+     * listeners are scoped to a single attempt and never overlap.
+     */
+    const startLoginFlow = useCallback(async (): Promise<RiotAccount> => {
+        if (loginInFlightRef.current) {
+            throw new Error("Another Riot login is already in progress. Please wait for it to finish.");
+        }
+        if (globalRefreshInFlightRef.current || refreshInFlightRef.current.size > 0) {
+            throw new Error("An account refresh is already in progress. Please wait for it to finish.");
+        }
+
+        return new Promise<RiotAccount>((resolve, reject) => {
+            const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+            const ctx: LoginFlowState = {
+                sessionId,
+                startedAt: Date.now(),
+                resolve,
+                reject,
+                capturedCookies: null,
+            };
+            loginInFlightRef.current = ctx;
+            setLoginInFlight(ctx);
+
+            let settled = false;
+            const settleOnce = (account: RiotAccount | null, err: Error | null) => {
+                if (settled) return;
+                settled = true;
+                settleLoginFlow(account, err);
+            };
+
+            (async () => {
+                const [{ listen }, { invoke }] = await Promise.all([
+                    import("@tauri-apps/api/event"),
+                    import("@tauri-apps/api/core"),
+                ]);
+
+                // Capture cookies fired by lib.rs' on_navigation handler BEFORE
+                // the WebView closes (the DB lock release is what guarantees
+                // we can read them later). The lib.rs handler emits this event
+                // ~immediately after detecting the redirect.
+                const cookiesUnlisten = await listen<string>("riot-login-cookies", (event) => {
+                    if (loginInFlightRef.current?.sessionId === sessionId) {
+                        loginInFlightRef.current.capturedCookies = event.payload;
+                        console.debug("captured ssid cookies for session", sessionId);
+                    }
+                }).catch(() => () => {});
+
+                const redirectUnlisten = await listen<string>("riot-login-redirect", async (event) => {
+                    try {
+                        const account = await completeLoginFlow(ctx, event.payload);
+                        cookiesUnlisten();
+                        redirectUnlisten();
+                        closeUnlisten();
+                        settleOnce(account, null);
+                    } catch (err) {
+                        const e = err instanceof Error ? err : new Error(String(err));
+                        cookiesUnlisten();
+                        redirectUnlisten();
+                        closeUnlisten();
+                        settleOnce(null, e);
+                    }
+                }).catch(() => () => {});
+
+                // Manual cancel via close button (no redirect ever fires).
+                const closeUnlisten = await listen("riot-login-closed", () => {
+                    if (loginInFlightRef.current?.sessionId !== sessionId) return;
+                    // If we already settled (e.g. via redirect), ignore.
+                    if (settled) return;
+                    cookiesUnlisten();
+                    redirectUnlisten();
+                    closeUnlisten();
+                    settleOnce(null, new Error("Login window was closed before authentication completed."));
+                }).catch(() => () => {});
+
+                try {
+                    const { auth_url } = await getAuthUrl();
+                    await invoke("open_login_window", {
+                        authUrl: auth_url,
+                        sessionId,
+                        visible: true,
+                    });
+                } catch (err) {
+                    cookiesUnlisten();
+                    redirectUnlisten();
+                    closeUnlisten();
+                    settleOnce(null, err instanceof Error ? err : new Error(String(err)));
+                }
+            })();
+        });
+    }, [settleLoginFlow]);
 
     // Auto-refresh the active account token shortly before expiry to avoid
     // user-visible expiration. Schedule a refresh 90 seconds before expiry.
@@ -643,14 +976,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
             a => a.puuid.toLowerCase() === localPuuid.toLowerCase()
         );
         if (alreadyKnown) {
-            // Make sure the known account is active
             const match = stored.find(a => a.puuid.toLowerCase() === localPuuid.toLowerCase());
             if (match) {
                 const currentPuuid = localStorage.getItem("riot_puuid");
-                if (currentPuuid?.toLowerCase() !== localPuuid.toLowerCase()) {
+                const useLocalSso = localStorage.getItem("use_local_sso") === "true";
+                const shouldUseLocal =
+                    useLocalSso ||
+                    !activeAccount ||
+                    !currentPuuid ||
+                    currentPuuid.toLowerCase() === localPuuid.toLowerCase();
+
+                if (shouldUseLocal && currentPuuid?.toLowerCase() !== localPuuid.toLowerCase()) {
                     activateAccount(match);
                     setActiveAccount(match);
                     setStorefrontRefreshKey(k => k + 1);
+                } else if (!shouldUseLocal && activeAccount.puuid.toLowerCase() !== localPuuid.toLowerCase()) {
+                    setPendingLocalAccount(match);
                 }
             }
             autoImportedLocalRef.current = localPuuid;
@@ -691,7 +1032,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 setStorefrontRefreshKey(k => k + 1);
             }
         }).catch(() => {});
-    }, [isLocalClientActive, localPuuid]);
+    }, [activeAccount, isLocalClientActive, localPuuid]);
 
     const handleResolveLocalAccount = useCallback((useLocal: boolean) => {
         if (!pendingLocalAccount) return;
@@ -737,10 +1078,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     return (
         <DataContext.Provider value={{
-            agents, weapons, ownedBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
+            agents, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
             sprays, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,
+            startLoginFlow, cancelLoginFlow, loginInFlight,
             storefrontRefreshKey,
             pendingLocalAccount,
             showLocalAccountChooser: pendingLocalAccount !== null,

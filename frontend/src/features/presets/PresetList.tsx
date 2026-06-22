@@ -1,7 +1,9 @@
 "use client";
 
 import { Preset, Agent } from "@/lib/types";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useData } from "@/context/DataContext";
+import { DEFAULT_PRESET_ID } from "@/lib/effectivePreset";
 
 interface PresetListProps {
     presets: Preset[];
@@ -35,7 +37,7 @@ export default function PresetList({
     onNewPreset,
 }: PresetListProps) {
     const savedPresets = Array.isArray(presets)
-        ? presets.filter((p) => p.uuid !== "default-preset")
+        ? presets.filter((p) => p.uuid !== DEFAULT_PRESET_ID)
         : [];
 
     const topLevelPresets = savedPresets.filter((p) => !p.parentUuid);
@@ -181,6 +183,69 @@ export function PresetCard({
     const [menuOpen, setMenuOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
+    const { weapons, playerCards } = useData();
+
+    const equippedCard = useMemo(() => {
+        const cardId = preset.identity?.playerCardId;
+        if (!cardId) return null;
+        return playerCards.find(c => c.uuid.toLowerCase() === cardId.toLowerCase());
+    }, [preset.identity?.playerCardId, playerCards]);
+
+    const skinPreviews = useMemo(() => {
+        if (!preset.loadout) return [];
+        const items: Array<{ name: string; image: string }> = [];
+        
+        const weaponPriority = [
+            "2f59173c-433b-8590-a734-77e485057b24", // Melee
+            "edf530be-4047-020c-7d49-7c2420a9d7dc", // Vandal
+            "ee8e8d15-496b-07ac-e5f6-8fae5d4c7b1a", // Phantom
+            "1baa85b4-4c70-1284-6d97-f7e170876c64", // Sheriff
+            "a03b24d3-472b-9974-bc7e-3141fae62483", // Operator
+        ];
+
+        for (const wUuid of weaponPriority) {
+            const equipped = preset.loadout[wUuid];
+            if (!equipped) continue;
+            
+            const weapon = weapons.find(w => w.uuid === wUuid);
+            if (!weapon) continue;
+
+            const skin = weapon.skins.find(s => s.uuid === equipped.skinId);
+            if (!skin) continue;
+
+            const chroma = skin.chromas.find(c => c.uuid === equipped.chromaId);
+            const image = chroma?.fullRender || chroma?.displayIcon || skin.displayIcon || "";
+            
+            if (image) {
+                items.push({
+                    name: skin.displayName,
+                    image,
+                });
+            }
+        }
+
+        if (items.length < 3) {
+            for (const [wUuid, equipped] of Object.entries(preset.loadout)) {
+                if (weaponPriority.includes(wUuid)) continue;
+                const weapon = weapons.find(w => w.uuid === wUuid);
+                if (!weapon) continue;
+                const skin = weapon.skins.find(s => s.uuid === equipped.skinId);
+                if (!skin) continue;
+                const chroma = skin.chromas.find(c => c.uuid === equipped.chromaId);
+                const image = chroma?.fullRender || chroma?.displayIcon || skin.displayIcon || "";
+                if (image) {
+                    items.push({
+                        name: skin.displayName,
+                        image,
+                    });
+                }
+                if (items.length >= 4) break;
+            }
+        }
+        
+        return items.slice(0, 4);
+    }, [preset.loadout, weapons]);
+
     useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
             if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -241,7 +306,7 @@ export function PresetCard({
                 <h3 className="card-name">{preset.name}</h3>
 
                 {/* Assigned Agents list */}
-                {allAssignedAgents.length > 0 ? (
+                {allAssignedAgents.length > 0 && (
                     <div className="card-assigned-agents">
                         {allAssignedAgents.slice(0, 3).map((agent) => (
                             <div key={agent.uuid} className="mini-agent-bubble" title={agent.displayName}>
@@ -254,10 +319,24 @@ export function PresetCard({
                             </div>
                         )}
                     </div>
-                ) : (
-                    <div className="card-assigned-agents-empty">No agents assigned</div>
                 )}
             </div>
+
+            {/* Visual Preview Strip */}
+            {(skinPreviews.length > 0 || equippedCard) && (
+                <div className="preset-skins-preview">
+                    {equippedCard && (
+                        <div className="preset-skin-preview-item identity-preview" title={`Card: ${equippedCard.displayName}`}>
+                            <img src={equippedCard.smallArt || equippedCard.displayIcon} alt={equippedCard.displayName} style={{ objectFit: 'cover', borderRadius: '2px' }} />
+                        </div>
+                    )}
+                    {skinPreviews.map((preview, i) => (
+                        <div key={i} className="preset-skin-preview-item" title={preview.name}>
+                            <img src={preview.image} alt={preview.name} />
+                        </div>
+                    ))}
+                </div>
+            )}
 
             <div className="card-footer" onClick={(e) => e.stopPropagation()}>
                 <div className="card-left-info">

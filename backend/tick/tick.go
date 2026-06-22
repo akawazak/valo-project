@@ -122,7 +122,7 @@ func (t *Ticker) Start() {
 				continue
 			}
 
-			existingPresets, err := presets.Get()
+			existingPresets, err := presets.GetForOwner(t.Val.Player.Uuid)
 			if err != nil {
 				slog.Error("error when getting presets", "err", err)
 				continue

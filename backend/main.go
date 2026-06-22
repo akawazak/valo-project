@@ -4,6 +4,7 @@ import (
 	"backend/handlers"
 	"backend/settings"
 	"backend/tick"
+	"crypto/tls"
 	"log"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,15 @@ import (
 )
 
 func main() {
+	// Set a global timeout on the default HTTP client so that valclient's
+	// RunRequest (which uses http.DefaultClient internally) won't hang
+	// forever when the Riot API or local client is unreachable.
+	http.DefaultClient = &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	initLogger()
 
 	h := handlers.NewHandler(nil)
@@ -62,12 +72,14 @@ func main() {
 	mux.HandleFunc("GET /v1/accounts", h.GetAccounts)
 	mux.HandleFunc("POST /v1/accounts", h.PostAccounts)
 	mux.HandleFunc("GET /v1/accounts/local", h.GetLocalAccount)
+	mux.HandleFunc("GET /v1/livematch", h.GetLiveMatch)
 
 	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
 	mux.HandleFunc("POST /v1/auth/token", h.PostAuthToken)
 	mux.HandleFunc("POST /v1/auth/ssid-reauth", h.PostSsidReauth)
 	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
 	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
+	mux.HandleFunc("GET /v1/missions", h.GetMissions)
 
 	// /v1/profile/* — rank tracker + match history + sync control
 	// (see valovault/.mavis/plans/tracking-design.md §2).

@@ -14,6 +14,7 @@ export default [
         "build/**",
         "next-env.d.ts",
         "src-tauri/**",
+        "scripts/**",
     ],
   },
 

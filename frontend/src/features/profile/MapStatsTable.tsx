@@ -71,9 +71,17 @@ export default function MapStatsTable({
                                 <td className="stats-table-num">{m.matches}</td>
                                 <td className="stats-table-num">{m.wins}</td>
                                 <td className="stats-table-num">
-                                    <span className={m.winrate >= 50 ? "wr-good" : "wr-bad"}>
-                                        {pct(m.winrate)}
-                                    </span>
+                                    <div className="winrate-bar-container">
+                                        <span className={m.winrate >= 55 ? "wr-good" : m.winrate < 45 ? "wr-bad" : "text-secondary"}>
+                                            {pct(m.winrate)}
+                                        </span>
+                                        <div className="winrate-bar-track">
+                                            <div
+                                                className={`winrate-bar-fill ${m.winrate >= 55 ? "good" : m.winrate < 45 ? "bad" : "neutral"}`}
+                                                style={{ width: `${m.winrate}%` }}
+                                            />
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                         );

@@ -37,14 +37,15 @@ export default function PlayerCardPanel({
     const portraitUrl = getPlayerCardPortraitUrl(selectedCard);
 
     return (
-        <div style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.05)', paddingBottom: '0.75rem' }}>
+        <div className="player-card-panel-premium">
             <div className="cosmetics-sub-header">Identity</div>
 
             <button
                 type="button"
                 className="player-card-slot-premium"
                 onClick={() => setPickerOpen(true)}
-                title="Change player card &amp; title"
+                aria-label="Change player card and title"
+                title="Change player card and title"
             >
                 <div className="player-card-portrait">
                     {portraitUrl ? (
@@ -86,8 +87,6 @@ export default function PlayerCardPanel({
                         </span>
                     </div>
                 </div>
-
-                <span className="player-card-change-hint">Click to change</span>
             </button>
 
             {pickerOpen && createPortal(

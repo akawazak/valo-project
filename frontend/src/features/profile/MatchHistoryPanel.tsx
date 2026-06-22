@@ -130,10 +130,14 @@ async function loadMaps(): Promise<Record<string, MapMeta>> {
             const m: Record<string, MapMeta> = {};
             for (const mp of d?.data ?? []) {
                 if (!mp.uuid) continue;
-                m[mp.uuid.toLowerCase()] = {
+                const meta = {
                     name: mp.displayName,
                     splash: mp.splash || "",
                 };
+                m[mp.uuid.toLowerCase()] = meta;
+                if (mp.mapUrl) {
+                    m[mp.mapUrl.toLowerCase()] = meta;
+                }
             }
             mapCache = m;
             return m;
@@ -539,12 +543,19 @@ export default function MatchHistoryPanel({ onConnectAccount }: Props) {
                                             <div className="expanded-players-grid">
                                                 {det.players.map((p, idx) => {
                                                     const a = agents[p.characterId?.toLowerCase() ?? ""];
-                                                    const an = a?.name || p.characterId?.slice(0, 8) || "Unknown";
+                                                    const agentName = a?.name || p.characterId?.slice(0, 8) || "Agent";
                                                     const ai = a?.icon || `https://media.valorant-api.com/agents/${p.characterId}/displayicon.png`;
+                                                    
+                                                    // Determine teammate or enemy role
+                                                    const isTeammate = lp ? p.teamId === lp.teamId : true;
+                                                    const suffix = p.isLocal ? "" : isTeammate ? " (Teammate)" : " (Enemy)";
+                                                    const displayName = p.gameName
+                                                        ? `${p.gameName}${p.tagLine ? `#${p.tagLine}` : ""}`
+                                                        : p.isLocal
+                                                            ? "You"
+                                                            : `${agentName}${suffix}`;
+                                                    
                                                     // Win flag = blue or red matches localPlayer's team.
-                                                    // MatchDetails has no per-player team, but blueWins tells us
-                                                    // which side won. Without explicit team on each player we
-                                                    // fall back to score comparison: this is best-effort.
                                                     const won = lp ? (m.win && lp.score >= p.score) || (!m.win && lp.score < p.score) : false;
                                                     return (
                                                         <div
@@ -553,13 +564,15 @@ export default function MatchHistoryPanel({ onConnectAccount }: Props) {
                                                         >
                                                             <Image
                                                                 src={ai}
-                                                                alt={an}
+                                                                alt={agentName}
                                                                 width={28}
                                                                 height={28}
                                                                 unoptimized
                                                                 className="expanded-player-icon"
                                                             />
-                                                            <span className="expanded-player-name">{an}</span>
+                                                            <span className="expanded-player-name" title={agentName}>
+                                                                {displayName}
+                                                            </span>
                                                             <span className="expanded-player-kda">
                                                                 {p.kills}/{p.deaths}/{p.assists}
                                                             </span>

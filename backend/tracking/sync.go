@@ -19,12 +19,13 @@ import (
 // Construct via NewSyncManager. Start is safe to call from any
 // goroutine; the actual sync runs in a background goroutine.
 type SyncManager struct {
-	db       *sql.DB
+	db        *sql.DB
 	fetchRiot func(method, url string, body []byte) ([]byte, error)
-	appDir   string
+	appDir    string
 
-	mu        sync.Mutex
-	inFlight  map[string]bool
+	mu       sync.Mutex
+	inFlight map[string]bool
+	onDone   func(puuid string, err error)
 }
 
 // NewSyncManager builds a SyncManager. `fetchRiot` is the HTTP callback
@@ -41,6 +42,15 @@ func NewSyncManager(db *sql.DB, fetchRiot func(method, url string, body []byte) 
 	}
 }
 
+// SetDoneCallback registers a callback that runs when a background
+// sync finishes. The API layer uses this to expose per-account errors
+// through /v1/profile/sync-status.
+func (m *SyncManager) SetDoneCallback(cb func(puuid string, err error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDone = cb
+}
+
 // InFlight reports whether a sync is currently running for the given
 // puuid. Used by the API handler to populate the sync-status
 // endpoint without claiming the lock.
@@ -53,12 +63,12 @@ func (m *SyncManager) InFlight(puuid string) bool {
 // Start kicks off a background sync for the given puuid. The return
 // tuple is:
 //
-//   started=true,  err=nil      — sync was queued, ran, and finished
-//                                 without fatal error.
-//   started=false, err=nil      — a sync is already in flight for this
-//                                 puuid. Try again later.
-//   started=false, err!=nil     — startup failed (DB error, initial
-//                                 sync-state read failure, etc.).
+//	started=true,  err=nil      — sync was queued, ran, and finished
+//	                              without fatal error.
+//	started=false, err=nil      — a sync is already in flight for this
+//	                              puuid. Try again later.
+//	started=false, err!=nil     — startup failed (DB error, initial
+//	                              sync-state read failure, etc.).
 //
 // The actual sync runs in a goroutine and is non-blocking. Per-row
 // fetch errors are logged and skipped — they do NOT abort the whole
@@ -80,12 +90,17 @@ func (m *SyncManager) Start(puuid, region string) (started bool, err error) {
 	// return synchronously after launching the goroutine. Callers that
 	// want "did it finish" should poll InFlight.
 	go func() {
+		var runErr error
 		defer func() {
 			m.mu.Lock()
 			delete(m.inFlight, puuid)
+			cb := m.onDone
 			m.mu.Unlock()
+			if cb != nil {
+				cb(puuid, runErr)
+			}
 		}()
-		if runErr := m.runOnce(puuid, region); runErr != nil {
+		if runErr = m.runOnce(puuid, region); runErr != nil {
 			slog.Error("tracking: sync run failed", "puuid", puuid, "err", runErr)
 		}
 	}()
@@ -102,38 +117,58 @@ func (m *SyncManager) runOnce(puuid, region string) error {
 		return fmt.Errorf("read sync state: %w", err)
 	}
 
-	// Step 2: compute the batch to fetch.
-	endIndex := 100
-	if state.LastHistoryEndIndex > 0 {
-		endIndex = state.LastHistoryEndIndex + 20
-	}
-	historyURL := fmt.Sprintf(
-		"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=0&endIndex=%d",
-		shardForRegion(region), puuid, endIndex,
-	)
-	body, err := m.fetchRiot("GET", historyURL, nil)
-	if err != nil {
-		return fmt.Errorf("fetch match history: %w", err)
-	}
-
 	type historyItem struct {
 		MatchID       string `json:"MatchID"`
 		GameStartTime int64  `json:"GameStartTime"`
 		QueueID       string `json:"QueueID"`
 	}
-	var histResp struct {
-		History []historyItem `json:"History"`
+
+	// Step 2: compute the history window and fetch it in Riot's
+	// accepted page size. The endpoint rejects wide windows such as
+	// 0..100 with MATCH_HISTORY_INVALID_INDICES.
+	const pageSize = 20
+	endIndex := pageSize
+	if state.LastHistoryEndIndex > 0 {
+		endIndex = state.LastHistoryEndIndex + pageSize
 	}
-	if err := json.Unmarshal(body, &histResp); err != nil {
-		return fmt.Errorf("parse history: %w", err)
+	var history []historyItem
+	for start := 0; start < endIndex; start += pageSize {
+		pageEnd := start + pageSize
+		if pageEnd > endIndex {
+			pageEnd = endIndex
+		}
+		historyURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=%d&endIndex=%d",
+			shardForRegion(region), puuid, start, pageEnd,
+		)
+		body, err := m.fetchRiot("GET", historyURL, nil)
+		if err != nil {
+			return fmt.Errorf("fetch match history %d..%d: %w", start, pageEnd, err)
+		}
+		var histResp struct {
+			History []historyItem `json:"History"`
+		}
+		if err := json.Unmarshal(body, &histResp); err != nil {
+			return fmt.Errorf("parse history %d..%d: %w", start, pageEnd, err)
+		}
+		history = append(history, histResp.History...)
+		if len(histResp.History) < pageEnd-start {
+			endIndex = pageEnd
+			break
+		}
 	}
 
 	// Step 3: dedupe against cache.
 	var newIDs []string
-	for _, h := range histResp.History {
+	seenIDs := map[string]struct{}{}
+	for _, h := range history {
 		if h.MatchID == "" {
 			continue
 		}
+		if _, seen := seenIDs[h.MatchID]; seen {
+			continue
+		}
+		seenIDs[h.MatchID] = struct{}{}
 		cached, err := IsMatchCached(m.db, h.MatchID)
 		if err != nil {
 			slog.Warn("tracking: IsMatchCached error", "matchID", h.MatchID, "err", err)
@@ -145,7 +180,7 @@ func (m *SyncManager) runOnce(puuid, region string) error {
 	}
 
 	// Step 4: fetch match-details in parallel, 4-way concurrent.
-	eg, _ := errgroup.WithContext(nil)
+	var eg errgroup.Group
 	eg.SetLimit(4)
 	results := make([][]byte, len(newIDs))
 	errs := make([]error, len(newIDs))
@@ -168,13 +203,71 @@ func (m *SyncManager) runOnce(puuid, region string) error {
 	}
 	_ = eg.Wait()
 
-	// Step 5-6: insert each successfully fetched match.
+	// Step 5: parse player subjects with empty names and resolve them via name-service.
+	var emptyPUUIDs []string
+	seenPUUIDs := make(map[string]bool)
+	for _, raw := range results {
+		if raw == nil {
+			continue
+		}
+		var playerParser struct {
+			Players []struct {
+				Subject        string `json:"subject"`
+				GameName       string `json:"gameName"`
+				PlayerIdentity struct {
+					GameName string `json:"gameName"`
+				} `json:"playerIdentity"`
+			} `json:"players"`
+		}
+		if err := json.Unmarshal(raw, &playerParser); err == nil {
+			for _, p := range playerParser.Players {
+				if p.GameName == "" && p.PlayerIdentity.GameName == "" {
+					puid := strings.ToLower(p.Subject)
+					if puid != "" && !seenPUUIDs[puid] {
+						seenPUUIDs[puid] = true
+						emptyPUUIDs = append(emptyPUUIDs, p.Subject) // Keep original case for Riot API
+					}
+				}
+			}
+		}
+	}
+
+	resolvedNames := make(map[string]struct{ Name, Tag string })
+	if len(emptyPUUIDs) > 0 {
+		nameURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/name-service/v2/players",
+			shardForRegion(region),
+		)
+		reqBody, _ := json.Marshal(emptyPUUIDs)
+		body, err := m.fetchRiot("PUT", nameURL, reqBody)
+		if err == nil {
+			var nameResp []struct {
+				Subject  string `json:"Subject"`
+				GameName string `json:"GameName"`
+				TagLine  string `json:"TagLine"`
+			}
+			if err := json.Unmarshal(body, &nameResp); err == nil {
+				for _, r := range nameResp {
+					resolvedNames[strings.ToLower(r.Subject)] = struct{ Name, Tag string }{
+						Name: r.GameName,
+						Tag:  r.TagLine,
+					}
+				}
+			} else {
+				slog.Warn("tracking: failed to parse name-service response", "err", err)
+			}
+		} else {
+			slog.Warn("tracking: name-service fetch failed", "err", err)
+		}
+	}
+
+	// Step 6: insert each successfully fetched match.
 	inserted := 0
 	for i, raw := range results {
 		if raw == nil {
 			continue
 		}
-		if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, raw); err != nil {
+		if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, raw, resolvedNames); err != nil {
 			slog.Warn("tracking: InsertMatchDetails failed", "matchID", newIDs[i], "err", err)
 			continue
 		}
@@ -195,6 +288,80 @@ func (m *SyncManager) runOnce(puuid, region string) error {
 	// Step 8: recompute aggregates for the local player.
 	if err := RecomputeAggregates(m.db, puuid); err != nil {
 		slog.Warn("tracking: RecomputeAggregates failed", "err", err)
+	}
+
+	// Step 8.5: resolve any missing names in the database for older matches.
+	resolvedTotal := 0
+	for batchCount := 0; batchCount < 20; batchCount++ { // cap at 20 batches of 100 to prevent infinite loop
+		var dbEmptyPUUIDs []string
+		drows, err := m.db.Query(`
+			SELECT DISTINCT subject FROM match_players
+			WHERE gameName = '' OR gameName IS NULL
+			LIMIT 100
+		`)
+		if err != nil {
+			slog.Warn("tracking: failed to query empty name PUUIDs", "err", err)
+			break
+		}
+		for drows.Next() {
+			var sub string
+			if err := drows.Scan(&sub); err == nil && sub != "" {
+				dbEmptyPUUIDs = append(dbEmptyPUUIDs, sub)
+			}
+		}
+		drows.Close()
+
+		if len(dbEmptyPUUIDs) == 0 {
+			break
+		}
+
+		nameURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/name-service/v2/players",
+			shardForRegion(region),
+		)
+		reqBody, _ := json.Marshal(dbEmptyPUUIDs)
+		body, err := m.fetchRiot("PUT", nameURL, reqBody)
+		if err != nil {
+			slog.Warn("tracking: batch name-service fetch failed", "err", err)
+			break
+		}
+
+		var nameResp []struct {
+			Subject  string `json:"Subject"`
+			GameName string `json:"GameName"`
+			TagLine  string `json:"TagLine"`
+		}
+		if err := json.Unmarshal(body, &nameResp); err != nil {
+			slog.Warn("tracking: failed to unmarshal batch name-service response", "err", err)
+			break
+		}
+
+		tx, err := m.db.Begin()
+		if err != nil {
+			slog.Warn("tracking: failed to begin transaction for name update", "err", err)
+			break
+		}
+		stmt, err := tx.Prepare(`UPDATE match_players SET gameName = ?, tagLine = ? WHERE subject = ?`)
+		if err != nil {
+			_ = tx.Rollback()
+			slog.Warn("tracking: failed to prepare statement for name update", "err", err)
+			break
+		}
+
+		for _, r := range nameResp {
+			_, err = stmt.Exec(r.GameName, r.TagLine, strings.ToLower(r.Subject))
+			if err == nil {
+				resolvedTotal++
+			}
+		}
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			slog.Warn("tracking: failed to commit transaction for name update", "err", err)
+			break
+		}
+	}
+	if resolvedTotal > 0 {
+		slog.Info("tracking: background name resolution complete", "resolvedCount", resolvedTotal)
 	}
 
 	// Step 9: update sync state.
@@ -231,6 +398,7 @@ func (m *SyncManager) ingestCompetitiveUpdates(puuid string, raw []byte) {
 			continue
 		}
 		snap := RRSnapshot{
+			Puuid:          puuid,
 			MatchID:        r.MatchID,
 			SeasonID:       r.SeasonID,
 			TierBefore:     r.TierBeforeUpdate,

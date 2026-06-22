@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,23 +25,26 @@ import (
 )
 
 // profilePuuid extracts the puuid from the request, preferring the
-// X-Riot-Puuid header over the ?puuid= query parameter. Returns "" if
+// ?puuid= query parameter over the X-Riot-Puuid header. Returns "" if
 // neither is set.
 func profilePuuid(r *http.Request) string {
-	if v := strings.TrimSpace(r.Header.Get("X-Riot-Puuid")); v != "" {
-		return v
+	if v := strings.TrimSpace(r.URL.Query().Get("puuid")); v != "" {
+		return strings.ToLower(v)
 	}
-	return strings.TrimSpace(r.URL.Query().Get("puuid"))
+	if v := strings.TrimSpace(r.Header.Get("X-Riot-Puuid")); v != "" {
+		return strings.ToLower(v)
+	}
+	return ""
 }
 
 // profileRegion extracts the region from the request, preferring the
-// X-Riot-Region header over the ?region= query parameter. Defaults to
+// ?region= query parameter over the X-Riot-Region header. Defaults to
 // "na" if neither is set.
 func profileRegion(r *http.Request) string {
-	if v := strings.TrimSpace(r.Header.Get("X-Riot-Region")); v != "" {
+	if v := strings.TrimSpace(r.URL.Query().Get("region")); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(r.URL.Query().Get("region")); v != "" {
+	if v := strings.TrimSpace(r.Header.Get("X-Riot-Region")); v != "" {
 		return v
 	}
 	return "na"
@@ -83,9 +87,139 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
+	h.applyLiveMMRToOverview(r, overview, puuid)
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
+}
+
+func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Overview, puuid string) {
+	val, err := h.getClient(r)
+	if err != nil || val == nil || val.Player == nil {
+		return
+	}
+	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
+	var live struct {
+		LatestCompetitiveUpdate struct {
+			SeasonID                string `json:"SeasonID"`
+			TierAfterUpdate         int    `json:"TierAfterUpdate"`
+			RankedRatingAfterUpdate int    `json:"RankedRatingAfterUpdate"`
+		} `json:"LatestCompetitiveUpdate"`
+		QueueSkills map[string]struct {
+			TotalGamesWon            int `json:"TotalGamesWon"`
+			RankedRating             int `json:"RankedRating"`
+			CurrentSeasonGamesPlayed int `json:"CurrentSeasonGamesPlayed"`
+			SeasonalInfoBySeasonID   map[string]struct {
+				TotalWins        int `json:"TotalWins"`
+				NumberOfGames    int `json:"NumberOfGames"`
+				RankedRating     int `json:"RankedRating"`
+				RankedRatingPeak int `json:"RankedRatingPeak"`
+				PeakRank         int `json:"PeakRank"`
+				FinalRank        int `json:"FinalRank"`
+			} `json:"SeasonalInfoBySeasonID"`
+		} `json:"QueueSkills"`
+	}
+	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
+		return
+	}
+
+	// 1. Process the latest competitive update first (regardless of current act queue skills)
+	if live.LatestCompetitiveUpdate.SeasonID != "" {
+		overview.CurrentSeasonID = live.LatestCompetitiveUpdate.SeasonID
+	}
+	if live.LatestCompetitiveUpdate.TierAfterUpdate > 0 {
+		overview.CurrentRank.CompetitiveTier = live.LatestCompetitiveUpdate.TierAfterUpdate
+		overview.CurrentRank.RankedRating = live.LatestCompetitiveUpdate.RankedRatingAfterUpdate
+	}
+
+	// 2. Set static tier name fallbacks if needed, using last known tier
+	if overview.CurrentRank.CompetitiveTier > 0 {
+		if overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked") {
+			overview.CurrentRank.TierName = fmt.Sprintf("Tier %d", overview.CurrentRank.CompetitiveTier)
+		}
+	}
+	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
+		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
+	}
+
+	// 3. Fallback early if no competitive queue skills are found in current act
+	comp, ok := live.QueueSkills["competitive"]
+	if !ok {
+		return
+	}
+
+	// 4. Overwrite/merge with specific current-act queue statistics
+	if comp.RankedRating > 0 {
+		overview.CurrentRank.RankedRating = comp.RankedRating
+	}
+	if comp.TotalGamesWon > 0 {
+		overview.CurrentRank.NumberOfWins = comp.TotalGamesWon
+	}
+	if comp.CurrentSeasonGamesPlayed > 0 {
+		overview.CurrentRank.NumberOfGames = comp.CurrentSeasonGamesPlayed
+	}
+
+	seasonID := overview.CurrentSeasonID
+	if seasonID == "" && len(comp.SeasonalInfoBySeasonID) == 1 {
+		for id := range comp.SeasonalInfoBySeasonID {
+			seasonID = id
+		}
+	}
+	if season, ok := comp.SeasonalInfoBySeasonID[seasonID]; ok {
+		if season.NumberOfGames > 0 {
+			overview.CurrentRank.NumberOfGames = season.NumberOfGames
+		}
+		if season.TotalWins > 0 {
+			overview.CurrentRank.NumberOfWins = season.TotalWins
+		}
+		if season.RankedRating > 0 {
+			overview.CurrentRank.RankedRating = season.RankedRating
+		}
+		// Keep the cached non-zero RR if the seasonal payload reports 0
+		// (e.g. just-reset episode). Never overwrite a real value with 0.
+		if overview.CurrentRank.CompetitiveTier == 0 && season.FinalRank > 0 {
+			overview.CurrentRank.CompetitiveTier = season.FinalRank
+		}
+		if season.PeakRank > overview.PeakRank.CompetitiveTier {
+			overview.PeakRank.CompetitiveTier = season.PeakRank
+			overview.PeakRank.SeasonID = seasonID
+		}
+	}
+
+	// Refresh fallback tier names again after seasonal update
+	if overview.CurrentRank.CompetitiveTier > 0 {
+		if overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked") {
+			overview.CurrentRank.TierName = fmt.Sprintf("Tier %d", overview.CurrentRank.CompetitiveTier)
+		}
+	}
+	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
+		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
+	}
+
+	acts := make([]tracking.RankActSummary, 0, len(comp.SeasonalInfoBySeasonID))
+	for id, season := range comp.SeasonalInfoBySeasonID {
+		acts = append(acts, tracking.RankActSummary{
+			SeasonID:     id,
+			Wins:         season.TotalWins,
+			Games:        season.NumberOfGames,
+			RankedRating: season.RankedRating,
+			PeakRank:     season.PeakRank,
+			FinalRank:    season.FinalRank,
+		})
+	}
+	sort.SliceStable(acts, func(i, j int) bool {
+		if acts[i].SeasonID == seasonID {
+			return true
+		}
+		if acts[j].SeasonID == seasonID {
+			return false
+		}
+		return acts[i].SeasonID > acts[j].SeasonID
+	})
+	if len(acts) > 8 {
+		acts = acts[:8]
+	}
+	overview.RankActs = acts
 }
 
 // GetRRHistory — `GET /v1/profile/rr-history` (design doc §2.2).
@@ -195,12 +329,12 @@ func (h *Handler) GetMapStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// countCachedMatches returns the total row count in `matches` for the
+// countCachedMatches returns the total row count in `match_players` for the
 // given puuid. Used to populate the `total` field of the
-// match-history response. Matches db.go's `accountPuuid` index.
+// match-history response. Matches db.go's `subject` index.
 func countCachedMatches(db *sql.DB, puuid string) (int, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM matches WHERE accountPuuid = ?`, puuid).Scan(&n)
+	err := db.QueryRow(`SELECT COUNT(*) FROM match_players WHERE subject = ?`, strings.ToLower(puuid)).Scan(&n)
 	return n, err
 }
 
@@ -243,12 +377,12 @@ func (h *Handler) GetProfileMatchHistory(w http.ResponseWriter, r *http.Request)
 	}
 
 	type matchHistoryResponse struct {
-		Puuid      string                 `json:"puuid"`
-		Region     string                 `json:"region"`
-		StartIndex int                    `json:"startIndex"`
-		EndIndex   int                    `json:"endIndex"`
-		Total      int                    `json:"total"`
-		Queue      string                 `json:"queue"`
+		Puuid      string                  `json:"puuid"`
+		Region     string                  `json:"region"`
+		StartIndex int                     `json:"startIndex"`
+		EndIndex   int                     `json:"endIndex"`
+		Total      int                     `json:"total"`
+		Queue      string                  `json:"queue"`
 		Matches    []tracking.MatchSummary `json:"matches"`
 	}
 	h.returnAny(w, &matchHistoryResponse{
@@ -287,6 +421,10 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 	}
 	for _, p := range cache.Players {
 		ps := tracking.PlayerStats{
+			Subject:      p.Subject,
+			TeamID:       p.TeamID,
+			GameName:     p.GameName,
+			TagLine:      p.TagLine,
 			CharacterID:  p.CharacterID,
 			Kills:        p.Kills,
 			Deaths:       p.Deaths,
@@ -297,7 +435,8 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 			Legshots:     p.Legshots,
 			DamageDealt:  p.DamageDealt,
 			RoundsPlayed: p.RoundsPlayed,
-			IsLocal:      p.IsLocal,
+			IsLocal:         p.IsLocal,
+			CompetitiveTier: p.CompetitiveTier,
 		}
 		if ps.RoundsPlayed < 1 {
 			ps.RoundsPlayed = 1
@@ -411,6 +550,10 @@ func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
 		return
 	}
+	sm.SetDoneCallback(func(donePuuid string, runErr error) {
+		h.setSyncLastError(donePuuid, runErr)
+		h.unmarkSyncInFlight(donePuuid)
+	})
 	started, err := sm.Start(puuid, region)
 	if err != nil {
 		h.unmarkSyncInFlight(puuid)
@@ -427,22 +570,6 @@ func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// Spawn a poller that unmarks the in-flight flag once the
-	// manager's internal lock has cleared. The manager is per-
-	// request, so we keep a reference here. Without the poller the
-	// next user-driven POST would incorrectly report inFlight=true
-	// forever (or until the goroutine naturally finishes).
-	go func(puuid string, sm *tracking.SyncManager) {
-		// Poll for up to 5 minutes.
-		for i := 0; i < 600; i++ {
-			time.Sleep(500 * time.Millisecond)
-			if !sm.InFlight(puuid) {
-				break
-			}
-		}
-		h.unmarkSyncInFlight(puuid)
-	}(puuid, sm)
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -479,6 +606,7 @@ func (h *Handler) GetProfileSyncStatus(w http.ResponseWriter, r *http.Request) {
 		LastSyncedAt: state.LastSyncedAt,
 		InFlight:     h.isSyncInFlight(puuid),
 		TotalMatches: total,
+		LastError:    h.syncLastErrorFor(puuid),
 	})
 }
 

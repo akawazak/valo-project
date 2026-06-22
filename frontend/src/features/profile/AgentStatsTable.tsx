@@ -25,6 +25,26 @@ function ratio(n: number): string {
     return n.toFixed(2);
 }
 
+function kdColor(kd: number | undefined): string {
+    if (!Number.isFinite(kd ?? NaN)) return "";
+    const v = kd ?? 0;
+    if (v >= 2.0) return "stat-elite";
+    if (v >= 1.5) return "stat-great";
+    if (v >= 1.0) return "stat-good";
+    if (v >= 0.8) return "stat-avg";
+    return "stat-poor";
+}
+
+function hsColor(hs: number | undefined): string {
+    if (!Number.isFinite(hs ?? NaN)) return "";
+    const v = hs ?? 0;
+    if (v >= 30) return "stat-elite";
+    if (v >= 22) return "stat-great";
+    if (v >= 15) return "stat-good";
+    if (v >= 10) return "stat-avg";
+    return "stat-poor";
+}
+
 function durationLabel(ms: number): string {
     if (!ms || ms <= 0) return "—";
     const totalMin = Math.floor(ms / 60000);
@@ -90,13 +110,33 @@ export default function AgentStatsTable({
                                 <td className="stats-table-num">{a.matches}</td>
                                 <td className="stats-table-num">{a.wins}</td>
                                 <td className="stats-table-num">
-                                    <span className={a.winrate >= 50 ? "wr-good" : "wr-bad"}>
-                                        {pct(a.winrate)}
+                                    <div className="winrate-bar-container">
+                                        <span className={a.winrate >= 55 ? "wr-good" : a.winrate < 45 ? "wr-bad" : "text-secondary"}>
+                                            {pct(a.winrate)}
+                                        </span>
+                                        <div className="winrate-bar-track">
+                                            <div
+                                                className={`winrate-bar-fill ${a.winrate >= 55 ? "good" : a.winrate < 45 ? "bad" : "neutral"}`}
+                                                style={{ width: `${a.winrate}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                </td>
+                                <td className="stats-table-num">
+                                    <span className={kdColor(a.kda)}>
+                                        {ratio(a.kda)}
                                     </span>
                                 </td>
-                                <td className="stats-table-num">{ratio(a.kda)}</td>
-                                <td className="stats-table-num">{ratio(a.kd)}</td>
-                                <td className="stats-table-num">{pct(a.hsPct)}</td>
+                                <td className="stats-table-num">
+                                    <span className={kdColor(a.kd)}>
+                                        {ratio(a.kd)}
+                                    </span>
+                                </td>
+                                <td className="stats-table-num">
+                                    <span className={hsColor(a.hsPct)}>
+                                        {pct(a.hsPct)}
+                                    </span>
+                                </td>
                                 <td className="stats-table-num">{durationLabel(a.timePlayedMillis)}</td>
                             </tr>
                         );

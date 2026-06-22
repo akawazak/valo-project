@@ -32,6 +32,13 @@
 - **Naming**: camelCase for JS/TS, PascalCase for Go exports
 - **File organization**: Group related files, keep components in feature directories
 - **No tests**: Currently no test framework
+- **Before writing code, stop at the first rung that holds**:
+  1. Does this need to exist? If no, skip it.
+  2. Stdlib does it? Use it.
+  3. Native platform feature? Use it.
+  4. Installed dependency? Use it.
+  5. One line? Keep it one line.
+  6. Only then: write the minimum that works.
 
 ## Lessons Learned & Gotchas
 

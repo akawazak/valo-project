@@ -8,17 +8,17 @@ import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { getPlayerLoadout, getPlayerLoadoutData, getPresets } from '@/services/api';
+import { getPlayerLoadoutData, getPresets } from '@/services/api';
 import { getSettings, saveSettings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { useData } from '@/context/DataContext';
 import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
+import { GameLoadoutMeta } from '@/lib/effectivePreset';
 import { useLoadout } from '@/hooks/useLoadout';
 import RiotLoginCard from '@/components/RiotLoginCard';
 import StorePanels from '@/features/dashboard/StorePanels';
-import RankTrackerPanel from '@/features/profile/RankTrackerPanel';
-import MatchHistoryPanel from '@/features/profile/MatchHistoryPanel';
+import ProfilePanel from '@/features/profile/ProfilePanel';
 import { useTheme } from '@/context/ThemeContext';
 import { exportPreset } from '@/lib/presetShare';
 import AppTopbar from '@/components/AppTopbar';
@@ -26,6 +26,7 @@ import ImportPresetModal from '@/components/ImportPresetModal';
 import AccountManagerModal from '@/components/AccountManagerModal';
 import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
+import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 
 export default function Home() {
     const {
@@ -52,7 +53,7 @@ export default function Home() {
 
     const { theme, toggleTheme } = useTheme();
 
-    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: { sprays: any[], identity?: any } }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
+    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
@@ -61,7 +62,7 @@ export default function Home() {
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     
     // Core Layout State
-    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'rank' | 'matches'>('rank');
+    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('profile');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     
     // Modals
@@ -109,7 +110,7 @@ export default function Home() {
             setIsLoading(true);
             const [fetchedPresets, settings] = await Promise.all([getPresets(), getSettings()]);
             let playerLoadout: Record<string, LoadoutItemV1> = {};
-            let gameMeta: { sprays: any[], identity?: any } = { sprays: [] };
+            let gameMeta: GameLoadoutMeta = { sprays: [] };
             try {
                 const full = await getPlayerLoadoutData();
                 playerLoadout = full.loadout;
@@ -144,7 +145,7 @@ export default function Home() {
         } else {
             setIsLoading(false);
         }
-    }, [isClientHealthy, loadInitialData]);
+    }, [activeAccount?.puuid, isClientHealthy, loadInitialData]);
 
     const prevSettingsRef = useRef<{ autoSelectAgent: boolean; useLocalSso: boolean } | null>(null);
 
@@ -198,7 +199,7 @@ export default function Home() {
         }
         const requestToApply = buildApplyRequest(presetToApply);
         await handleApplyLoadout(requestToApply, presetToApply.name);
-        if (isEditing) handleCancel();
+        if (isEditing && editingPreset?.uuid !== defaultPreset.uuid) handleCancel();
     };
 
     const handlePresetApply = (preset: Preset) => {
@@ -284,7 +285,7 @@ export default function Home() {
                 activeTab={activeTab}
                 onTabChange={(tab) => {
                     setActiveTab(tab);
-                    if (tab === 'store' || tab === 'rank' || tab === 'matches') setIsWorkspaceOpen(false);
+                    if (tab === 'store' || tab === 'profile') setIsWorkspaceOpen(false);
                     if (tab === 'skins') setIsWorkspaceOpen(true);
                 }}
                 activeAccount={activeAccount}
@@ -299,10 +300,8 @@ export default function Home() {
                 <main className="app-main-content">
                     {activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
-                    ) : activeTab === 'rank' ? (
-                        <RankTrackerPanel onConnectAccount={() => setIsAccountsOpen(true)} />
-                    ) : activeTab === 'matches' ? (
-                        <MatchHistoryPanel onConnectAccount={() => setIsAccountsOpen(true)} />
+                    ) : activeTab === 'profile' ? (
+                        <ProfilePanel onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : (
                         isWorkspaceOpen ? (
                             <ArsenalView
@@ -450,10 +449,6 @@ export default function Home() {
                                 sessionId: `session_${acc.puuid}`,
                             };
                             handleAddNewAccount(stableAcc);
-
-                            if (!stableAcc.ssid) {
-                                await refreshAccountToken(stableAcc, true);
-                            }
                         }}
                         onCancel={() => setShowAddAccount(false)}
                     />
@@ -476,6 +471,8 @@ export default function Home() {
                 onChooseLocal={(useLocal) => handleResolveLocalAccount(useLocal)}
                 onClose={() => handleResolveLocalAccount(false)}
             />
+
+            <LiveMatchOverlay />
         </div>
     );
 }

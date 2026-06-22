@@ -122,8 +122,12 @@ export function usePresets(
             }
             return playerData;
         } catch (error) {
-            onPresetSelectError(error);
-            throw error;
+            if (!isEditingRef.current) {
+                onPresetSelectError(error);
+            } else {
+                console.warn('refreshFromGame failed while editing; keeping current edit snapshot', error);
+            }
+            return null;
         }
     }, [onPresetSelectError]);
 
@@ -163,12 +167,16 @@ export function usePresets(
                 setDropdownPreset(null);
                 return;
             }
-            case NamingMode.New:
-                newPreset.loadout = { ...gameLoadout };
+            case NamingMode.New: {
+                const fresh = await getPlayerLoadoutData();
+                newPreset.loadout = { ...fresh.loadout };
                 newPreset.agents = [];
-                newPreset.identity = effectiveIdentity(livePreset, gameMeta);
-                newPreset.sprays = [...effectiveSprays(livePreset, gameMeta)];
+                newPreset.identity = fresh.identity;
+                newPreset.sprays = [...(fresh.sprays || [])];
+                setGameLoadout(fresh.loadout);
+                setGameMeta({ sprays: fresh.sprays || [], identity: fresh.identity });
                 break;
+            }
             case NamingMode.SaveAsNew:
                 newPreset.loadout = { ...currentLoadout };
                 newPreset.agents = editingPreset?.agents || originalPreset?.agents || [];

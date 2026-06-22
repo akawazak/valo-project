@@ -81,6 +81,10 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
         .map((s, i) => `${i === 0 ? "M" : "L"} ${xOf(s.matchStartTime).toFixed(1)} ${yOf(s.rrAfter).toFixed(1)}`)
         .join(" ");
 
+    const areaD = sorted.length > 1
+        ? `${lineD} L ${xOf(sorted[sorted.length - 1].matchStartTime).toFixed(1)} ${yOf(yLo).toFixed(1)} L ${xOf(sorted[0].matchStartTime).toFixed(1)} ${yOf(yLo).toFixed(1)} Z`
+        : "";
+
     // Y axis ticks: 4 horizontal lines + labels
     const tickCount = 4;
     const ticks = Array.from({ length: tickCount + 1 }, (_, i) => {
@@ -100,6 +104,13 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                 viewBox={`0 0 ${width} ${height}`}
                 preserveAspectRatio="none"
             >
+                <defs>
+                    <linearGradient id="rrChartGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--accent, #ff4655)" stopOpacity="0.25" />
+                        <stop offset="100%" stopColor="var(--accent, #ff4655)" stopOpacity="0.00" />
+                    </linearGradient>
+                </defs>
+
                 {/* Gridlines + Y labels */}
                 {ticks.map((t) => (
                     <g key={`tick-${t.rr}`}>
@@ -121,6 +132,15 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                     </g>
                 ))}
 
+                {/* Area under the line */}
+                {areaD && (
+                    <path
+                        d={areaD}
+                        fill="url(#rrChartGrad)"
+                        className="rr-chart-area-fill"
+                    />
+                )}
+
                 {/* RR line */}
                 <path d={lineD} className="rr-chart-line" />
 
@@ -130,7 +150,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                         key={`pt-${s.matchId}-${i}`}
                         cx={xOf(s.matchStartTime)}
                         cy={yOf(s.rrAfter)}
-                        r={2.5}
+                        r={3}
                         className={`rr-chart-dot ${s.rrEarned >= 0 ? "win" : "loss"}`}
                     >
                         <title>

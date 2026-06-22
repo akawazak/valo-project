@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 )
 
 func (h *Handler) GetPresets(w http.ResponseWriter, r *http.Request) {
-	data, err := presets.GetRaw()
+	owner := h.presetOwner(r)
+	data, err := presets.GetRawForOwner(owner)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.Header().Set("Content-Type", "application/json")
@@ -37,10 +39,23 @@ func (h *Handler) PostPresets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := presets.SaveRaw(body.Bytes()); err != nil {
+	if err := presets.SaveRawForOwner(h.presetOwner(r), body.Bytes()); err != nil {
 		h.returnError(w, err)
 		return
 	}
 
 	h.returnAny(w, "success")
+}
+
+func (h *Handler) presetOwner(r *http.Request) string {
+	if puuid := strings.TrimSpace(r.Header.Get("X-Riot-Puuid")); puuid != "" {
+		return puuid
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.Val != nil && h.Val.Player != nil {
+		return h.Val.Player.Uuid
+	}
+	return ""
 }

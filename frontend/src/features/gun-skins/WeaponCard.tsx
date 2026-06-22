@@ -28,6 +28,8 @@ export default function WeaponCard({
     selectedItem,
     parentItem,
 }: WeaponCardProps) {
+    const { ownedBuddies } = useData();
+
     let item: LoadoutItemV1;
     if (selectedItem) {
         item = selectedItem;
@@ -69,7 +71,6 @@ export default function WeaponCard({
 
     const tierColor = TIER_COLORS[safeSkin.contentTierUuid] || "#6b7280";
 
-    const { ownedBuddies } = useData();
     const buddy = ownedBuddies.find(b => b.levels[0].uuid === item.charmLevelID);
 
     const handleResetSkinClick = (e: React.MouseEvent) => {

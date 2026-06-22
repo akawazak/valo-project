@@ -9,16 +9,16 @@ export type GameLoadoutMeta = {
 
 export function effectiveSprays(preset: Preset | null | undefined, game: GameLoadoutMeta): SpraySlot[] {
     if (preset?.sprays && preset.sprays.length > 0) {
-        return preset.sprays;
+        return [...preset.sprays];
     }
-    return game.sprays;
+    return [...game.sprays];
 }
 
 export function effectiveIdentity(preset: Preset | null | undefined, game: GameLoadoutMeta): IdentityV1 {
-    if (preset?.identity?.playerCardId || preset?.identity?.playerTitleId) {
-        return preset.identity;
-    }
-    return game.identity ?? { playerCardId: '', playerTitleId: '' };
+    const identity = (preset?.identity?.playerCardId || preset?.identity?.playerTitleId)
+        ? preset.identity
+        : game.identity;
+    return { ...(identity ?? { playerCardId: '', playerTitleId: '' }) };
 }
 
 /** Merge parent preset guns with variant overrides for display and apply. */

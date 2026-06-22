@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS match_players (
     matchID         TEXT    NOT NULL,
     subject         TEXT    NOT NULL,
     teamId          TEXT    NOT NULL,
+    gameName        TEXT    NOT NULL DEFAULT '',
+    tagLine         TEXT    NOT NULL DEFAULT '',
     characterId     TEXT    NOT NULL,
     accountLevel    INTEGER NOT NULL DEFAULT 0,
     competitiveTier INTEGER NOT NULL DEFAULT 0,
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS match_players (
 CREATE INDEX IF NOT EXISTS idx_match_players_subject ON match_players(subject);
 
 CREATE TABLE IF NOT EXISTS rr_snapshots (
-    matchID        TEXT    NOT NULL PRIMARY KEY,
+    puuid          TEXT    NOT NULL DEFAULT '',
+    matchID        TEXT    NOT NULL,
     seasonId       TEXT    NOT NULL,
     tierBefore     INTEGER NOT NULL DEFAULT 0,
     tierAfter      INTEGER NOT NULL DEFAULT 0,
@@ -66,7 +69,8 @@ CREATE TABLE IF NOT EXISTS rr_snapshots (
     rrAfter        INTEGER NOT NULL DEFAULT 0,
     rrEarned       INTEGER NOT NULL DEFAULT 0,
     afkPenalty     INTEGER NOT NULL DEFAULT 0,
-    matchStartTime INTEGER NOT NULL
+    matchStartTime INTEGER NOT NULL,
+    PRIMARY KEY (puuid, matchID)
 );
 CREATE INDEX IF NOT EXISTS idx_rr_snapshots_season_time ON rr_snapshots(seasonId, matchStartTime);
 
@@ -128,11 +132,128 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("tracking: ping %s: %w", dsn, err)
 	}
+	if err := migrateRRSnapshotsTable(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("tracking: migrate rr_snapshots: %w", err)
+	}
 	if _, err := db.Exec(schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("tracking: apply schema: %w", err)
 	}
+	if err := ensureMatchPlayerNameColumns(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func migrateRRSnapshotsTable(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(rr_snapshots)")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	hasPuuid := false
+	hasTable := false
+	for rows.Next() {
+		hasTable = true
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, "puuid") {
+			hasPuuid = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if hasTable && !hasPuuid {
+		if _, err := db.Exec(`
+			ALTER TABLE rr_snapshots RENAME TO rr_snapshots_legacy;
+			CREATE TABLE rr_snapshots (
+			    puuid TEXT NOT NULL,
+			    matchID TEXT NOT NULL,
+			    seasonId TEXT NOT NULL,
+			    matchStartTime INTEGER NOT NULL,
+			    tierAfter INTEGER NOT NULL DEFAULT 0,
+			    rrBefore INTEGER NOT NULL DEFAULT 0,
+			    rrAfter INTEGER NOT NULL DEFAULT 0,
+			    rrEarned INTEGER NOT NULL DEFAULT 0,
+			    PRIMARY KEY (puuid, matchID)
+			);
+			INSERT OR IGNORE INTO rr_snapshots
+			    (puuid, matchID, seasonId, matchStartTime, tierAfter, rrBefore, rrAfter, rrEarned)
+			SELECT
+			    COALESCE((
+			        SELECT mp.subject
+			        FROM match_players mp
+			        WHERE mp.matchID = legacy.matchID
+			        ORDER BY mp.subject ASC
+			        LIMIT 1
+			    ), ''),
+			    legacy.matchID,
+			    legacy.seasonId,
+			    legacy.matchStartTime,
+			    legacy.tierAfter,
+			    legacy.rrBefore,
+			    legacy.rrAfter,
+			    legacy.rrEarned
+			FROM rr_snapshots_legacy legacy
+			WHERE COALESCE((
+			        SELECT mp.subject
+			        FROM match_players mp
+			        WHERE mp.matchID = legacy.matchID
+			        ORDER BY mp.subject ASC
+			        LIMIT 1
+			    ), '') <> '';
+			DROP TABLE rr_snapshots_legacy;
+		`); err != nil {
+			return fmt.Errorf("migrate legacy rr_snapshots: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureMatchPlayerNameColumns(db *sql.DB) error {
+	if err := addColumnIfMissing(db, "match_players", "gameName", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissing(db, "match_players", "tagLine", "TEXT NOT NULL DEFAULT ''")
+}
+
+func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("tracking: inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("tracking: scan %s columns: %w", table, err)
+		}
+		if strings.EqualFold(name, column) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("tracking: read %s columns: %w", table, err)
+	}
+	if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition); err != nil {
+		return fmt.Errorf("tracking: add %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // RawMatchesDir returns the on-disk directory where InsertMatchDetails
@@ -162,7 +283,7 @@ func IsMatchCached(db *sql.DB, matchID string) (bool, error) {
 // partial disk failure doesn't leave us with DB rows pointing at a
 // missing file. Insertion is atomic per (match, players) tuple.
 // Existing rows for the same matchID are overwritten.
-func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []byte) error {
+func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []byte, resolvedNames map[string]struct{ Name, Tag string }) error {
 	if matchID == "" {
 		return fmt.Errorf("tracking: InsertMatchDetails: matchID is required")
 	}
@@ -184,7 +305,7 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 	}
 
 	// 2. Parse the raw JSON.
-	parsed, err := parseMatchDetails(raw, puuid)
+	parsed, err := parseMatchDetails(raw, puuid, resolvedNames)
 	if err != nil {
 		return fmt.Errorf("tracking: parse match details: %w", err)
 	}
@@ -233,10 +354,10 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO match_players
-		    (matchID, subject, teamId, characterId, accountLevel, competitiveTier,
+		    (matchID, subject, teamId, gameName, tagLine, characterId, accountLevel, competitiveTier,
 		     kills, deaths, assists, score, headshots, bodyshots, legshots,
 		     damageDealt, roundsPlayed, isLocal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare player insert: %w", err)
@@ -248,6 +369,8 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 			matchID,
 			strings.ToLower(p.Subject),
 			p.TeamID,
+			p.GameName,
+			p.TagLine,
 			strings.ToLower(p.CharacterID),
 			p.AccountLevel,
 			p.CompetitiveTier,
@@ -299,7 +422,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	}
 
 	rows, err := db.Query(`
-		SELECT matchID, subject, teamId, characterId, accountLevel, competitiveTier,
+		SELECT matchID, subject, teamId, gameName, tagLine, characterId, accountLevel, competitiveTier,
 		       kills, deaths, assists, score, headshots, bodyshots, legshots,
 		       damageDealt, roundsPlayed, isLocal
 		FROM match_players WHERE matchID = ? ORDER BY teamId, score DESC`, matchID)
@@ -313,8 +436,9 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 		var p PlayerRow
 		var isLocal int
 		if err := rows.Scan(
-			&p.MatchID, &p.Subject, &p.TeamID, &p.CharacterID, &p.AccountLevel,
-			&p.CompetitiveTier, &p.Kills, &p.Deaths, &p.Assists, &p.Score,
+			&p.MatchID, &p.Subject, &p.TeamID, &p.GameName, &p.TagLine,
+			&p.CharacterID, &p.AccountLevel, &p.CompetitiveTier,
+			&p.Kills, &p.Deaths, &p.Assists, &p.Score,
 			&p.Headshots, &p.Bodyshots, &p.Legshots, &p.DamageDealt,
 			&p.RoundsPlayed, &isLocal,
 		); err != nil {
@@ -334,17 +458,17 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 }
 
 // UpsertRRSnapshot inserts a new RR snapshot row, or REPLACES an
-// existing one keyed by MatchID.
+// existing one keyed by (puuid, matchID).
 func UpsertRRSnapshot(db *sql.DB, snap RRSnapshot) error {
 	if snap.MatchID == "" {
 		return fmt.Errorf("tracking: UpsertRRSnapshot: matchID is required")
 	}
 	_, err := db.Exec(`
 		INSERT OR REPLACE INTO rr_snapshots
-		    (matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
+		strings.ToLower(snap.Puuid), snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
 		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.MatchStartTime,
 	)
 	if err != nil {
@@ -362,10 +486,10 @@ func InsertRRSnapshotIfAbsent(db *sql.DB, snap RRSnapshot) error {
 	}
 	_, err := db.Exec(`
 		INSERT OR IGNORE INTO rr_snapshots
-		    (matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
+		strings.ToLower(snap.Puuid), snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
 		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.MatchStartTime,
 	)
 	if err != nil {
@@ -417,10 +541,30 @@ func RecomputeAggregates(db *sql.DB, puuid string) error {
 	}
 
 	if _, err := tx.Exec(`
+		INSERT INTO agent_stats
+		    (puuid, characterId, queue, matches, wins, kills, deaths, assists,
+		     headshots, timePlayedMillis)
+		SELECT
+		    mp.subject, mp.characterId, m.queueID,
+		    COUNT(*),
+		    SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
+		              OR (m.blueWins = 0 AND mp.teamId = 'Red')
+		             THEN 1 ELSE 0 END),
+		    SUM(mp.kills), SUM(mp.deaths), SUM(mp.assists),
+		    SUM(mp.headshots), SUM(m.gameLengthMillis)
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE mp.subject = ? AND m.queueID != '' AND m.queueID != 'all'
+		GROUP BY mp.characterId, m.queueID
+	`, puuid); err != nil {
+		return fmt.Errorf("tracking: recompute agent_stats per queue: %w", err)
+	}
+
+	if _, err := tx.Exec(`
 		INSERT INTO map_stats
 		    (puuid, mapID, queue, matches, wins)
 		SELECT
-		    m.accountPuuid, m.mapID, 'all',
+		    mp.subject, m.mapID, 'all',
 		    COUNT(*),
 		    SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
 		              OR (m.blueWins = 0 AND mp.teamId = 'Red')
@@ -431,6 +575,23 @@ func RecomputeAggregates(db *sql.DB, puuid string) error {
 		GROUP BY m.mapID
 	`, puuid); err != nil {
 		return fmt.Errorf("tracking: recompute map_stats: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO map_stats
+		    (puuid, mapID, queue, matches, wins)
+		SELECT
+		    mp.subject, m.mapID, m.queueID,
+		    COUNT(*),
+		    SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
+		              OR (m.blueWins = 0 AND mp.teamId = 'Red')
+		             THEN 1 ELSE 0 END)
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ? AND m.queueID != '' AND m.queueID != 'all'
+		GROUP BY m.mapID, m.queueID
+	`, puuid); err != nil {
+		return fmt.Errorf("tracking: recompute map_stats per queue: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -461,28 +622,32 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		rows, err = db.Query(`
 			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
 			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
+			       mp.teamId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
-			       mp.roundsPlayed
+			       mp.roundsPlayed,
+			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
 			FROM matches m
 			JOIN match_players mp ON mp.matchID = m.matchID
-			WHERE m.accountPuuid = ? AND mp.subject = ?
+			LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
+			WHERE mp.subject = ?
 			ORDER BY m.gameStartMillis DESC, m.matchID ASC
 			LIMIT ? OFFSET ?
-		`, puuid, strings.ToLower(puuid), end-start, start)
+		`, strings.ToLower(puuid), end-start, start)
 	} else {
 		rows, err = db.Query(`
 			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
 			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
+			       mp.teamId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
-			       mp.roundsPlayed
+			       mp.roundsPlayed,
+			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
 			FROM matches m
 			JOIN match_players mp ON mp.matchID = m.matchID
-			WHERE m.accountPuuid = ? AND mp.subject = ? AND m.queueID = ?
+			LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
+			WHERE mp.subject = ? AND m.queueID = ?
 			ORDER BY m.gameStartMillis DESC, m.matchID ASC
 			LIMIT ? OFFSET ?
-		`, puuid, strings.ToLower(puuid), queue, end-start, start)
+		`, strings.ToLower(puuid), queue, end-start, start)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("tracking: ListCachedMatches query: %w", err)
@@ -500,20 +665,19 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		if err := rows.Scan(
 			&s.MatchID, &s.QueueID, &s.MapID, &s.GameMode, &s.GameStartMillis,
 			&s.GameLengthMillis, &s.SeasonID, &isRanked, &blueWins,
+			&s.LocalPlayer.TeamID,
 			&s.LocalPlayer.CharacterID, &s.LocalPlayer.Kills, &s.LocalPlayer.Deaths,
 			&s.LocalPlayer.Assists, &s.LocalPlayer.Score,
 			&s.LocalPlayer.Headshots, &s.LocalPlayer.Bodyshots, &s.LocalPlayer.Legshots,
 			&s.LocalPlayer.DamageDealt, &roundsPlay,
+			&s.TierAfter, &s.RREarned,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: ListCachedMatches scan: %w", err)
 		}
 		s.IsRanked = isRanked == 1
 		s.LocalPlayer.RoundsPlayed = roundsPlay
-		// Win: blue-team win only. Per-player teamId is loaded in the
-		// full MatchDetails path; the listing view approximates via
-		// the denormalized blueWins column. Accurate per-row win
-		// flags are exposed via GetMatchFromCache.
-		s.Win = blueWins == 1
+		s.Win = (blueWins == 1 && strings.EqualFold(s.LocalPlayer.TeamID, "Blue")) ||
+			(blueWins == 0 && strings.EqualFold(s.LocalPlayer.TeamID, "Red"))
 		s.LocalPlayer = deriveLocalPlayer(s.LocalPlayer)
 		out = append(out, s)
 	}
@@ -524,7 +688,7 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 }
 
 // GetRRSnapshots returns the RR snapshot series for the given puuid
-// (filtered via join on matches) and seasonID, ordered by
+// (filtered via join on match_players) and seasonID, ordered by
 // matchStartTime ASC. Empty seasonID returns rows across all seasons.
 func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	if puuid == "" {
@@ -536,22 +700,20 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	)
 	if seasonID == "" {
 		rows, err = db.Query(`
-			SELECT r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
+			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
 			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
 			FROM rr_snapshots r
-			JOIN matches m ON m.matchID = r.matchID
-			WHERE m.accountPuuid = ?
+			WHERE r.puuid = ?
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
-		`, puuid)
+		`, strings.ToLower(puuid))
 	} else {
 		rows, err = db.Query(`
-			SELECT r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
+			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
 			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
 			FROM rr_snapshots r
-			JOIN matches m ON m.matchID = r.matchID
-			WHERE m.accountPuuid = ? AND r.seasonId = ?
+			WHERE r.puuid = ? AND r.seasonId = ?
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
-		`, puuid, seasonID)
+		`, strings.ToLower(puuid), seasonID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetRRSnapshots query: %w", err)
@@ -562,7 +724,7 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	for rows.Next() {
 		var r RRSnapshot
 		if err := rows.Scan(
-			&r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
+			&r.Puuid, &r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
 			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.MatchStartTime,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: GetRRSnapshots scan: %w", err)
@@ -659,17 +821,104 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	if puuid == "" {
 		return nil, fmt.Errorf("tracking: GetOverview: puuid is required")
 	}
+	puuid = strings.ToLower(puuid)
 	out := &Overview{Puuid: puuid}
 
+	// Look up the name and tagline from match_players
+	var name, tag string
+	_ = db.QueryRow(`
+		SELECT gameName, tagLine FROM match_players
+		WHERE subject = ? AND gameName != ''
+		LIMIT 1
+	`, puuid).Scan(&name, &tag)
+	out.GameName = name
+	out.TagLine = tag
+
+	// Latest competitive state derived from match_players (competitiveTier
+	// comes from Riot per player per match; we take the freshest value).
+	// accountLevel also lives on match_players.
+	var (
+		latestTier   int
+		latestLevel  int
+		latestSeason string
+	)
+	// Query 1: Get the absolute latest match info for account level and season ID.
+	_ = db.QueryRow(`
+		SELECT mp.accountLevel, m.seasonId
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE mp.subject = ?
+		ORDER BY m.gameStartMillis DESC
+		LIMIT 1
+	`, puuid).Scan(&latestLevel, &latestSeason)
+
+	out.Account.Level = latestLevel
+	if latestSeason != "" {
+		out.CurrentSeasonID = latestSeason
+	}
+
+	// Query 2: Get the latest competitive tier where the player actually has a rank (tier > 0).
+	_ = db.QueryRow(`
+		SELECT mp.competitiveTier
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE mp.subject = ? AND mp.competitiveTier > 0
+		ORDER BY m.gameStartMillis DESC
+		LIMIT 1
+	`, puuid).Scan(&latestTier)
+
+	out.CurrentRank.CompetitiveTier = latestTier
+	out.CurrentRank.NumberOfGames = 1
+
+	row := db.QueryRow(`
+		SELECT r.tierAfter, r.rrAfter, r.seasonId
+		FROM rr_snapshots r
+		WHERE r.puuid = ?
+		ORDER BY r.matchStartTime DESC, r.matchID DESC
+		LIMIT 1
+	`, puuid)
+	var latestRRTier, latestRR int
+	var latestRRSeason string
+	if err := row.Scan(&latestRRTier, &latestRR, &latestRRSeason); err == nil {
+		if latestRRTier > 0 {
+			latestTier = latestRRTier
+			out.CurrentRank.CompetitiveTier = latestRRTier
+		}
+		out.CurrentRank.RankedRating = latestRR
+		if latestRRSeason != "" {
+			out.CurrentSeasonID = latestRRSeason
+		}
+	}
+	// Look up the tier's friendly name from the static assets table.
+	if latestTier > 0 {
+		var tname string
+		_ = db.QueryRow(`SELECT name FROM tier_names WHERE tier = ?`, latestTier).Scan(&tname)
+		out.CurrentRank.TierName = tname
+	}
+
+	// Peak rank: highest competitiveTier ever recorded across all this
+	// account's matches.
+	row = db.QueryRow(`
+		SELECT MAX(mp.competitiveTier)
+		FROM match_players mp
+		WHERE mp.subject = ?
+	`, puuid)
+	var peakTier int
+	if err := row.Scan(&peakTier); err == nil && peakTier > 0 {
+		out.PeakRank.CompetitiveTier = peakTier
+		var ptname string
+		_ = db.QueryRow(`SELECT name FROM tier_names WHERE tier = ?`, peakTier).Scan(&ptname)
+		out.PeakRank.TierName = ptname
+	}
+
 	rows, err := db.Query(`
-		SELECT r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
+		SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
 		       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
 		FROM rr_snapshots r
-		JOIN matches m ON m.matchID = r.matchID
-		WHERE m.accountPuuid = ?
+		WHERE r.puuid = ?
 		ORDER BY r.matchStartTime DESC
 		LIMIT 5
-	`, puuid)
+	`, strings.ToLower(puuid))
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview rr: %w", err)
 	}
@@ -677,7 +926,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	for rows.Next() {
 		var r RRSnapshot
 		if err := rows.Scan(
-			&r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
+			&r.Puuid, &r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
 			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.MatchStartTime,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: GetOverview rr scan: %w", err)
@@ -701,29 +950,34 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	err = db.QueryRow(`
 		SELECT
 		    COUNT(*),
-		    SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
+		    COALESCE(SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
 		              OR (m.blueWins = 0 AND mp.teamId = 'Red')
-		             THEN 1 ELSE 0 END),
-		    SUM(mp.kills), SUM(mp.deaths), SUM(mp.assists),
-		    SUM(mp.kills), SUM(mp.headshots)
+		             THEN 1 ELSE 0 END), 0),
+		    COALESCE(SUM(mp.kills), 0),
+		    COALESCE(SUM(mp.deaths), 0),
+		    COALESCE(SUM(mp.assists), 0),
+		    COALESCE(SUM(mp.kills), 0),
+		    COALESCE(SUM(mp.headshots), 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
-		WHERE mp.subject = ?
+		WHERE mp.subject = ? AND m.isRanked = 1
 	`, puuid).Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("tracking: GetOverview summary: %w", err)
 	}
 
 	summary := SeasonSummary{
-		Matches: matches,
-		Wins:    wins,
-		Winrate: pct(wins, matches),
-		AvgKDA:  ratio(kills+assists, deaths),
+		Matches:  matches,
+		Wins:     wins,
+		Winrate:  pct(wins, matches),
+		AvgKDA:   ratio(kills+assists, deaths),
 		AvgHSPct: pct(hshots, hits),
 	}
+	out.CurrentRank.NumberOfGames = matches
+	out.CurrentRank.NumberOfWins = wins
 
 	// Top agent.
-	row := db.QueryRow(`
+	row = db.QueryRow(`
 		SELECT characterId
 		FROM agent_stats
 		WHERE puuid = ? AND queue = 'all'
@@ -862,6 +1116,8 @@ type parsedMatchHeader struct {
 type parsedPlayer struct {
 	Subject         string
 	TeamID          string
+	GameName        string
+	TagLine         string
 	CharacterID     string
 	AccountLevel    int
 	CompetitiveTier int
@@ -894,7 +1150,15 @@ type rawMatchDetails struct {
 		CompletionState  string `json:"completionState"`
 	} `json:"matchInfo"`
 	Players []struct {
-		Subject         string `json:"subject"`
+		Subject        string `json:"subject"`
+		GameName       string `json:"gameName"`
+		TagLine        string `json:"tagLine"`
+		PlayerIdentity struct {
+			GameName         string `json:"gameName"`
+			TagLine          string `json:"tagLine"`
+			HideAccountLevel bool   `json:"hideAccountLevel"`
+			Incognito        bool   `json:"incognito"`
+		} `json:"playerIdentity"`
 		TeamID          string `json:"teamId"`
 		CharacterID     string `json:"characterId"`
 		AccountLevel    int    `json:"accountLevel"`
@@ -930,7 +1194,7 @@ type rawMatchDetails struct {
 	} `json:"roundResults"`
 }
 
-func parseMatchDetails(raw []byte, puuid string) (*parsedMatch, error) {
+func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct{ Name, Tag string }) (*parsedMatch, error) {
 	var r rawMatchDetails
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, err
@@ -992,6 +1256,8 @@ func parseMatchDetails(raw []byte, puuid string) (*parsedMatch, error) {
 		pl := parsedPlayer{
 			Subject:         p.Subject,
 			TeamID:          p.TeamID,
+			GameName:        p.GameName,
+			TagLine:         p.TagLine,
 			CharacterID:     p.CharacterID,
 			AccountLevel:    p.AccountLevel,
 			CompetitiveTier: p.CompetitiveTier,
@@ -1012,6 +1278,21 @@ func parseMatchDetails(raw []byte, puuid string) (*parsedMatch, error) {
 			pl.Legshots = t.leg
 			if pl.DamageDealt == 0 {
 				pl.DamageDealt = t.dmg
+			}
+		}
+		if pl.GameName == "" {
+			pl.GameName = p.PlayerIdentity.GameName
+		}
+		if pl.TagLine == "" {
+			pl.TagLine = p.PlayerIdentity.TagLine
+		}
+		if p.PlayerIdentity.Incognito || p.PlayerIdentity.HideAccountLevel {
+			pl.AccountLevel = 0
+		}
+		if pl.GameName == "" && resolvedNames != nil {
+			if res, ok := resolvedNames[strings.ToLower(pl.Subject)]; ok {
+				pl.GameName = res.Name
+				pl.TagLine = res.Tag
 			}
 		}
 		pl.IsLocal = strings.EqualFold(p.Subject, puuid)
