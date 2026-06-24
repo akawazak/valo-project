@@ -415,11 +415,6 @@ export default function Home() {
                                 defaultPreset={defaultPreset}
                                 onPresetSelect={handlePresetSelect}
                                 onPresetApply={handlePresetApply}
-                                onPresetDelete={handlePresetDelete}
-                                onPresetRename={handleOpenRenameModal}
-                                onCreateVariant={handleDropdownVariant}
-                                onTogglePreset={handleTogglePreset}
-                                onExportPreset={handleExportPreset}
                                 onImportPresetClick={() => setShowImportModal(true)}
                                 onNewPreset={() => {
                                     handleOpenPresetNameModal(NamingMode.New);

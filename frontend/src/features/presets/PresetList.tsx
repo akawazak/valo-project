@@ -430,3 +430,121 @@ export function PresetCard({
         </div>
     );
 }
+
+/* ── Compact Preset Bar Card (for bottom strip in ArsenalView) ── */
+export function PresetBarCard({
+    preset,
+    isSelected,
+    onSelect,
+    onApply,
+    agents,
+    isVariant = false,
+}: {
+    preset: Preset;
+    isSelected: boolean;
+    onSelect: (p: Preset) => void;
+    onApply: (p: Preset) => void;
+    agents: Agent[];
+    isVariant?: boolean;
+}) {
+    const { weapons } = useData();
+
+    const skinPreviews = useMemo(() => {
+        if (!preset.loadout) return [];
+        const items: Array<{ image: string }> = [];
+
+        const weaponPriority = [
+            "ee8e8d15-496b-07ac-e5f6-8fae5d4c7b1a", // Phantom
+            "edf530be-4047-020c-7d49-7c2420a9d7dc", // Vandal
+            "a03b24d3-472b-9974-bc7e-3141fae62483", // Operator
+            "2f59173c-433b-8590-a734-77e485057b24", // Melee
+            "1baa85b4-4c70-1284-6d97-f7e170876c64", // Sheriff
+        ];
+
+        for (const wUuid of weaponPriority) {
+            const equipped = preset.loadout[wUuid];
+            if (!equipped) continue;
+            const weapon = weapons.find(w => w.uuid === wUuid);
+            if (!weapon) continue;
+            const skin = weapon.skins.find(s => s.uuid === equipped.skinId);
+            if (!skin) continue;
+            const chroma = skin.chromas.find(c => c.uuid === equipped.chromaId);
+            const image = chroma?.fullRender || chroma?.displayIcon || skin.displayIcon || "";
+            if (image) {
+                items.push({ image });
+            }
+        }
+
+        if (items.length < 3) {
+            for (const [wUuid, equipped] of Object.entries(preset.loadout)) {
+                if (weaponPriority.includes(wUuid)) continue;
+                const weapon = weapons.find(w => w.uuid === wUuid);
+                if (!weapon) continue;
+                const skin = weapon.skins.find(s => s.uuid === equipped.skinId);
+                if (!skin) continue;
+                const chroma = skin.chromas.find(c => c.uuid === equipped.chromaId);
+                const image = chroma?.fullRender || chroma?.displayIcon || skin.displayIcon || "";
+                if (image) {
+                    items.push({ image });
+                }
+                if (items.length >= 4) break;
+            }
+        }
+
+        return items.slice(0, 4);
+    }, [preset.loadout, weapons]);
+
+    const assignedAgent = (preset.agents?.[0])
+        ? agents.find((a) => a.uuid === preset.agents[0])
+        : null;
+
+    return (
+        <div
+            className={`preset-bar-card ${isSelected ? "active" : ""} ${isVariant ? "variant" : ""} ${preset.disabled ? "disabled" : ""}`}
+            onClick={() => onSelect(preset)}
+            title={preset.name}
+        >
+            {/* Skin preview strip */}
+            <div className="preset-bar-card-media">
+                {skinPreviews.length > 0 ? (
+                    <div className="preset-bar-skins">
+                        {skinPreviews.map((preview, i) => (
+                            <div key={i} className="preset-bar-skin-item">
+                                <img src={preview.image} alt="" draggable={false} />
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="preset-bar-empty">No skins</div>
+                )}
+            </div>
+
+            <div className="preset-bar-card-footer">
+                <div className="preset-bar-card-name-row">
+                    <span className="preset-bar-card-name">{preset.name}</span>
+                    {assignedAgent && (
+                        <img
+                            className="preset-bar-agent-icon"
+                            src={assignedAgent.displayIcon}
+                            alt={assignedAgent.displayName}
+                            title={assignedAgent.displayName}
+                        />
+                    )}
+                </div>
+                <div className="preset-bar-card-actions">
+                    <button
+                        type="button"
+                        className="preset-bar-apply-btn"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onApply(preset);
+                        }}
+                        title="Apply preset"
+                    >
+                        ✓
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}

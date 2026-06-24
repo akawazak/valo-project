@@ -6,7 +6,7 @@ import WeaponCard from "@/features/gun-skins/WeaponCard";
 import PlayerCardPanel from "@/features/presets/PlayerCardPanel";
 import SprayWheelPanel from "@/features/presets/SprayWheelPanel";
 import PresetAgentStrip from "@/features/presets/PresetAgentStrip";
-import { PresetCard } from "@/features/presets/PresetList";
+import { PresetBarCard } from "@/features/presets/PresetList";
 import UnifiedSkinSelectorModal from "@/features/gun-skins/UnifiedSkinSelectorModal";
 import { useData } from "@/context/DataContext";
 import { DEFAULT_PRESET_ID } from "@/lib/effectivePreset";
@@ -49,11 +49,6 @@ interface ArsenalViewProps {
     defaultPreset: Preset;
     onPresetSelect: (p: Preset) => void;
     onPresetApply: (p: Preset) => void;
-    onPresetDelete: (id: string) => void;
-    onPresetRename: (p: Preset) => void;
-    onCreateVariant: (p: Preset) => void;
-    onTogglePreset: (p: Preset, checked: boolean) => void;
-    onExportPreset: (p: Preset) => void;
     onImportPresetClick: () => void;
     onNewPreset: () => void;
     agents: Agent[];
@@ -100,11 +95,6 @@ export default function ArsenalView({
     onAgentAssignment,
     presets,
     defaultPreset,
-    onPresetDelete,
-    onPresetRename,
-    onCreateVariant,
-    onTogglePreset,
-    onExportPreset,
     onImportPresetClick,
     onNewPreset,
     onSave,
@@ -395,15 +385,14 @@ export default function ArsenalView({
             {presets && presets.length > 0 && (
                 <div className="workspace-presets-row">
                     <div className="workspace-presets-header">
-                        <span className="workspace-presets-label">// SAVED PRESETS</span>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 'auto', marginLeft: '0.5rem' }}>
-                            Click a card to edit · ✓ to apply to your game
-                        </span>
-                        <button type="button" className="btn-tactical btn-tactical-ghost btn-sm" onClick={onImportPresetClick}>
-                            Import
-                        </button>
-                        <button type="button" className="btn-tactical btn-tactical-accent btn-sm" onClick={onNewPreset}>
-                            + New
+                        <span className="workspace-presets-label">SAVED PRESETS</span>
+                        <button
+                            type="button"
+                            className="workspace-presets-new-btn"
+                            onClick={onNewPreset}
+                            title="Create new preset"
+                        >
+                            + NEW PRESET
                         </button>
                     </div>
                     <div className="workspace-presets-scroll">
@@ -411,30 +400,20 @@ export default function ArsenalView({
                             const variants = presets.filter(c => c.parentUuid === preset.uuid);
                             return (
                                 <div key={preset.uuid} className="workspace-preset-group">
-                                    <PresetCard
+                                    <PresetBarCard
                                         preset={preset}
                                         isSelected={selectedPreset?.uuid === preset.uuid}
                                         onSelect={onPresetSelect}
                                         onApply={() => onPresetApply(preset)}
-                                        onRename={onPresetRename}
-                                        onDelete={onPresetDelete}
-                                        onCreateVariant={onCreateVariant}
-                                        onToggle={onTogglePreset}
-                                        onExport={onExportPreset}
                                         agents={agents}
-                                        variantCount={variants.length}
                                     />
                                     {variants.map(child => (
-                                        <PresetCard
+                                        <PresetBarCard
                                             key={child.uuid}
                                             preset={child}
                                             isSelected={selectedPreset?.uuid === child.uuid}
                                             onSelect={onPresetSelect}
                                             onApply={() => onPresetApply(child)}
-                                            onRename={onPresetRename}
-                                            onDelete={onPresetDelete}
-                                            onToggle={onTogglePreset}
-                                            onExport={onExportPreset}
                                             agents={agents}
                                             isVariant
                                         />
