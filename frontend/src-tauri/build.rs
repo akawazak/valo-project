@@ -3,10 +3,11 @@ use std::path::Path;
 
 fn main() {
     let project_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let parent = Path::new(&project_dir).parent().unwrap();
+    let project_dir = Path::new(&project_dir);
+    let parent = project_dir.parent().unwrap();
     let backend_dir = parent.parent().unwrap().join("backend");
     
-    let target_dir = backend_dir.join("tmp");
+    let target_dir = project_dir.join("binaries");
     let _ = std::fs::create_dir_all(&target_dir);
     
     #[cfg(target_os = "windows")]

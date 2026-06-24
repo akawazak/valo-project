@@ -15,6 +15,8 @@ type LiveMatchResponse struct {
 	TimeLeft  int           `json:"timeLeft"`
 	AllyTeam  []*LivePlayer `json:"allyTeam"`
 	EnemyTeam []*LivePlayer `json:"enemyTeam"`
+	Source    string        `json:"source,omitempty"` // "local" or "remote"
+	Error     string        `json:"error,omitempty"`
 }
 
 type LivePlayer struct {
@@ -72,9 +74,9 @@ func getCoreGameMatch(c *valclient.ValClient, matchID string) (*CoreGameMatchRes
 }
 
 func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
-	val, err := h.getClient(r)
+	val, source, err := h.getLiveMatchClient(r)
 	if err != nil || val == nil {
-		h.returnAny(w, LiveMatchResponse{Phase: "none"})
+		h.returnAny(w, LiveMatchResponse{Phase: "none", Error: errString(err)})
 		return
 	}
 
@@ -84,10 +86,13 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		preMatch, err := val.GetPreGameMatch()
 		if err == nil && preMatch != nil {
 			response := h.buildPregameResponse(val, preMatch)
+			h.fillLiveQueueID(val, &response)
+			response.Source = source
 			h.returnAny(w, response)
 			return
 		}
 	}
+	pregameErr := err
 
 	// 2. Try Coregame next
 	corePlayer, err := getCoreGamePlayer(val)
@@ -95,13 +100,82 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		coreMatch, err := getCoreGameMatch(val, corePlayer.MatchID)
 		if err == nil && coreMatch != nil {
 			response := h.buildCoregameResponse(val, coreMatch)
+			h.fillLiveQueueID(val, &response)
+			response.Source = source
 			h.returnAny(w, response)
 			return
 		}
 	}
+	coregameErr := err
 
 	// 3. None
-	h.returnAny(w, LiveMatchResponse{Phase: "none"})
+	h.returnAny(w, LiveMatchResponse{
+		Phase:  "none",
+		Source: source,
+		Error:  fmt.Sprintf("pregame: %s; coregame: %s", errString(pregameErr), errString(coregameErr)),
+	})
+}
+
+func (h *Handler) fillLiveQueueID(val *valclient.ValClient, response *LiveMatchResponse) {
+	if response == nil || response.QueueID != "" {
+		return
+	}
+	current, err := getCurrentParty(val)
+	if err != nil || current == nil || current.CurrentPartyID == "" {
+		return
+	}
+	details, err := getPartyDetails(val, current.CurrentPartyID)
+	if err != nil || details == nil {
+		return
+	}
+	if details.MatchmakingData.QueueID != "" {
+		response.QueueID = details.MatchmakingData.QueueID
+		return
+	}
+	if details.QueueID != "" {
+		response.QueueID = details.QueueID
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "none"
+	}
+	return err.Error()
+}
+
+func (h *Handler) getLiveMatchClient(r *http.Request) (*valclient.ValClient, string, error) {
+	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
+	if err != nil {
+		return nil, "", err
+	}
+
+	h.mu.RLock()
+	localVal := h.Val
+	h.mu.RUnlock()
+	if localVal != nil {
+		if !hasRemoteAuth || localVal.Player != nil && localVal.Player.Uuid == remoteAuth.Puuid {
+			if _, helpErr := localVal.GetHelp(); helpErr == nil {
+				return localVal, "local", nil
+			}
+		}
+	}
+
+	if hasRemoteAuth {
+		shard := getShardFromRegion(remoteAuth.Region)
+		region := remoteAuth.Region
+		if region == "" {
+			region = shard
+		}
+		return &valclient.ValClient{
+			Shard:  valclient.Shard(shard),
+			Region: valclient.Region(region),
+			Player: &valclient.ValClientPlayer{Uuid: remoteAuth.Puuid},
+			Header: buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
+		}, "remote", nil
+	}
+
+	return nil, "", fmt.Errorf("authentication required: please log in first")
 }
 
 func (h *Handler) getPlayerNameCached(val *valclient.ValClient, puuid string) string {

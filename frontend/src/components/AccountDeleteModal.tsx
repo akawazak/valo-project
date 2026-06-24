@@ -18,7 +18,7 @@ export default function AccountDeleteModal({
                 <div className="acc-delete-modal-icon">×</div>
                 <h5 className="acc-delete-modal-title">Disconnect Account</h5>
                 <p className="acc-delete-modal-body">
-                    Are you sure you want to remove this account from ValoVault?
+                    Are you sure you want to remove this account from VantaVault?
                 </p>
                 <label className="acc-delete-modal-skip">
                     <input

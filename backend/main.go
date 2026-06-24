@@ -32,17 +32,32 @@ func main() {
 
 	go func() {
 		slog.Info("waiting for valorant to start locally")
+		localPuuid := ""
 		for {
 			val, err := valclient.NewClient()
-			if err == nil {
-				slog.Info("valorant started locally")
+			if err != nil {
+				if localPuuid != "" {
+					slog.Info("valorant local client disconnected", "err", err)
+					localPuuid = ""
+					h.SetTicker(nil)
+					h.SetLocalClient(nil)
+				}
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			if val.Player != nil && val.Player.Uuid != localPuuid {
+				slog.Info("valorant started locally", "puuid", val.Player.Uuid)
+				localPuuid = val.Player.Uuid
 				h.SetLocalClient(val)
 
 				ticker := tick.NewTicker(val)
 				h.SetTicker(ticker)
 				go ticker.Start()
-				break
+			} else {
+				val.Close()
 			}
+
 			time.Sleep(5 * time.Second)
 		}
 	}()
@@ -80,6 +95,11 @@ func main() {
 	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
 	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
 	mux.HandleFunc("GET /v1/missions", h.GetMissions)
+	mux.HandleFunc("GET /v1/contracts", h.GetContracts)
+	mux.HandleFunc("GET /v1/party", h.GetParty)
+	mux.HandleFunc("GET /v1/live-loadouts", h.GetLiveLoadouts)
+	mux.HandleFunc("GET /v1/social", h.GetSocialStatus)
+	mux.HandleFunc("GET /v1/account-health", h.GetAccountHealth)
 
 	// /v1/profile/* — rank tracker + match history + sync control
 	// (see valovault/.mavis/plans/tracking-design.md §2).

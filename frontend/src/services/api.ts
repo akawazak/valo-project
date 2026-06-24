@@ -55,11 +55,15 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEO
     }
 }
 
-async function fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+async function fetchWithAuth(
+    url: string,
+    init?: RequestInit,
+    options: { forceRemoteAuth?: boolean } = {},
+): Promise<Response> {
     const headers = new Headers(init?.headers || {});
     if (typeof window !== "undefined") {
         const useLocalSso = localStorage.getItem("use_local_sso") === "true";
-        if (!useLocalSso) {
+        if (options.forceRemoteAuth || !useLocalSso) {
             const token = localStorage.getItem("riot_access_token");
             const entitlements = localStorage.getItem("riot_entitlements");
             const puuid = localStorage.getItem("riot_puuid");
@@ -1018,6 +1022,8 @@ export interface LiveMatchResponse {
     timeLeft: number;
     allyTeam?: LivePlayer[];
     enemyTeam?: LivePlayer[];
+    source?: "local" | "remote";
+    error?: string;
 }
 
 export interface LivePlayer {
@@ -1036,11 +1042,12 @@ export async function getLiveMatch(): Promise<LiveMatchResponse> {
     try {
         const response = await fetchWithAuth(LOCAL_URL + '/livematch');
         if (!response.ok) {
-            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0 };
+            const text = await response.text().catch(() => "");
+            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: text };
         }
         return await response.json();
-    } catch {
-        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0 };
+    } catch (err) {
+        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
     }
 }
 
@@ -1057,10 +1064,143 @@ export interface RiotMissionsResponse {
 }
 
 export async function getMissions(): Promise<RiotMissionsResponse> {
-    const response = await fetchWithAuth(LOCAL_URL + '/missions');
+    const response = await fetchWithAuth(LOCAL_URL + '/missions', undefined, { forceRemoteAuth: true });
     if (!response.ok) {
         const text = await response.text();
         throw new Error(text || 'Failed to fetch player missions.');
     }
     return response.json();
+}
+
+export interface PlayerContractsResponse {
+    version: number;
+    subject: string;
+    activeSpecialContract: string;
+    contracts: {
+        id: string;
+        totalProgressionEarned: number;
+        totalProgressionEarnedVersion: number;
+        highestRewardedLevel: number;
+        progressionLevelReached?: number;
+        progressionTowardsNextLevel?: number;
+    }[];
+}
+
+export async function getContracts(): Promise<PlayerContractsResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/contracts', undefined, { forceRemoteAuth: true });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch player contracts.');
+    }
+    return response.json();
+}
+
+export interface PartyStatusResponse {
+    phase: "none" | "party" | "matchmaking" | "pregame" | "coregame" | "error";
+    partyId?: string;
+    queueId?: string;
+    members?: PartyMember[];
+    source?: "remote" | "local";
+    error?: string;
+}
+
+export interface PartyMember {
+    puuid: string;
+    name: string;
+    isLocal: boolean;
+    isOwner: boolean;
+    isReady: boolean;
+    accountLevel: number;
+    cardId: string;
+    competitiveTier: number;
+}
+
+export async function getPartyStatus(): Promise<PartyStatusResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/party', undefined, { forceRemoteAuth: true });
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { phase: "error", error: text || "Failed to fetch party status." };
+        }
+        return await response.json();
+    } catch (err) {
+        return { phase: "error", error: err instanceof Error ? err.message : String(err || "") };
+    }
+}
+
+export interface LiveLoadoutsResponse {
+    phase: "none" | "pregame" | "coregame" | "error";
+    matchId?: string;
+    source?: "remote" | "local";
+    loadoutsValid?: boolean;
+    players?: LiveLoadoutPlayer[];
+    error?: string;
+}
+
+export interface LiveLoadoutPlayer {
+    puuid?: string;
+    skinIds?: string[];
+    gunCount: number;
+}
+
+export async function getLiveLoadouts(): Promise<LiveLoadoutsResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/live-loadouts', undefined, { forceRemoteAuth: true });
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { phase: "error", error: text || "Failed to fetch live loadouts." };
+        }
+        return await response.json();
+    } catch (err) {
+        return { phase: "error", error: err instanceof Error ? err.message : String(err || "") };
+    }
+}
+
+export interface AccountHealthResponse {
+    source?: "remote" | "local";
+    services: Record<string, { status: string; detail?: string }>;
+    penalties: { status: string; count: number; detail?: string };
+    error?: string;
+}
+
+export async function getAccountHealth(): Promise<AccountHealthResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/account-health', undefined, { forceRemoteAuth: true });
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { services: {}, penalties: { status: "unavailable", count: 0, detail: text || "Failed to fetch account health." } };
+        }
+        return await response.json();
+    } catch (err) {
+        return { services: {}, penalties: { status: "unavailable", count: 0, detail: err instanceof Error ? err.message : String(err || "") } };
+    }
+}
+
+export interface SocialStatusResponse {
+    status: "ok" | "unavailable";
+    source?: "local";
+    friendCount: number;
+    onlineCount: number;
+    inGameCount: number;
+    presences?: {
+        puuid?: string;
+        name?: string;
+        product?: string;
+        state?: string;
+        queueId?: string;
+    }[];
+    error?: string;
+}
+
+export async function getSocialStatus(): Promise<SocialStatusResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/social');
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };
+        }
+        return await response.json();
+    } catch (err) {
+        return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: err instanceof Error ? err.message : String(err || "") };
+    }
 }

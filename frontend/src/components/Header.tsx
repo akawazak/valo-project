@@ -71,7 +71,7 @@ export default function Header() {
                 <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noopener noreferrer" className="d-flex align-items-center me-2">
                     <Image src="/github-logo.svg" alt="GitHub" width={24} height={24} />
                 </a>
-                <span className="navbar-brand me-2">ValoVault</span>
+                <span className="navbar-brand me-2">VantaVault</span>
                 {appVersion && (
                     <>
                         <span className="badge bg-secondary me-2">{appVersion}</span>

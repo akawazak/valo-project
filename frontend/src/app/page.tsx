@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { Update } from '@tauri-apps/plugin-updater';
 import ArsenalView from '@/features/arsenal/ArsenalView';
 import PresetList from '@/features/presets/PresetList';
 import Footer from '@/components/Footer';
@@ -27,6 +28,7 @@ import AccountManagerModal from '@/components/AccountManagerModal';
 import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
+import LivePartyStatus from '@/features/party/LivePartyStatus';
 
 export default function Home() {
     const {
@@ -34,6 +36,7 @@ export default function Home() {
         weapons,
         loading: dataContextLoading,
         isClientHealthy,
+        isBackendOnline,
         accounts,
         activeAccount,
         handleSwitchAccount,
@@ -51,7 +54,7 @@ export default function Home() {
         ownedChromaIDs,
     } = useData();
 
-    const { theme, toggleTheme } = useTheme();
+    const { theme, accentTheme, toggleTheme, setAccentTheme } = useTheme();
 
     const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
     const [dataRevision, setDataRevision] = useState(0);
@@ -69,6 +72,10 @@ export default function Home() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isAccountsOpen, setIsAccountsOpen] = useState(false);
     const [showAddAccount, setShowAddAccount] = useState(false);
+    const [appVersion, setAppVersion] = useState("");
+    const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+    const [isUpdating, setIsUpdating] = useState(false);
+    const [updateReady, setUpdateReady] = useState(false);
 
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
@@ -104,6 +111,45 @@ export default function Home() {
             setLaunchAtStartupState(enabled);
         });
     }, []);
+
+    useEffect(() => {
+        let alive = true;
+        const checkForUpdates = async () => {
+            try {
+                const [{ getVersion }, { check }] = await Promise.all([
+                    import("@tauri-apps/api/app"),
+                    import("@tauri-apps/plugin-updater"),
+                ]);
+                const version = await getVersion();
+                if (!alive) return;
+                setAppVersion(version);
+                const update = await check();
+                if (!alive) return;
+                setAvailableUpdate(update ?? null);
+            } catch {
+                if (alive) setAppVersion((current) => current || "dev");
+            }
+        };
+        void checkForUpdates();
+        return () => {
+            alive = false;
+        };
+    }, []);
+
+    const installUpdate = useCallback(async () => {
+        if (!availableUpdate || isUpdating) return;
+        setIsUpdating(true);
+        try {
+            await availableUpdate.downloadAndInstall();
+            setUpdateReady(true);
+            setAvailableUpdate(null);
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : String(error || "Update failed."));
+            setShowErrorModal(true);
+        } finally {
+            setIsUpdating(false);
+        }
+    }, [availableUpdate, isUpdating, setErrorMessage, setShowErrorModal]);
 
     const loadInitialData = useCallback(async () => {
         try {
@@ -291,7 +337,7 @@ export default function Home() {
                 activeAccount={activeAccount}
                 useLocalSso={useLocalSso || false}
                 isLocalClientActive={isClientHealthy}
-                isBackendOnline={true}
+                isBackendOnline={isBackendOnline}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenAccounts={() => setIsAccountsOpen(true)}
             />
@@ -427,14 +473,16 @@ export default function Home() {
                 launchAtStartup={launchAtStartup}
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}
+                accentTheme={accentTheme}
                 onToggleTheme={toggleTheme}
+                onAccentThemeChange={setAccentTheme}
                 isLocalClientActive={isClientHealthy}
                 activeAccount={activeAccount}
-                appVersion="1.0.0"
-                updateAvailable={false}
-                isUpdating={false}
-                updateReady={false}
-                onInstallUpdate={() => {}}
+                appVersion={appVersion}
+                updateAvailable={!!availableUpdate}
+                isUpdating={isUpdating}
+                updateReady={updateReady}
+                onInstallUpdate={installUpdate}
             />
 
             {showAddAccount && (
@@ -473,6 +521,7 @@ export default function Home() {
             />
 
             <LiveMatchOverlay />
+            <LivePartyStatus />
         </div>
     );
 }

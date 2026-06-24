@@ -30,6 +30,9 @@ type remoteAuthHeaders struct {
 func (h *Handler) SetLocalClient(val *valclient.ValClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.Val != nil && h.Val != val {
+		h.Val.Close()
+	}
 	h.Val = val
 }
 

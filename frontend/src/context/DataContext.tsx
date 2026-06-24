@@ -21,10 +21,14 @@ function hasSsidCookie(cookies: string | null | undefined): cookies is string {
     return Boolean(cookies && /(?:^|;\s*)ssid=/.test(cookies));
 }
 
+type LoginRedirectPayload = { sessionId: string; url: string };
+type LoginCookiesPayload = { sessionId: string; cookies: string };
+type LoginSessionPayload = { sessionId: string };
+
 /**
  * closeLoginWindowAndWait asks Tauri to close the popup for the given
  * sessionId and waits up to `timeoutMs` for the matching
- * `riot-login-closed` event so we don't race ahead and read the cookie
+ * `riot-login-closed-v2` event so we don't race ahead and read the cookie
  * DB before WebView2 has released its lock.
  */
 async function closeLoginWindowAndWait(sessionId: string, timeoutMs: number = 5000) {
@@ -35,7 +39,8 @@ async function closeLoginWindowAndWait(sessionId: string, timeoutMs: number = 50
     ]);
     const closed = new Promise<void>((resolve) => {
         const timer = window.setTimeout(resolve, timeoutMs);
-        listen("riot-login-closed", () => {
+        listen<LoginSessionPayload>("riot-login-closed-v2", (event) => {
+            if (event.payload?.sessionId !== sessionId) return;
             window.clearTimeout(timer);
             resolve();
         }).then((unlisten) => {
@@ -57,9 +62,9 @@ async function closeLoginWindowAndWait(sessionId: string, timeoutMs: number = 50
  * after this returns the new account. This function only RETURNS the
  * account; the caller is responsible for committing it.
  *
- * Throws on any failure (and the caller will reject the startLoginFlow
- * promise). Does NOT swallow persist failures — if the cookie cannot be
- * persisted, the caller surfaces the error and the account is NOT saved.
+ * Throws only when Riot token exchange fails. Cookie capture and persistence
+ * are best-effort so a normal login is not thrown away because WebView2 was
+ * slow to flush a reusable session cookie.
  */
 async function completeLoginFlow(
     ctx: LoginFlowState,
@@ -101,8 +106,8 @@ async function completeLoginFlow(
         }
     }
 
-    // 4. Persist the temp session dir → stable session dir. This MUST
-    //    succeed for silent reauth to ever work; if it fails we abort.
+    // 4. Persist the temp session dir to the stable session dir. This enables
+    //    silent reauth, but failing here should not throw away a valid login.
     if (tempSessionId && tempSessionId !== stableSessionId) {
         try {
             await invoke("persist_login_session", {
@@ -110,12 +115,7 @@ async function completeLoginFlow(
                 toSessionId: stableSessionId,
             });
         } catch (err) {
-            throw new Error(
-                "Could not persist the login session. The account was NOT saved to avoid losing the cookie. " +
-                    "Please try again — if the issue persists, restart the app. (" +
-                    (err instanceof Error ? err.message : String(err)) +
-                    ")",
-            );
+            console.warn("Could not persist reusable Riot login session:", err);
         }
     }
 
@@ -234,11 +234,12 @@ export function activateAccount(account: RiotAccount) {
 export interface LoginFlowState {
     sessionId: string;
     startedAt: number;
+    redirectReceivedAt?: number;
     /** Resolved when the popup redirects and the new account is committed. */
     resolve: (account: RiotAccount) => void;
     /** Resolved on cancel / window-closed / error. */
     reject: (err: Error) => void;
-    /** Captured ssid cookies from the popup (set by the `riot-login-cookies` event). */
+    /** Captured ssid cookies from the popup (set by the `riot-login-cookies-v2` event). */
     capturedCookies: string | null;
 }
 
@@ -656,13 +657,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 let resolved = false;
                 let unlistenFn: (() => void) | null = null;
                 let unlistenCloseFn: (() => void) | null = null;
+                let unlistenCookiesFn: (() => void) | null = null;
                 let timeoutId: number | null = null;
+                let capturedCookies: string | null = null;
 
                 const cleanup = () => {
                     resolved = true;
                     if (timeoutId !== null) window.clearTimeout(timeoutId);
                     if (unlistenFn) unlistenFn();
                     if (unlistenCloseFn) unlistenCloseFn();
+                    if (unlistenCookiesFn) unlistenCookiesFn();
                     refreshCancelRef.current.delete(sessionKey);
                 };
 
@@ -688,12 +692,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     }
                 }, 10000);
 
-                listen<string>("riot-login-redirect", async (event) => {
+                listen<LoginCookiesPayload>("riot-login-cookies-v2", (event) => {
+                    if (event.payload?.sessionId !== sessionId) return;
+                    if (hasSsidCookie(event.payload.cookies)) {
+                        capturedCookies = event.payload.cookies;
+                    }
+                }).then(fn => { unlistenCookiesFn = fn; });
+
+                listen<LoginRedirectPayload>("riot-login-redirect-v2", async (event) => {
                     if (resolved) return;
+                    if (event.payload?.sessionId !== sessionId) return;
                     cleanup();
 
                     try {
-                        const redirectUrl = event.payload;
+                        const redirectUrl = event.payload.url;
                         const res = await submitTokenUrl(redirectUrl);
 
                         // Save the tokens immediately — we can't read ssid cookies yet
@@ -728,7 +740,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                                 if (unlistenClose) unlistenClose();
                                 resVal();
                             }, 3500);
-                            listen("riot-login-closed", () => {
+                            listen<LoginSessionPayload>("riot-login-closed-v2", (event) => {
+                                if (event.payload?.sessionId !== sessionId) return;
                                 clearTimeout(timeoutIdClose);
                                 if (unlistenClose) unlistenClose();
                                 resVal();
@@ -742,7 +755,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         await closedPromise;
 
                         // Fetch the ssid cookie from the session directory now that the lock is released
-                        const raw = await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
+                        const raw = hasSsidCookie(capturedCookies)
+                            ? capturedCookies
+                            : await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
                         console.debug("get_ssid_cookie: result for session", sessionId, "->", raw);
 
                         const finalAcc = { ...updatedAcc, ssid: raw ?? updatedAcc.ssid };
@@ -763,7 +778,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     }
                 }).then(fn => { unlistenFn = fn; });
 
-                listen("riot-login-closed", () => {
+                listen<LoginSessionPayload>("riot-login-closed-v2", (event) => {
+                    if (event.payload?.sessionId !== sessionId) return;
                     if (resolved) return;
                     finish(false);
                 }).then(fn => { unlistenCloseFn = fn; });
@@ -872,16 +888,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 // the WebView closes (the DB lock release is what guarantees
                 // we can read them later). The lib.rs handler emits this event
                 // ~immediately after detecting the redirect.
-                const cookiesUnlisten = await listen<string>("riot-login-cookies", (event) => {
-                    if (loginInFlightRef.current?.sessionId === sessionId) {
-                        loginInFlightRef.current.capturedCookies = event.payload;
+                const cookiesUnlisten = await listen<LoginCookiesPayload>("riot-login-cookies-v2", (event) => {
+                    if (event.payload?.sessionId === sessionId && loginInFlightRef.current?.sessionId === sessionId) {
+                        loginInFlightRef.current.capturedCookies = event.payload.cookies;
                         console.debug("captured ssid cookies for session", sessionId);
                     }
                 }).catch(() => () => {});
 
-                const redirectUnlisten = await listen<string>("riot-login-redirect", async (event) => {
+                const redirectUnlisten = await listen<LoginRedirectPayload>("riot-login-redirect-v2", async (event) => {
+                    if (event.payload?.sessionId !== sessionId) return;
                     try {
-                        const account = await completeLoginFlow(ctx, event.payload);
+                        ctx.redirectReceivedAt = Date.now();
+                        setLoginInFlight({ ...ctx });
+                        const account = await completeLoginFlow(ctx, event.payload.url);
                         cookiesUnlisten();
                         redirectUnlisten();
                         closeUnlisten();
@@ -896,10 +915,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }).catch(() => () => {});
 
                 // Manual cancel via close button (no redirect ever fires).
-                const closeUnlisten = await listen("riot-login-closed", () => {
-                    if (loginInFlightRef.current?.sessionId !== sessionId) return;
+                const closeUnlisten = await listen<LoginSessionPayload>("riot-login-closed-v2", (event) => {
+                    if (event.payload?.sessionId !== sessionId || loginInFlightRef.current?.sessionId !== sessionId) return;
                     // If we already settled (e.g. via redirect), ignore.
-                    if (settled) return;
+                    if (settled || ctx.redirectReceivedAt) return;
                     cookiesUnlisten();
                     redirectUnlisten();
                     closeUnlisten();

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "ValoVault",
-  "version": "0.5.6",
+  "productName": "VantaVault",
+  "version": "0.5.8",
   "identifier": "com.akawazak.valovault",
   "build": {
     "frontendDist": "../out",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Valorant Vault",
+        "title": "VantaVault",
         "width": 1664,
         "height": 936,
         "resizable": true,
@@ -26,6 +26,9 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/valovault-backend"
+    ],
     "targets": ["nsis"],
     "windows": {
       "nsis": {

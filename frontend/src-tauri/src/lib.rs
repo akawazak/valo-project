@@ -24,6 +24,33 @@ struct AppState {
     session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginRedirectPayload {
+    session_id: String,
+    url: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginCookiesPayload {
+    session_id: String,
+    cookies: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginSessionPayload {
+    session_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginErrorPayload {
+    session_id: String,
+    error: String,
+}
+
 impl AppState {
     fn lock_for_window(&self, label: &str) -> Arc<Mutex<()>> {
         let mut map = self.window_locks.lock().unwrap();
@@ -155,6 +182,14 @@ let window = tauri::webview::WebviewWindowBuilder::new(
             (host == "localhost" || host == "127.0.0.1") && path == "/redirect";
         if is_oauth_redirect {
             let redirect_url_str = url.as_str().to_string();
+            let redirect_session_id = cookie_capture_session_id.clone();
+            let _ = cloned_handle.emit(
+                "riot-login-redirect-v2",
+                LoginRedirectPayload {
+                    session_id: redirect_session_id,
+                    url: redirect_url_str.clone(),
+                },
+            );
             let _ = cloned_handle.emit("riot-login-redirect", redirect_url_str);
 
             // Spawn background thread to read cookies from the WebView2 DB
@@ -165,12 +200,32 @@ let window = tauri::webview::WebviewWindowBuilder::new(
                 match read_session_cookies_with_wait(&cookie_config_dir, &cookie_session_id, 15000)
                 {
                     Ok(Some(cookie_str)) => {
+                        let _ = cookie_handle.emit(
+                            "riot-login-cookies-v2",
+                            LoginCookiesPayload {
+                                session_id: cookie_session_id,
+                                cookies: cookie_str.clone(),
+                            },
+                        );
                         let _ = cookie_handle.emit("riot-login-cookies", cookie_str);
                     }
                     Ok(None) => {
+                        let _ = cookie_handle.emit(
+                            "riot-login-cookies-missing-v2",
+                            LoginSessionPayload {
+                                session_id: cookie_session_id.clone(),
+                            },
+                        );
                         let _ = cookie_handle.emit("riot-login-cookies-missing", cookie_session_id);
                     }
                     Err(err) => {
+                        let _ = cookie_handle.emit(
+                            "riot-login-cookies-error-v2",
+                            LoginErrorPayload {
+                                session_id: cookie_session_id,
+                                error: err.clone(),
+                            },
+                        );
                         let _ = cookie_handle.emit("riot-login-cookies-error", err);
                     }
                 }
@@ -189,8 +244,15 @@ let window = tauri::webview::WebviewWindowBuilder::new(
     .map_err(|e| e.to_string())?;
 
     let cloned_handle_for_close = app_handle.clone();
+    let close_session_id = session_id.unwrap_or_else(|| "default".to_string());
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
+            let _ = cloned_handle_for_close.emit(
+                "riot-login-closed-v2",
+                LoginSessionPayload {
+                    session_id: close_session_id.clone(),
+                },
+            );
             let _ = cloned_handle_for_close.emit("riot-login-closed", ());
         }
     });
@@ -714,12 +776,10 @@ pub fn run() {
                 cleanup_stale_sessions(&config_dir);
             }
 
-            if !cfg!(dev) {
-                let state = app.state::<AppState>();
-                let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
-                let (_rx, child) = sidecar_command.spawn().expect("Failed to spawn sidecar");
-                *state.child.lock().unwrap() = Some(child);
-            }
+            let state = app.state::<AppState>();
+            let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
+            let (_rx, child) = sidecar_command.spawn().expect("Failed to spawn backend sidecar");
+            *state.child.lock().unwrap() = Some(child);
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&quit_i])?;
@@ -759,13 +819,11 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if !cfg!(dev) {
-            if let RunEvent::ExitRequested { .. } = &event {
-                let state: State<AppState> = app_handle.state();
-                if let Some(child) = state.child.lock().unwrap().take() {
-                    child.kill().expect("Failed to kill sidecar");
-                };
-            }
+        if let RunEvent::ExitRequested { .. } = &event {
+            let state: State<AppState> = app_handle.state();
+            if let Some(child) = state.child.lock().unwrap().take() {
+                child.kill().expect("Failed to kill sidecar");
+            };
         }
 
         if let RunEvent::WindowEvent {

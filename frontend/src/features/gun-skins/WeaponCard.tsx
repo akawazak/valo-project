@@ -80,7 +80,7 @@ export default function WeaponCard({
 
     const isEquipped = !!selectedItem;
     const wName = weapon.displayName.toLowerCase();
-    
+
     // Determine specific card class
     let cardClass = "valorant-weapon-card";
     if (["classic", "shorty", "frenzy", "ghost", "sheriff"].includes(wName)) cardClass += " valorant-weapon-card--sidearm";
@@ -92,8 +92,10 @@ export default function WeaponCard({
     if (wName === "melee" || wName === "tactical knife") cardClass += " valorant-weapon-card--melee";
     if (isEquipped) cardClass += " is-active";
 
+    const cardStyle = { cursor: 'pointer', '--tier-color': tierColor } as React.CSSProperties;
+
     return (
-        <div className={cardClass} onClick={onClick} title={displayName} style={{ cursor: 'pointer' }}>
+        <div className={cardClass} onClick={onClick} title={displayName} style={cardStyle}>
             <div className="valorant-weapon-card-body">
                 {/* Content Tier Bar */}
                 <div className="valorant-weapon-card-tier" style={{ backgroundColor: tierColor }} />
@@ -126,6 +128,15 @@ export default function WeaponCard({
                             style={{ pointerEvents: 'none' }}
                         >
                             <img src={buddy.levels[0].displayIcon} alt={buddy.displayName} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        </div>
+                    )}
+
+                    {/* Equipped indicator badge */}
+                    {isEquipped && (
+                        <div className="weapon-card-equipped-badge" aria-label="Equipped">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
                         </div>
                     )}
 

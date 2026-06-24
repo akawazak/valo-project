@@ -2,31 +2,46 @@
 
 import { useEffect, useState } from 'react';
 import { getLiveMatch, LiveMatchResponse, LivePlayer } from '@/services/api';
+import { useData } from '@/context/DataContext';
 import './LiveMatchOverlay.css';
 
 export default function LiveMatchOverlay() {
+    const { activeAccount } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
+    const [dismissedMatchKey, setDismissedMatchKey] = useState("");
     const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
 
     // Poll live match status
     useEffect(() => {
+        if (!activeAccount) {
+            setMatch(null);
+            return;
+        }
+
         let active = true;
         const poll = async () => {
             const data = await getLiveMatch();
+            if (data.phase === "none" && data.error) {
+                console.debug("No live match detected:", data.error);
+            }
             if (active) {
+                const liveKey = liveMatchKey(data);
                 setMatch(data);
+                if (liveKey && liveKey !== dismissedMatchKey) {
+                    setDismissedMatchKey("");
+                }
             }
         };
 
         poll();
-        const interval = setInterval(poll, 2000);
+        const interval = setInterval(poll, 5000);
         return () => {
             active = false;
             clearInterval(interval);
         };
-    }, []);
+    }, [activeAccount, dismissedMatchKey]);
 
     // Load Valorant-API metadata
     useEffect(() => {
@@ -80,7 +95,13 @@ export default function LiveMatchOverlay() {
             }).catch(err => console.error("Error loading competitive tiers API", err));
     }, []);
 
-    if (!match || match.phase === "none") {
+    if (!activeAccount) {
+        return null;
+    }
+
+    const matchKey = liveMatchKey(match);
+
+    if (!match || match.phase === "none" || (matchKey && matchKey === dismissedMatchKey)) {
         return null;
     }
 
@@ -88,22 +109,44 @@ export default function LiveMatchOverlay() {
     
     // Format queue name
     const getQueueName = (id: string) => {
-        if (!id) return "Custom Game";
-        if (id.toLowerCase() === "competitive") return "Competitive";
-        if (id.toLowerCase() === "unrated") return "Unrated";
-        if (id.toLowerCase() === "spikerush") return "Spike Rush";
-        if (id.toLowerCase() === "swiftplay") return "Swiftplay";
-        if (id.toLowerCase() === "deathmatch") return "Deathmatch";
-        return id.charAt(0).toUpperCase() + id.slice(1);
+        const key = id?.toLowerCase?.() || "";
+        if (!key) return "Live Match";
+        const labels: Record<string, string> = {
+            competitive: "Competitive",
+            unrated: "Unrated",
+            spikerush: "Spike Rush",
+            swiftplay: "Swiftplay",
+            deathmatch: "Deathmatch",
+            teamdeathmatch: "Team Deathmatch",
+            hurm: "Team Deathmatch",
+            escalation: "Escalation",
+            ggteam: "Escalation",
+            onefa: "Replication",
+            snowball: "Snowball Fight",
+            premier: "Premier",
+            custom: "Custom Game",
+        };
+        return labels[key] || id.charAt(0).toUpperCase() + id.slice(1);
     };
 
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
             <div className="overlay-scrim"></div>
+            <button
+                type="button"
+                className="live-match-close"
+                onClick={() => setDismissedMatchKey(matchKey || "dismissed")}
+                aria-label="Close live match overlay"
+            >
+                <span aria-hidden="true">×</span>
+            </button>
             
             {/* Header info */}
             <header className="live-match-header">
-                <div className="game-mode-tag">{getQueueName(match.queueId)}</div>
+                <div className="live-match-header-row">
+                    <div className="game-mode-tag">{getQueueName(match.queueId)}</div>
+                    {match.source && <div className="game-source-tag">{match.source}</div>}
+                </div>
                 <h1 className="map-display-name">{currentMap.name}</h1>
                 {match.phase === "pregame" && match.timeLeft > 0 && (
                     <div className="timer-display">
@@ -120,7 +163,7 @@ export default function LiveMatchOverlay() {
             <div className="teams-container">
                 {/* Ally Team */}
                 <div className="team-column ally-team">
-                    <h2 className="team-title">YOUR TEAM</h2>
+                    <h2 className="team-title"><span>YOUR TEAM</span><small>{match.allyTeam?.length || 0} players</small></h2>
                     <div className="players-list">
                         {match.allyTeam?.map((player, idx) => (
                             <PlayerCard 
@@ -140,7 +183,7 @@ export default function LiveMatchOverlay() {
 
                 {/* Enemy Team */}
                 <div className="team-column enemy-team">
-                    <h2 className="team-title">ENEMY TEAM</h2>
+                    <h2 className="team-title"><span>ENEMY TEAM</span><small>{match.enemyTeam?.length || 0} players</small></h2>
                     <div className="players-list">
                         {match.enemyTeam?.map((player, idx) => (
                             <PlayerCard 
@@ -157,6 +200,11 @@ export default function LiveMatchOverlay() {
     );
 }
 
+function liveMatchKey(match: LiveMatchResponse | null) {
+    if (!match || match.phase === "none") return "";
+    return match.matchId || `${match.phase}:${match.mapId || "map"}:${match.queueId || "queue"}`;
+}
+
 function PlayerCard({ player, agent, tier }: { 
     player: LivePlayer; 
     agent?: { name: string; icon: string; full: string }; 
@@ -164,6 +212,8 @@ function PlayerCard({ player, agent, tier }: {
 }) {
     const isLocked = player.selectionState === "locked";
     const isSelecting = player.selectionState === "selected";
+    const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
+    const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
     
     return (
         <div className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}>
@@ -180,7 +230,7 @@ function PlayerCard({ player, agent, tier }: {
                     ) : (
                         <div className="agent-placeholder-icon">?</div>
                     )}
-                    {player.accountLevel > 0 && (
+                        {player.accountLevel > 0 && (
                         <span className="player-lvl-badge">LVL {player.accountLevel}</span>
                     )}
                 </div>
@@ -204,14 +254,14 @@ function PlayerCard({ player, agent, tier }: {
                         <img src={tier.icon} alt={tier.name} className="player-rank-icon" title={tier.name} />
                         {player.competitiveTier > 0 && (
                             <div className="rank-rating-text">
-                                <span className="tier-name">{tier.name.split(' ')[0]}</span>
+                                <span className="tier-name">{rankShort}</span>
                                 <span className="rr-val">{player.rankedRating} RR</span>
                             </div>
                         )}
                     </div>
                 ) : player.puuid ? (
                     <div className="player-rank-container unranked">
-                        <div className="unranked-placeholder">Unranked</div>
+                        <div className="unranked-placeholder">{rankName}</div>
                     </div>
                 ) : null}
 

@@ -301,7 +301,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                 </div>
 
                 <div className="login-sidebar-footer">
-                    <span>VALOVAULT IS NOT ENDORSED BY RIOT GAMES.</span>
+                    <span>VANTAVAULT IS NOT ENDORSED BY RIOT GAMES.</span>
                 </div>
             </div>
         </div>

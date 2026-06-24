@@ -14,7 +14,9 @@ interface SettingsModalProps {
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
+    accentTheme: string;
     onToggleTheme: () => void;
+    onAccentThemeChange: (accent: 'valorant' | 'aqua' | 'violet' | 'gold') => void;
     
     // Client health & active info
     isLocalClientActive: boolean;
@@ -38,7 +40,9 @@ export default function SettingsModal({
     launchAtStartup,
     onLaunchAtStartupChange,
     theme,
+    accentTheme,
     onToggleTheme,
+    onAccentThemeChange,
     isLocalClientActive,
     activeAccount,
     appVersion,
@@ -110,7 +114,7 @@ export default function SettingsModal({
                             <div className="settings-item">
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Launch at Login</div>
-                                    <div className="settings-item-desc">Start ValoVault automatically when you sign in to Windows.</div>
+                                    <div className="settings-item-desc">Start VantaVault automatically when you sign in to Windows.</div>
                                 </div>
                                 <div className="settings-item-control">
                                     <label className="switch-control">
@@ -149,6 +153,34 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Accent Style</div>
+                                    <div className="settings-item-desc">Change the app accent so the interface is not locked to Valorant red.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <div className="accent-select-group" aria-label="Accent style">
+                                        {[
+                                            { id: 'valorant', label: 'Red' },
+                                            { id: 'aqua', label: 'Aqua' },
+                                            { id: 'violet', label: 'Violet' },
+                                            { id: 'gold', label: 'Gold' },
+                                        ].map((accent) => (
+                                            <button
+                                                key={accent.id}
+                                                type="button"
+                                                className={`accent-select-btn accent-select-btn--${accent.id}${accentTheme === accent.id ? ' active' : ''}`}
+                                                onClick={() => onAccentThemeChange(accent.id as 'valorant' | 'aqua' | 'violet' | 'gold')}
+                                                aria-pressed={accentTheme === accent.id}
+                                            >
+                                                <span className="accent-select-swatch" aria-hidden="true" />
+                                                <span>{accent.label}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
                         </div>
 
                         {/* Connection Mode */}
@@ -156,7 +188,7 @@ export default function SettingsModal({
                             <div className="connection-mode-header">
                                 <div>
                                     <div className="settings-item-label" style={{ marginBottom: '2px' }}>Connection Mode</div>
-                                    <div className="settings-item-desc">Choose how ValoVault authenticates with Riot.</div>
+                                    <div className="settings-item-desc">Choose how VantaVault authenticates with Riot.</div>
                                 </div>
                                 <div className={`conn-live-dot ${useLocalSso ? (isLocalClientActive ? 'dot-green' : 'dot-amber') : 'dot-blue'}`} />
                             </div>

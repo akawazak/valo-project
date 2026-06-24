@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useData } from '@/context/DataContext';
@@ -22,6 +22,7 @@ export default function PlayerCardPanel({
 }: PlayerCardPanelProps) {
     const { playerCards, playerTitles } = useData();
     const [pickerOpen, setPickerOpen] = useState(false);
+    const [portraitFailed, setPortraitFailed] = useState(false);
 
     const selectedCard = useMemo(
         () => playerCards.find(c => c.uuid.toLowerCase() === currentCardId.toLowerCase()),
@@ -36,6 +37,10 @@ export default function PlayerCardPanel({
     const titleText = selectedTitle?.titleText || selectedTitle?.displayName || 'No Title';
     const portraitUrl = getPlayerCardPortraitUrl(selectedCard);
 
+    useEffect(() => {
+        setPortraitFailed(false);
+    }, [portraitUrl]);
+
     return (
         <div className="player-card-panel-premium">
             <div className="cosmetics-sub-header">Identity</div>
@@ -47,13 +52,15 @@ export default function PlayerCardPanel({
                 aria-label="Change player card and title"
                 title="Change player card and title"
             >
+                <span className="player-card-rank-badge" aria-hidden="true">1</span>
                 <div className="player-card-portrait">
-                    {portraitUrl ? (
+                    {portraitUrl && !portraitFailed ? (
                         <img
                             src={portraitUrl}
                             alt={selectedCard?.displayName || ''}
                             loading="lazy"
                             draggable={false}
+                            onError={() => setPortraitFailed(true)}
                         />
                     ) : selectedCard?.displayIcon ? (
                         <Image
@@ -64,20 +71,11 @@ export default function PlayerCardPanel({
                             style={{ objectFit: 'cover' }}
                         />
                     ) : (
-                        <div style={{
-                            width: '100%',
-                            height: '100%',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '1.5rem',
-                            color: 'var(--text-dim)',
-                        }}>
-                            🃏
+                        <div className="player-card-empty-art" aria-hidden="true">
+                            <span className="player-card-empty-mark">V</span>
                         </div>
                     )}
 
-                    {/* Gradient scrim with card name and title */}
                     <div className="player-card-portrait-scrim">
                         <span className="player-card-portrait-name">
                             {selectedCard?.displayName || 'No Card'}
@@ -97,7 +95,7 @@ export default function PlayerCardPanel({
                                 <span className="kicker">// Select Identity</span>
                                 <h3 className="unified-modal-title">Player Card &amp; Title</h3>
                             </div>
-                            <button type="button" className="unified-modal-close-btn" onClick={() => setPickerOpen(false)}>✕</button>
+                            <button type="button" className="unified-modal-close-btn" onClick={() => setPickerOpen(false)}>x</button>
                         </div>
 
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0.75rem 1.25rem 1rem' }}>

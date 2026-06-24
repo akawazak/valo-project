@@ -11,6 +11,7 @@
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --border-accent: rgba(255, 64, 85, 0.4);
+  --accent-rgb: 255 64 85;
   --accent: #ff4055;
   --accent-dim: rgba(255, 64, 85, 0.1);
   --accent-glow: rgba(255, 64, 85, 0.25);
@@ -70,6 +71,7 @@
   --border: rgba(15, 25, 35, 0.1);
   --border-strong: rgba(15, 25, 35, 0.18);
   --border-accent: rgba(255, 64, 85, 0.45);
+  --accent-rgb: 232 54 74;
   --accent: #e8364a;
   --accent-dim: rgba(232, 54, 74, 0.1);
   --accent-glow: rgba(232, 54, 74, 0.2);
@@ -100,6 +102,36 @@
   --shadow-md: 0 8px 24px rgba(15, 25, 35, 0.1);
   --shadow-lg: 0 20px 50px rgba(15, 25, 35, 0.14);
   --shadow-accent: 0 8px 28px rgba(232, 54, 74, 0.18);
+}
+
+[data-accent="aqua"] {
+  --accent-rgb: 35 211 194;
+  --accent: #23d3c2;
+  --accent-dim: rgba(35, 211, 194, 0.1);
+  --accent-glow: rgba(35, 211, 194, 0.22);
+  --border-accent: rgba(35, 211, 194, 0.42);
+  --text-accent: #23d3c2;
+  --shadow-accent: 0 8px 32px rgba(35, 211, 194, 0.18);
+}
+
+[data-accent="violet"] {
+  --accent-rgb: 167 139 250;
+  --accent: #a78bfa;
+  --accent-dim: rgba(167, 139, 250, 0.1);
+  --accent-glow: rgba(167, 139, 250, 0.24);
+  --border-accent: rgba(167, 139, 250, 0.42);
+  --text-accent: #a78bfa;
+  --shadow-accent: 0 8px 32px rgba(167, 139, 250, 0.18);
+}
+
+[data-accent="gold"] {
+  --accent-rgb: 245 197 66;
+  --accent: #f5c542;
+  --accent-dim: rgba(245, 197, 66, 0.1);
+  --accent-glow: rgba(245, 197, 66, 0.2);
+  --border-accent: rgba(245, 197, 66, 0.42);
+  --text-accent: #f5c542;
+  --shadow-accent: 0 8px 32px rgba(245, 197, 66, 0.16);
 }
 
 /* ── Reset & Base ── */
@@ -274,6 +306,13 @@ div#__next>div {
   font-weight: 900;
   color: #fff;
   box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.brand-mark-img {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  object-fit: contain;
 }
 
 /* Navigation — pill tabs */
@@ -1144,6 +1183,62 @@ div#__next>div {
   background: var(--panel-bg);
   color: var(--text-primary);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.accent-select-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  min-width: min(100%, 360px);
+}
+
+.accent-select-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.48rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition), transform var(--transition);
+}
+
+.accent-select-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.accent-select-btn.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent), 0 8px 22px var(--accent-glow);
+}
+
+.accent-select-swatch {
+  width: 0.72rem;
+  height: 0.72rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28), 0 0 10px currentColor;
+}
+
+.accent-select-btn--valorant .accent-select-swatch { background: #ff4055; color: #ff4055; }
+.accent-select-btn--aqua .accent-select-swatch { background: #23d3c2; color: #23d3c2; }
+.accent-select-btn--violet .accent-select-swatch { background: #a78bfa; color: #a78bfa; }
+.accent-select-btn--gold .accent-select-swatch { background: #f5c542; color: #f5c542; }
+
+.workspace-builder-board {
+  --builder-accent-soft: rgb(var(--accent-rgb) / 0.08);
+  --builder-accent-mid: rgb(var(--accent-rgb) / 0.14);
+  --builder-accent-strong: rgb(var(--accent-rgb) / 0.52);
 }
 
 .settings-sidebar-footer {
@@ -2942,8 +3037,8 @@ div#__next>div {
 
 .weapon-card-reset-btn {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 36px;
   z-index: 1;
   width: 24px;
   height: 24px;
@@ -2956,6 +3051,38 @@ div#__next>div {
   font-size: 0.75rem;
   color: var(--text-dim);
   transition: all var(--transition);
+}
+
+.weapon-card-equipped-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 6;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tier-color, var(--accent));
+  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+  box-shadow:
+    0 0 10px var(--tier-color, var(--accent)),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  animation: weapon-equipped-pop 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.weapon-card-equipped-badge svg {
+  width: 13px;
+  height: 13px;
+  color: #fff;
+  stroke-width: 3.5;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+
+@keyframes weapon-equipped-pop {
+  0%   { transform: scale(0.6); opacity: 0; }
+  60%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .weapon-card-reset-btn:hover {
@@ -7624,7 +7751,7 @@ div#__next>div {
 /* ── Centered Workspace Layout ── */
 .workspace-centered-wrapper {
   max-width: none;
-  width: min(1760px, calc(100vw - 2.5rem));
+  width: min(1700px, calc(100vw - 5rem));
   margin: 0 auto;
   padding: 0.2rem 0 0;
   display: flex;
@@ -7844,20 +7971,23 @@ div#__next>div {
   gap: clamp(0.7rem, 0.88vw, 0.98rem);
   flex: 0 0 auto;
   min-height: 0;
-  align-items: start;
+  align-items: stretch;
 }
 
 .workspace-builder-board {
   position: relative;
   isolation: isolate;
-  padding: 0.24rem 0 0.42rem;
+  padding: 0.34rem 0.12rem 0.62rem;
   background:
-    linear-gradient(90deg, rgba(255, 70, 85, 0.05), transparent 24%, transparent 72%, rgba(255, 70, 85, 0.07)),
-    radial-gradient(ellipse at 42% 0%, rgba(255, 70, 85, 0.075), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 24%),
-    var(--bg-base);
-  border-top: 1px solid rgba(196, 178, 181, 0.16);
-  border-bottom: 1px solid rgba(255, 70, 85, 0.08);
+    linear-gradient(90deg, rgba(255, 70, 85, 0.08), transparent 18%, transparent 74%, rgba(255, 70, 85, 0.12)),
+    radial-gradient(ellipse at 48% 50%, rgba(255, 70, 85, 0.08), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 22%, rgba(255, 70, 85, 0.035)),
+    color-mix(in srgb, var(--bg-base) 88%, #18080d);
+  border-top: 1px solid rgba(196, 178, 181, 0.22);
+  border-bottom: 1px solid rgba(255, 70, 85, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    inset 0 -1px 0 rgba(255, 70, 85, 0.08);
 }
 
 .workspace-builder-board::before,
@@ -7865,37 +7995,131 @@ div#__next>div {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
 }
 
 .workspace-builder-board::before {
   background:
-    linear-gradient(90deg, transparent 0 9%, rgba(196, 178, 181, 0.12) 9% 9.08%, transparent 9.08% 91%, rgba(196, 178, 181, 0.1) 91% 91.08%, transparent 91.08%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 46px);
-  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 46%);
+    linear-gradient(90deg, transparent 0 8.2%, rgba(196, 178, 181, 0.13) 8.2% 8.28%, transparent 8.28% 91.7%, rgba(196, 178, 181, 0.11) 91.7% 91.78%, transparent 91.78%),
+    linear-gradient(180deg, transparent 0 12%, rgba(255, 70, 85, 0.08) 12% 12.12%, transparent 12.12% 87%, rgba(196, 178, 181, 0.08) 87% 87.12%, transparent 87.12%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.026) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 42px);
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.3) 62%, rgba(0, 0, 0, 0.74));
 }
 
 .workspace-builder-board::after {
-  inset: auto 0 0;
-  height: 34%;
+  inset: 0;
+  height: auto;
   background:
-    linear-gradient(135deg, transparent 0 45%, rgba(255, 70, 85, 0.06) 45% 46%, transparent 46%),
-    linear-gradient(45deg, transparent 0 54%, rgba(196, 178, 181, 0.06) 54% 55%, transparent 55%);
-  opacity: 0.85;
+    linear-gradient(135deg, transparent 0 43%, rgba(255, 70, 85, 0.12) 43% 43.5%, transparent 43.5% 56.5%, rgba(196, 178, 181, 0.08) 56.5% 57%, transparent 57%),
+    linear-gradient(45deg, transparent 0 47%, rgba(255, 70, 85, 0.08) 47% 47.42%, transparent 47.42% 52.58%, rgba(196, 178, 181, 0.06) 52.58% 53%, transparent 53%),
+    radial-gradient(ellipse at 52% 53%, rgba(255, 70, 85, 0.09), transparent 34%);
+  opacity: 0.82;
+  mask-image: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.95), transparent 68%);
 }
 
 .workspace-board-column {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: clamp(0.42rem, 0.88vh, 0.62rem);
   min-width: 0;
+  height: 100%;
+}
+
+.workspace-board-column::before,
+.workspace-board-column::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.workspace-board-column::before {
+  inset: 0.62rem 0.28rem 0.42rem;
+  z-index: 0;
+  background:
+    linear-gradient(180deg, rgba(196, 178, 181, 0.13), transparent 16%, transparent 84%, rgba(196, 178, 181, 0.11)),
+    linear-gradient(90deg, transparent, rgba(255, 70, 85, 0.07) 48%, rgba(196, 178, 181, 0.11) 50%, rgba(255, 70, 85, 0.07) 52%, transparent),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18), transparent 22%, rgba(0, 0, 0, 0.22));
+  border-left: 1px solid rgba(196, 178, 181, 0.075);
+  border-right: 1px solid rgba(196, 178, 181, 0.06);
+  opacity: 0.92;
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms)::after {
+  left: 50%;
+  top: 48%;
+  width: min(46%, 180px);
+  height: min(18vh, 132px);
+  z-index: 0;
+  transform: translate(-50%, -50%) skewX(-16deg);
+  border-top: 1px solid rgba(255, 70, 85, 0.12);
+  border-bottom: 1px solid rgba(196, 178, 181, 0.08);
+  background:
+    linear-gradient(135deg, transparent 0 46%, rgba(255, 70, 85, 0.1) 46% 47%, transparent 47% 53%, rgba(196, 178, 181, 0.08) 53% 54%, transparent 54%),
+    radial-gradient(ellipse at 50% 50%, rgba(255, 70, 85, 0.055), transparent 62%);
+  opacity: 0.82;
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms) {
+  justify-content: space-between;
+}
+
+.workspace-board-column--sidearms .workspace-category--weapon {
+  height: 100%;
 }
 
 .workspace-category {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.workspace-category--weapon {
+  position: relative;
+  z-index: 1;
+  padding: 0.24rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 24%, rgba(0, 0, 0, 0.18)),
+    linear-gradient(90deg, rgba(255, 70, 85, 0.06), transparent 34%, transparent 66%, rgba(196, 178, 181, 0.04)),
+    rgba(8, 13, 17, 0.2);
+  border: 1px solid rgba(196, 178, 181, 0.105);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    inset 0 -1px 0 rgba(255, 70, 85, 0.04),
+    0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+.workspace-category--weapon::before {
+  content: "";
+  position: absolute;
+  left: 0.34rem;
+  right: 0.34rem;
+  top: 1.82rem;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(255, 70, 85, 0.72), rgba(196, 178, 181, 0.26) 48%, transparent);
+  opacity: 0.85;
+}
+
+.workspace-category--weapon::after {
+  content: "";
+  position: absolute;
+  inset: 0.28rem;
+  pointer-events: none;
+  border: 1px solid rgba(196, 178, 181, 0.08);
+  clip-path: polygon(0 0, 28px 0, 28px 4px, calc(100% - 28px) 4px, calc(100% - 28px) 0, 100% 0, 100% 20px, calc(100% - 4px) 20px, calc(100% - 4px) calc(100% - 20px), 100% calc(100% - 20px), 100% 100%, calc(100% - 28px) 100%, calc(100% - 28px) calc(100% - 4px), 28px calc(100% - 4px), 28px 100%, 0 100%, 0 calc(100% - 20px), 4px calc(100% - 20px), 4px 20px, 0 20px);
+  opacity: 0.85;
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms) .workspace-category--weapon + .workspace-category--weapon {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.018),
+    0 -18px 40px rgba(255, 70, 85, 0.025),
+    0 8px 26px rgba(0, 0, 0, 0.12);
 }
 
 .workspace-presets-row {
@@ -8057,15 +8281,33 @@ div#__next>div {
 }
 
 .workspace-builder-board .workspace-column-title--weapon {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0 0 0.42rem;
+  padding: 0.08rem 0.18rem 0.28rem;
+  overflow: visible;
+  clip: auto;
+  font-family: var(--font-mono);
+  font-size: clamp(0.7rem, 0.78vw, 0.84rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  text-transform: uppercase;
+  border-bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: flex-start;
+  line-height: 1;
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
+}
+
+.workspace-builder-board .workspace-column-title--weapon::before {
+  width: 4px;
+  height: 4px;
+  background: rgba(255, 70, 85, 0.78);
+  box-shadow: 0 0 6px rgba(255, 70, 85, 0.45);
 }
 
 .workspace-column-items {
@@ -8075,6 +8317,10 @@ div#__next>div {
   flex: 1;
   overflow: visible;
   padding-right: 0;
+}
+
+.workspace-category--weapon .workspace-column-items {
+  flex: 0 0 auto;
 }
 
 .workspace-builder-board .draggable-weapon-wrapper {
@@ -8088,21 +8334,23 @@ div#__next>div {
 .workspace-builder-board .valorant-weapon-card--melee {
   position: relative;
   aspect-ratio: auto;
-  height: clamp(110px, 12.2vh, 124px);
-  min-height: 110px;
-  max-height: 124px;
+  height: clamp(104px, 11.55vh, 118px);
+  min-height: 104px;
+  max-height: 118px;
   border-radius: 0;
   clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 12px);
   background:
-    linear-gradient(135deg, rgba(196, 178, 181, 0.17) 0 10%, transparent 10.2%),
-    linear-gradient(90deg, rgba(255, 70, 85, 0.04), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.008) 42%, rgba(0, 0, 0, 0.32)),
-    color-mix(in srgb, var(--bg-base) 72%, #211014);
-  border: 1px solid rgba(196, 178, 181, 0.44);
+    linear-gradient(135deg, rgba(196, 178, 181, 0.2) 0 10%, transparent 10.2%),
+    radial-gradient(ellipse at 64% 16%, rgba(255, 255, 255, 0.08), transparent 42%),
+    linear-gradient(90deg, rgba(255, 70, 85, 0.055), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.01) 42%, rgba(0, 0, 0, 0.34)),
+    color-mix(in srgb, var(--bg-base) 69%, #241116);
+  border: 1px solid rgba(196, 178, 181, 0.5);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
-    inset 0 -1px 0 rgba(196, 178, 181, 0.2),
-    0 1px 0 rgba(255, 255, 255, 0.025);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 -1px 0 rgba(196, 178, 181, 0.22),
+    0 1px 0 rgba(255, 255, 255, 0.03),
+    0 8px 16px rgba(0, 0, 0, 0.12);
 }
 
 .workspace-builder-board .valorant-weapon-card::before {
@@ -8139,15 +8387,31 @@ div#__next>div {
 
 .workspace-builder-board .valorant-weapon-card.is-active {
   border-left-width: 1px;
-  border-color: rgba(196, 178, 181, 0.5);
+  border-color: color-mix(in srgb, var(--tier-color, rgba(196, 178, 181, 0.5)) 55%, rgba(196, 178, 181, 0.5));
   box-shadow:
-    inset 0 0 0 1px rgba(255, 70, 85, 0.08),
-    inset 0 -2px 0 rgba(255, 70, 85, 0.22),
-    0 1px 0 rgba(255, 255, 255, 0.025);
+    inset 0 0 0 1px color-mix(in srgb, var(--tier-color, rgba(255, 70, 85, 0.08)) 28%, transparent),
+    inset 0 -2px 0 color-mix(in srgb, var(--tier-color, rgba(255, 70, 85, 0.22)) 70%, transparent),
+    0 0 16px color-mix(in srgb, var(--tier-color, rgba(255, 70, 85, 0.18)) 32%, transparent);
 }
 
 .workspace-builder-board .valorant-weapon-card.is-active::after {
-  border-color: rgba(255, 70, 85, 0.14);
+  border-color: color-mix(in srgb, var(--tier-color, rgba(255, 70, 85, 0.14)) 70%, transparent);
+}
+
+.workspace-builder-board .valorant-weapon-card.is-active .valorant-weapon-card-skin {
+  color: var(--tier-color, var(--accent));
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--tier-color, transparent) 42%, transparent);
+}
+
+.workspace-builder-board .valorant-weapon-card-tier {
+  height: 3px;
+  z-index: 4;
+  opacity: 1;
+  box-shadow:
+    0 0 12px var(--tier-color, currentColor),
+    0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 .workspace-builder-board .valorant-weapon-card-body {
@@ -8349,9 +8613,9 @@ div#__next>div {
   .workspace-builder-board .valorant-weapon-card--sniper,
   .workspace-builder-board .valorant-weapon-card--heavy,
   .workspace-builder-board .valorant-weapon-card--melee {
-    height: clamp(86px, 11.2vh, 92px);
-    min-height: 86px;
-    max-height: 92px;
+    height: clamp(82px, 10.85vh, 88px);
+    min-height: 82px;
+    max-height: 88px;
   }
 
   .workspace-builder-board .valorant-weapon-card-footer {
@@ -9327,6 +9591,425 @@ div#__next>div {
 
 .player-card-slot-premium:hover .player-card-change-hint {
   color: var(--accent);
+}
+
+/* ValorantBuilder-inspired cosmetics banner rail */
+.workspace-builder-rail {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.55rem, 1.15vh, 0.86rem);
+  justify-content: flex-start;
+  padding: clamp(0.5rem, 1vh, 0.72rem) clamp(0.58rem, 0.78vw, 0.82rem) clamp(0.58rem, 1.05vh, 0.82rem);
+  border: 1px solid rgba(255, 70, 85, 0.2);
+  border-radius: 0;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  background:
+    linear-gradient(180deg, rgba(255, 70, 85, 0.12), transparent 12%),
+    radial-gradient(ellipse at 50% 18%, rgba(255, 70, 85, 0.18), transparent 40%),
+    radial-gradient(ellipse at 50% 86%, rgba(255, 70, 85, 0.1), transparent 44%),
+    linear-gradient(90deg, rgba(255, 70, 85, 0.08), transparent 18%, transparent 82%, rgba(255, 70, 85, 0.08)),
+    color-mix(in srgb, var(--bg-base) 77%, #24090f);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 46px rgba(0, 0, 0, 0.28);
+}
+
+.workspace-builder-rail::before,
+.workspace-builder-rail::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.workspace-builder-rail::before {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 28px),
+    linear-gradient(135deg, transparent 0 44%, rgba(255, 70, 85, 0.11) 44% 44.7%, transparent 44.7% 55.2%, rgba(196, 178, 181, 0.08) 55.2% 56%, transparent 56%),
+    linear-gradient(45deg, transparent 0 45%, rgba(255, 70, 85, 0.09) 45% 45.6%, transparent 45.6% 54.4%, rgba(196, 178, 181, 0.07) 54.4% 55%, transparent 55%);
+  opacity: 0.58;
+}
+
+.workspace-builder-rail::after {
+  inset: 0.54rem;
+  border: 1px solid rgba(196, 178, 181, 0.09);
+  clip-path: polygon(0 0, 34px 0, 34px 4px, calc(100% - 34px) 4px, calc(100% - 34px) 0, 100% 0, 100% 30px, calc(100% - 4px) 30px, calc(100% - 4px) calc(100% - 30px), 100% calc(100% - 30px), 100% 100%, calc(100% - 34px) 100%, calc(100% - 34px) calc(100% - 4px), 34px calc(100% - 4px), 34px 100%, 0 100%, 0 calc(100% - 30px), 4px calc(100% - 30px), 4px 30px, 0 30px);
+  opacity: 0.72;
+}
+
+.workspace-builder-rail .workspace-rail-section {
+  position: relative;
+  z-index: 1;
+}
+
+.workspace-builder-rail .workspace-rail-section + .workspace-rail-section {
+  margin-top: 0;
+}
+
+.workspace-builder-rail .workspace-column-title {
+  margin: 0 0 clamp(0.34rem, 0.72vh, 0.55rem);
+  padding: 0.1rem 0 0.42rem;
+  border-bottom: 1px solid rgba(196, 178, 181, 0.18);
+  font-size: clamp(0.84rem, 0.98vw, 1.08rem);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.08);
+}
+
+.workspace-builder-rail .player-card-panel-premium {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.workspace-builder-rail .player-card-slot-premium {
+  position: relative;
+  padding-top: 0.42rem;
+  isolation: isolate;
+}
+
+.player-card-rank-badge {
+  position: absolute;
+  top: -0.05rem;
+  left: 50%;
+  z-index: 8;
+  min-width: 2.25rem;
+  height: 1.34rem;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 900;
+  color: #f5f0e8;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.7);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 36%),
+    linear-gradient(135deg, #464842, #1d211f);
+  border: 1px solid rgba(245, 240, 232, 0.45);
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  box-shadow: 0 0 0 2px rgba(12, 17, 19, 0.9), 0 6px 14px rgba(0, 0, 0, 0.42);
+}
+
+.workspace-builder-rail .player-card-portrait {
+  width: min(194px, 78%);
+  max-width: none;
+  aspect-ratio: 0.47 / 1;
+  border: 1px solid rgba(255, 70, 85, 0.78);
+  border-radius: 0;
+  overflow: hidden;
+  clip-path: polygon(0 0, 100% 0, 100% 86%, 76% 100%, 24% 100%, 0 86%);
+  background:
+    linear-gradient(180deg, rgba(13, 25, 31, 0.95), rgba(9, 14, 18, 0.98)),
+    linear-gradient(135deg, transparent 0 46%, rgba(255, 70, 85, 0.2) 46% 48%, transparent 48%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 0 0 4px rgba(255, 70, 85, 0.09),
+    0 18px 30px rgba(0, 0, 0, 0.46),
+    0 0 26px rgba(255, 70, 85, 0.13);
+}
+
+.workspace-builder-rail .player-card-portrait::before {
+  inset: 0.48rem;
+  z-index: 4;
+  border-color: rgba(255, 70, 85, 0.48);
+  clip-path: polygon(0 0, 31px 0, 31px 5px, calc(100% - 31px) 5px, calc(100% - 31px) 0, 100% 0, 100% 42px, calc(100% - 5px) 42px, calc(100% - 5px) calc(100% - 52px), 100% calc(100% - 52px), 100% 100%, calc(100% - 31px) 100%, calc(100% - 31px) calc(100% - 5px), 31px calc(100% - 5px), 31px 100%, 0 100%, 0 calc(100% - 52px), 5px calc(100% - 52px), 5px 42px, 0 42px);
+}
+
+.workspace-builder-rail .player-card-portrait::after {
+  inset: auto 10% 0;
+  z-index: 3;
+  height: 25%;
+  background:
+    linear-gradient(135deg, transparent 0 30%, rgba(255, 70, 85, 0.58) 30% 36%, transparent 36% 62%, rgba(255, 70, 85, 0.42) 62% 70%, transparent 70%),
+    linear-gradient(180deg, transparent, rgba(255, 70, 85, 0.12));
+  opacity: 0.82;
+}
+
+.workspace-builder-rail .player-card-portrait img {
+  object-fit: cover;
+  object-position: center top;
+}
+
+.player-card-empty-art {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 36%, rgba(255, 70, 85, 0.24), transparent 32%),
+    linear-gradient(135deg, transparent 0 43%, rgba(255, 70, 85, 0.25) 43% 47%, transparent 47% 58%, rgba(196, 178, 181, 0.12) 58% 60%, transparent 60%),
+    #0d1a20;
+}
+
+.player-card-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 3.4rem;
+  height: 3.4rem;
+  border: 1px solid rgba(255, 70, 85, 0.52);
+  color: rgba(255, 70, 85, 0.82);
+  font-family: var(--font-mono);
+  font-size: 1.6rem;
+  font-weight: 900;
+  background: rgba(255, 70, 85, 0.08);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+
+.workspace-builder-rail .player-card-portrait-scrim {
+  z-index: 5;
+  bottom: 6.5%;
+  padding: 1.55rem 0.55rem 0.46rem;
+  background:
+    linear-gradient(180deg, transparent, rgba(4, 7, 10, 0.62) 30%, rgba(5, 8, 10, 0.94)),
+    linear-gradient(90deg, rgba(255, 70, 85, 0.16), rgba(255, 218, 148, 0.14) 50%, rgba(255, 70, 85, 0.16));
+}
+
+.workspace-builder-rail .player-card-portrait-name,
+.workspace-builder-rail .player-card-portrait-title {
+  text-align: center;
+}
+
+.workspace-builder-rail .player-card-portrait-name {
+  font-size: clamp(0.58rem, 0.7vw, 0.7rem);
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.workspace-builder-rail .player-card-portrait-title {
+  font-size: clamp(0.48rem, 0.58vw, 0.58rem);
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.workspace-builder-rail .premium-spray-wheel-wrapper {
+  padding: 0;
+}
+
+.workspace-builder-rail .circular-spray-wheel {
+  width: min(178px, 76%);
+  height: auto;
+  aspect-ratio: 1 / 1;
+  margin: clamp(0.1rem, 0.45vh, 0.32rem) 0 0.18rem;
+  border: 1px solid rgba(196, 178, 181, 0.56);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(13, 25, 31, 0.94) 0 21%, rgba(255, 70, 85, 0.07) 22% 23%, transparent 23% 46%, rgba(196, 178, 181, 0.14) 46% 47%, transparent 47%),
+    radial-gradient(circle, rgba(255, 70, 85, 0.11), transparent 62%),
+    rgba(7, 13, 17, 0.54);
+  box-shadow: inset 0 0 24px rgba(255, 70, 85, 0.08), 0 12px 28px rgba(0, 0, 0, 0.26);
+}
+
+.workspace-builder-rail .circular-spray-wheel::before {
+  inset: 15%;
+  z-index: 1;
+  border-color: rgba(196, 178, 181, 0.36);
+  background:
+    linear-gradient(45deg, transparent calc(50% - 1px), rgba(196, 178, 181, 0.34) 50%, transparent calc(50% + 1px)),
+    linear-gradient(-45deg, transparent calc(50% - 1px), rgba(196, 178, 181, 0.34) 50%, transparent calc(50% + 1px)),
+    radial-gradient(circle, transparent 0 35%, rgba(196, 178, 181, 0.18) 35% 36%, transparent 36%);
+}
+
+.workspace-builder-rail .circular-spray-wheel::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 70, 85, 0.16);
+  pointer-events: none;
+}
+
+.workspace-builder-rail .circular-spray-wheel-ring {
+  inset: 30%;
+  z-index: 1;
+  border-style: solid;
+  border-color: rgba(196, 178, 181, 0.2);
+}
+
+.workspace-builder-rail .circular-spray-wheel-center {
+  width: 42px;
+  height: 42px;
+  z-index: 3;
+  background: rgba(9, 17, 22, 0.92);
+  border-color: rgba(196, 178, 181, 0.26);
+  color: rgba(196, 218, 224, 0.58);
+  box-shadow: inset 0 0 14px rgba(255, 70, 85, 0.07), 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+.workspace-builder-rail .circular-spray-slot {
+  width: clamp(38px, 2.9vw, 48px);
+  height: clamp(38px, 2.9vw, 48px);
+  z-index: 4;
+  border-radius: 10px;
+  border-color: rgba(196, 178, 181, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    rgba(13, 25, 31, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025), 0 6px 16px rgba(0, 0, 0, 0.22);
+}
+
+.workspace-builder-rail .circular-spray-slot:hover {
+  border-color: rgba(255, 70, 85, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(255, 70, 85, 0.18), 0 0 16px rgba(255, 70, 85, 0.24);
+}
+
+.workspace-builder-rail .circular-spray-slot.is-equipped {
+  border-color: rgba(255, 70, 85, 0.7);
+  background: rgba(13, 25, 31, 0.95);
+}
+
+.workspace-builder-rail .circular-spray-slot-empty {
+  color: rgba(196, 218, 224, 0.58);
+  font-size: 1.02rem;
+  font-weight: 900;
+}
+
+.workspace-builder-rail .circular-spray-label-hint {
+  margin-top: 0.1rem;
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  color: rgba(145, 163, 171, 0.56);
+}
+
+@media (min-width: 1100px) and (min-height: 781px) and (max-height: 900px) {
+  .workspace-builder-rail .player-card-portrait {
+    width: min(176px, 74%);
+  }
+
+  .workspace-builder-rail .circular-spray-wheel {
+    width: min(154px, 70%);
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 780px) {
+  .workspace-builder-rail {
+    gap: 0.42rem;
+    padding: 0.44rem 0.56rem 0.54rem;
+  }
+
+  .workspace-builder-rail .workspace-column-title {
+    margin-bottom: 0.28rem;
+    padding-bottom: 0.32rem;
+    font-size: clamp(0.72rem, 0.9vw, 0.9rem);
+  }
+
+  .workspace-builder-rail .player-card-slot-premium {
+    padding-top: 0.32rem;
+  }
+
+  .workspace-builder-rail .player-card-portrait {
+    width: min(150px, 68%);
+  }
+
+  .workspace-builder-rail .circular-spray-wheel {
+    width: min(128px, 62%);
+  }
+
+  .workspace-builder-rail .circular-spray-slot {
+    width: 36px;
+    height: 36px;
+  }
+
+  .workspace-builder-rail .circular-spray-wheel-center {
+    width: 36px;
+    height: 36px;
+    font-size: 0.48rem;
+  }
+}
+
+/* Customizable, less-empty preset builder finish */
+.workspace-builder-board {
+  background:
+    linear-gradient(90deg, var(--builder-accent-soft), transparent 18%, transparent 74%, var(--builder-accent-mid)),
+    radial-gradient(ellipse at 48% 50%, var(--builder-accent-soft), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 22%, var(--builder-accent-soft)),
+    color-mix(in srgb, var(--bg-base) 88%, var(--accent) 5%);
+  border-top-color: color-mix(in srgb, var(--accent) 24%, rgba(196, 178, 181, 0.2));
+  border-bottom-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.workspace-builder-board::before {
+  background:
+    linear-gradient(90deg, transparent 0 8.2%, rgba(196, 178, 181, 0.13) 8.2% 8.28%, transparent 8.28% 91.7%, rgba(196, 178, 181, 0.11) 91.7% 91.78%, transparent 91.78%),
+    linear-gradient(180deg, transparent 0 12%, var(--builder-accent-soft) 12% 12.12%, transparent 12.12% 87%, rgba(196, 178, 181, 0.08) 87% 87.12%, transparent 87.12%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.026) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 42px);
+}
+
+.workspace-builder-board::after {
+  background:
+    linear-gradient(135deg, transparent 0 43%, var(--builder-accent-mid) 43% 43.5%, transparent 43.5% 56.5%, rgba(196, 178, 181, 0.08) 56.5% 57%, transparent 57%),
+    linear-gradient(45deg, transparent 0 47%, var(--builder-accent-soft) 47% 47.42%, transparent 47.42% 52.58%, rgba(196, 178, 181, 0.06) 52.58% 53%, transparent 53%),
+    radial-gradient(ellipse at 52% 53%, var(--builder-accent-soft), transparent 34%);
+}
+
+.workspace-board-column::before {
+  background:
+    linear-gradient(180deg, rgba(196, 178, 181, 0.13), transparent 16%, transparent 84%, rgba(196, 178, 181, 0.11)),
+    linear-gradient(90deg, transparent, var(--builder-accent-soft) 48%, rgba(196, 178, 181, 0.12) 50%, var(--builder-accent-soft) 52%, transparent),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.14), transparent 22%, rgba(0, 0, 0, 0.18));
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms)::after {
+  top: 50%;
+  width: min(78%, 310px);
+  height: min(30vh, 230px);
+  transform: translate(-50%, -50%) skewX(-12deg);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, rgba(196, 178, 181, 0.08));
+  background:
+    linear-gradient(90deg, transparent 0 12%, color-mix(in srgb, var(--accent) 16%, transparent) 12% 12.6%, transparent 12.6% 87.4%, color-mix(in srgb, var(--accent) 12%, transparent) 87.4% 88%, transparent 88%),
+    repeating-linear-gradient(90deg, transparent 0 24px, rgba(255, 255, 255, 0.035) 24px 25px),
+    repeating-linear-gradient(180deg, transparent 0 20px, rgba(255, 255, 255, 0.026) 20px 21px),
+    radial-gradient(ellipse at 50% 50%, var(--builder-accent-soft), transparent 64%),
+    linear-gradient(135deg, transparent 0 45%, color-mix(in srgb, var(--accent) 16%, transparent) 45% 46%, transparent 46% 54%, rgba(196, 178, 181, 0.08) 54% 55%, transparent 55%);
+  box-shadow:
+    inset 0 0 28px color-mix(in srgb, var(--accent) 6%, transparent),
+    0 0 32px rgba(0, 0, 0, 0.12);
+  opacity: 0.96;
+}
+
+.workspace-category--weapon {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 24%, rgba(0, 0, 0, 0.18)),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 34%, transparent 66%, rgba(196, 178, 181, 0.045)),
+    rgba(8, 13, 17, 0.22);
+}
+
+.workspace-category--weapon::before {
+  background: linear-gradient(90deg, var(--builder-accent-strong), rgba(196, 178, 181, 0.26) 48%, transparent);
+}
+
+.workspace-category--weapon::after {
+  border-color: color-mix(in srgb, var(--accent) 12%, rgba(196, 178, 181, 0.07));
+}
+
+.workspace-builder-board .workspace-column-title--weapon::before {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.workspace-builder-board .valorant-weapon-card::before {
+  background:
+    linear-gradient(135deg, rgba(196, 178, 181, 0.22) 0 48%, transparent 48%),
+    linear-gradient(135deg, var(--builder-accent-mid) 0 2px, transparent 2px);
+}
+
+.workspace-builder-rail {
+  background:
+    linear-gradient(180deg, var(--builder-accent-mid), transparent 12%),
+    radial-gradient(ellipse at 50% 18%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 40%),
+    radial-gradient(ellipse at 50% 86%, var(--builder-accent-soft), transparent 44%),
+    linear-gradient(90deg, var(--builder-accent-soft), transparent 18%, transparent 82%, var(--builder-accent-soft)),
+    color-mix(in srgb, var(--bg-base) 78%, var(--accent) 6%);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.workspace-builder-rail::before {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 28px),
+    linear-gradient(135deg, transparent 0 44%, var(--builder-accent-mid) 44% 44.7%, transparent 44.7% 55.2%, rgba(196, 178, 181, 0.08) 55.2% 56%, transparent 56%),
+    linear-gradient(45deg, transparent 0 45%, var(--builder-accent-soft) 45% 45.6%, transparent 45.6% 54.4%, rgba(196, 178, 181, 0.07) 54.4% 55%, transparent 55%);
 }
 
 /* ── Cosmetics Column Sub-headers ── */
@@ -10920,13 +11603,456 @@ div#__next>div {
 }
 
 /* ── Missions grid (main column) ── */
-.missions-grid {
+.live-systems-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.live-system-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.85rem;
+  min-height: 96px;
+  padding: 1rem;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 34%),
+    radial-gradient(ellipse at 10% 0%, rgba(34, 211, 163, 0.1), transparent 48%),
+    rgba(255, 255, 255, 0.032);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.live-system-card::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  opacity: 0.45;
+}
+
+.live-system-card--warn::after {
+  background: linear-gradient(90deg, transparent, var(--yellow), transparent);
+}
+
+.live-system-card--active::after {
+  opacity: 0.9;
+}
+
+.live-system-orb {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(34, 211, 163, 0.08);
+  border: 1px solid rgba(34, 211, 163, 0.3);
+  box-shadow: inset 0 0 18px rgba(34, 211, 163, 0.08);
+}
+
+.live-system-card--warn .live-system-orb {
+  background: rgba(245, 197, 66, 0.08);
+  border-color: rgba(245, 197, 66, 0.32);
+}
+
+.live-system-orb::before,
+.live-system-orb span {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border-radius: inherit;
+  background: var(--green);
+  box-shadow: 0 0 18px rgba(34, 211, 163, 0.42);
+}
+
+.live-system-card--warn .live-system-orb::before,
+.live-system-card--warn .live-system-orb span {
+  background: var(--yellow);
+  box-shadow: 0 0 18px rgba(245, 197, 66, 0.36);
+}
+
+.live-system-orb span {
+  inset: 4px;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: var(--green);
+  opacity: 0.36;
+  animation: live-system-pulse 5s linear infinite;
+}
+
+.live-system-main {
+  min-width: 0;
+}
+
+.live-system-kicker {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.live-system-status {
+  margin-top: 0.28rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.live-system-detail {
+  margin-top: 0.18rem;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-system-meta {
+  align-self: start;
+  padding: 0.24rem 0.46rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.riot-signals-panel {
+  position: relative;
+  overflow: hidden;
+  padding: 1rem;
+  background:
+    linear-gradient(135deg, rgba(255, 70, 85, 0.08), transparent 34%),
+    radial-gradient(ellipse at 78% 0%, rgba(34, 211, 163, 0.09), transparent 42%),
+    rgba(255, 255, 255, 0.026);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.riot-signals-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(90deg, transparent, #000 15%, #000 85%, transparent);
+}
+
+.riot-signals-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.riot-signals-header span {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+  font-weight: 950;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.riot-signals-header small,
+.riot-signals-time {
+  display: block;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.riot-signals-time {
+  padding: 0.26rem 0.5rem;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.riot-signals-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.riot-signal-card {
+  min-height: 118px;
+  padding: 0.82rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 56%),
+    rgba(6, 13, 18, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.018);
+}
+
+.riot-signal-card--active {
+  border-color: rgba(34, 211, 163, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 163, 0.06), 0 0 18px rgba(34, 211, 163, 0.045);
+}
+
+.riot-signal-card--warn {
+  border-color: rgba(245, 197, 66, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(245, 197, 66, 0.06), 0 0 18px rgba(245, 197, 66, 0.045);
+}
+
+.riot-signal-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.riot-signal-topline small {
+  padding: 0.12rem 0.36rem;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+.riot-signal-value {
+  margin-top: 0.48rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 950;
+}
+
+.riot-signal-detail {
+  display: -webkit-box;
+  margin-top: 0.36rem;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+@media (max-width: 1180px) {
+  .riot-signals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.profile-progress-module {
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(34, 211, 163, 0.075), transparent 42%),
+    radial-gradient(ellipse at 88% 8%, rgba(245, 197, 66, 0.07), transparent 46%),
+    rgba(255, 255, 255, 0.028);
+}
+
+.profile-progress-header {
+  align-items: flex-start;
+}
+
+.profile-progress-header small {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progress-tab-bar {
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.85rem 1rem 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.progress-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.progress-tab-bar button {
+  flex: 0 0 auto;
+  min-height: 2.1rem;
+  padding: 0.45rem 0.7rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 850;
+  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.progress-tab-bar button:hover,
+.progress-tab-bar button.is-active {
+  color: var(--text-primary);
+  background: rgba(255, 70, 85, 0.14);
+  border-color: rgba(255, 70, 85, 0.36);
+}
+
+.progress-rail {
+  min-height: 142px;
+}
+
+.progress-item-card {
+  min-height: 138px;
+}
+
+.progress-item-topline,
+.progress-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
 }
 
+.progress-item-topline span,
+.progress-foot {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progress-item-topline strong {
+  color: var(--yellow);
+  font-size: 0.72rem;
+}
+
+.progress-item-title {
+  margin-top: 0.8rem;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.progress-item-desc {
+  display: -webkit-box;
+  min-height: 2.1rem;
+  margin-top: 0.35rem;
+  overflow: hidden;
+  color: var(--text-secondary);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.progress-empty-state {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 142px;
+  padding: 1rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.progress-empty-state strong {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.progress-empty-state span {
+  margin-top: 0.28rem;
+  font-size: 0.78rem;
+}
+
+@keyframes live-system-pulse {
+  from {
+    transform: scale(0.72);
+    opacity: 0.38;
+  }
+  to {
+    transform: scale(1.18);
+    opacity: 0;
+  }
+}
+
+.missions-header-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.missions-header-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.15rem 0.45rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  line-height: 1;
+}
+
+.missions-grid {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.45rem;
+  scroll-padding-left: 0.1rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 70, 85, 0.55) rgba(255, 255, 255, 0.06);
+}
+
+.missions-grid::-webkit-scrollbar {
+  height: 8px;
+}
+
+.missions-grid::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+
+.missions-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 70, 85, 0.55);
+  border-radius: 999px;
+}
+
 .mission-item-container {
+  flex: 0 0 clamp(270px, 42vw, 380px);
+  scroll-snap-align: start;
   padding: 0.85rem;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -10939,9 +12065,140 @@ div#__next>div {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
+.mission-item-container--complete {
+  opacity: 0.74;
+  border-color: color-mix(in srgb, var(--green) 26%, rgba(255, 255, 255, 0.08));
+}
+
+.mission-item-container--complete .rank-progress-fill {
+  background-color: var(--green) !important;
+}
+
+.contracts-strip {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.45rem;
+  scroll-padding-left: 0.1rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245, 197, 66, 0.55) rgba(255, 255, 255, 0.06);
+}
+
+.contracts-strip::-webkit-scrollbar {
+  height: 8px;
+}
+
+.contracts-strip::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+}
+
+.contracts-strip::-webkit-scrollbar-thumb {
+  background: rgba(245, 197, 66, 0.55);
+  border-radius: 999px;
+}
+
+.contract-item-container {
+  flex: 0 0 clamp(280px, 34vw, 420px);
+  scroll-snap-align: start;
+  padding: 0.95rem;
+  background:
+    radial-gradient(ellipse at 18% 0%, rgba(245, 197, 66, 0.08), transparent 44%),
+    rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.contract-item-container:hover {
+  background:
+    radial-gradient(ellipse at 18% 0%, rgba(245, 197, 66, 0.12), transparent 46%),
+    rgba(255, 255, 255, 0.055);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.contract-item-container--active {
+  border-color: color-mix(in srgb, var(--yellow) 34%, rgba(255, 255, 255, 0.08));
+  box-shadow: inset 0 -2px 0 rgba(245, 197, 66, 0.24);
+}
+
+.contract-item-top {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.contract-item-icon {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.contract-item-icon--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--yellow);
+  font-weight: 800;
+}
+
+.contract-item-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contract-item-meta {
+  margin-top: 0.12rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
 @media (max-width: 640px) {
-  .missions-grid {
+  .live-systems-grid {
     grid-template-columns: 1fr;
+  }
+
+  .riot-signals-header {
+    flex-direction: column;
+  }
+
+  .riot-signals-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .live-system-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .live-system-meta {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .live-system-detail {
+    white-space: normal;
+  }
+
+  .missions-header-meta {
+    justify-content: flex-start;
+  }
+
+  .mission-item-container,
+  .contract-item-container {
+    flex-basis: min(82vw, 340px);
   }
 }
 
@@ -11745,4 +13002,715 @@ div#__next>div {
   line-height: 1.4;
   font-weight: 400;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* Preset builder polish pass: roomier slots, tighter cosmetics rail, calmer tactical backdrop */
+.workspace-centered-wrapper {
+  width: min(1840px, calc(100vw - 3.2rem));
+}
+
+.workspace-builder-header {
+  margin-bottom: 0.34rem;
+}
+
+.workspace-command-strip--compact {
+  min-height: 1.85rem;
+  margin-bottom: 0.54rem;
+  padding: 0.26rem 0.58rem;
+  border-color: color-mix(in srgb, var(--accent) 20%, rgba(196, 178, 181, 0.14));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 24%),
+    rgba(5, 10, 14, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.workspace-command-strip--compact .clr-reference-badge {
+  padding: 0.1rem 0.4rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.workspace-command-strip--compact .clr-reference-hint {
+  margin-left: 0;
+  color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+}
+
+.workspace-grid-5 {
+  grid-template-columns: minmax(232px, 0.98fr) repeat(3, minmax(232px, 1fr)) minmax(236px, 0.68fr);
+  gap: 0.78rem;
+}
+
+.workspace-builder-board {
+  padding: 0.52rem;
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--accent) 13%, transparent) 0 10%, transparent 10% 36%, color-mix(in srgb, var(--accent) 6%, transparent) 36% 37%, transparent 37%),
+    linear-gradient(245deg, transparent 0 46%, color-mix(in srgb, var(--accent) 10%, transparent) 46% 46.6%, transparent 46.6% 64%, rgba(196, 218, 224, 0.045) 64% 64.5%, transparent 64.5%),
+    radial-gradient(ellipse at 48% 8%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 42%),
+    radial-gradient(ellipse at 50% 96%, rgba(79, 209, 197, 0.055), transparent 54%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008) 28%, rgba(0, 0, 0, 0.12)),
+    color-mix(in srgb, var(--bg-base) 90%, #152025 10%);
+  border-color: color-mix(in srgb, var(--accent) 18%, rgba(196, 218, 224, 0.16));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.018),
+    inset 0 24px 70px rgba(255, 255, 255, 0.018),
+    0 18px 55px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-builder-board::before {
+  background:
+    linear-gradient(90deg, transparent 0 7.8%, rgba(196, 218, 224, 0.12) 7.8% 7.9%, transparent 7.9% 92.1%, rgba(196, 218, 224, 0.1) 92.1% 92.2%, transparent 92.2%),
+    linear-gradient(180deg, transparent 0 11%, color-mix(in srgb, var(--accent) 9%, transparent) 11% 11.12%, transparent 11.12% 88%, rgba(196, 218, 224, 0.065) 88% 88.12%, transparent 88.12%),
+    repeating-linear-gradient(90deg, rgba(196, 218, 224, 0.032) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(180deg, rgba(196, 218, 224, 0.022) 0 1px, transparent 1px 38px);
+  opacity: 0.82;
+}
+
+.workspace-builder-board::after {
+  background:
+    linear-gradient(135deg, transparent 0 40%, color-mix(in srgb, var(--accent) 12%, transparent) 40% 40.45%, transparent 40.45% 58%, rgba(79, 209, 197, 0.06) 58% 58.45%, transparent 58.45%),
+    radial-gradient(ellipse at 50% 50%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 56%);
+  opacity: 0.56;
+}
+
+.workspace-board-column {
+  gap: 0.54rem;
+}
+
+.workspace-board-column::before {
+  inset: 0.44rem 0.12rem 0.2rem;
+  background:
+    linear-gradient(180deg, rgba(196, 218, 224, 0.115), transparent 18%, transparent 82%, rgba(196, 218, 224, 0.09)),
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 5%, transparent) 45%, rgba(196, 218, 224, 0.07) 50%, color-mix(in srgb, var(--accent) 5%, transparent) 55%, transparent),
+    rgba(255, 255, 255, 0.008);
+  opacity: 0.64;
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms)::after {
+  opacity: 0.42;
+}
+
+.workspace-category--weapon {
+  padding: 0.34rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 26%, rgba(0, 0, 0, 0.14)),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 32%, transparent 68%, rgba(196, 218, 224, 0.035)),
+    rgba(6, 12, 16, 0.26);
+  border-color: rgba(196, 218, 224, 0.14);
+}
+
+.workspace-category--weapon::before {
+  left: 0.46rem;
+  right: 0.46rem;
+  opacity: 0.62;
+}
+
+.workspace-column-items {
+  gap: 0.48rem;
+}
+
+.workspace-builder-board .valorant-weapon-card,
+.workspace-builder-board .valorant-weapon-card--rifle,
+.workspace-builder-board .valorant-weapon-card--sniper,
+.workspace-builder-board .valorant-weapon-card--heavy,
+.workspace-builder-board .valorant-weapon-card--melee {
+  min-height: 104px;
+  height: clamp(104px, 11vh, 116px);
+  max-height: 116px;
+  background:
+    linear-gradient(135deg, rgba(196, 218, 224, 0.2) 0 9%, transparent 9.2%),
+    radial-gradient(ellipse at 60% 12%, rgba(255, 255, 255, 0.075), transparent 40%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.012) 42%, rgba(0, 0, 0, 0.3)),
+    color-mix(in srgb, var(--bg-base) 74%, var(--accent) 5%);
+  border-color: rgba(196, 218, 224, 0.42);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 -1px 0 rgba(196, 218, 224, 0.18),
+    0 9px 20px rgba(0, 0, 0, 0.14);
+}
+
+.workspace-builder-board .valorant-weapon-card-media {
+  inset: 0.46rem 0.74rem 1.68rem;
+}
+
+.workspace-builder-board .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--smg .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--shotgun .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--rifle .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--sniper .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--heavy .valorant-weapon-card-image {
+  max-width: 90%;
+  max-height: 86%;
+}
+
+.workspace-builder-board .valorant-weapon-card--sidearm .valorant-weapon-card-image {
+  max-width: 78%;
+  max-height: 84%;
+}
+
+.workspace-builder-board .valorant-weapon-card--melee .valorant-weapon-card-image {
+  max-width: 86%;
+  max-height: 88%;
+}
+
+.workspace-builder-board .valorant-weapon-card-footer {
+  min-height: 1.56rem;
+  padding: 0.2rem 0.48rem 0.3rem;
+  background:
+    linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.76) 34%),
+    linear-gradient(90deg, transparent 0 22%, rgba(196, 218, 224, 0.34) 22% 56%, transparent 56% 62%, color-mix(in srgb, var(--accent) 28%, transparent) 62% 100%);
+  background-size: 100% 100%, 100% 2px;
+  background-position: 0 0, 0 100%;
+  background-repeat: no-repeat;
+}
+
+.workspace-builder-board .weapon-card-equipped-badge {
+  top: 0.42rem;
+  right: 0.42rem;
+  width: 20px;
+  height: 20px;
+}
+
+.workspace-builder-rail {
+  gap: 0.38rem;
+  padding: 0.46rem 0.48rem 0.5rem;
+  justify-content: flex-start;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 13%),
+    radial-gradient(ellipse at 50% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-base) 74%, var(--accent) 8%), color-mix(in srgb, var(--bg-base) 88%, #071016 12%));
+}
+
+.workspace-builder-rail::before {
+  opacity: 0.38;
+}
+
+.workspace-builder-rail::after {
+  inset: 0.38rem;
+  opacity: 0.54;
+}
+
+.workspace-builder-rail .workspace-column-title {
+  margin-bottom: 0.3rem;
+  padding-bottom: 0.3rem;
+  font-size: 0.92rem;
+}
+
+.workspace-builder-rail .player-card-slot-premium {
+  padding-top: 0.28rem;
+}
+
+.workspace-builder-rail .player-card-portrait {
+  width: min(198px, 84%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent),
+    0 14px 24px rgba(0, 0, 0, 0.4),
+    0 0 22px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.workspace-builder-rail .workspace-rail-section + .workspace-rail-section {
+  margin-top: 0.26rem;
+}
+
+.workspace-builder-rail .circular-spray-wheel {
+  width: min(170px, 78%);
+  margin-top: 0.02rem;
+}
+
+.workspace-builder-rail .circular-spray-label-hint {
+  margin-top: 0.02rem;
+}
+
+@media (min-width: 1100px) and (max-height: 780px) {
+  .workspace-grid-5 {
+    gap: 0.56rem;
+  }
+
+  .workspace-builder-board {
+    padding: 0.38rem;
+  }
+
+  .workspace-column-items {
+    gap: 0.34rem;
+  }
+
+  .workspace-builder-board .valorant-weapon-card,
+  .workspace-builder-board .valorant-weapon-card--rifle,
+  .workspace-builder-board .valorant-weapon-card--sniper,
+  .workspace-builder-board .valorant-weapon-card--heavy,
+  .workspace-builder-board .valorant-weapon-card--melee {
+    min-height: 92px;
+    height: 92px;
+    max-height: 92px;
+  }
+
+  .workspace-builder-board .valorant-weapon-card-media {
+    inset: 0.34rem 0.62rem 1.52rem;
+  }
+
+  .workspace-builder-rail {
+    padding: 0.36rem 0.4rem 0.42rem;
+    gap: 0.28rem;
+  }
+
+  .workspace-builder-rail .player-card-portrait {
+    width: min(148px, 76%);
+  }
+
+  .workspace-builder-rail .circular-spray-wheel {
+    width: min(126px, 66%);
+  }
+}
+
+/* Official Valorant loadout corrective pass */
+.workspace-centered-wrapper {
+  width: min(1840px, calc(100vw - 2.4rem));
+}
+
+.workspace-command-strip--compact {
+  margin-bottom: 0.38rem;
+  border-color: rgba(111, 139, 154, 0.32);
+  background: rgba(4, 12, 18, 0.64);
+}
+
+.workspace-builder-board {
+  padding: 0.76rem 0.9rem 0.78rem;
+  background:
+    radial-gradient(ellipse at 45% 45%, rgba(42, 150, 186, 0.2), transparent 44%),
+    radial-gradient(ellipse at 54% 95%, rgba(92, 192, 214, 0.16), transparent 38%),
+    linear-gradient(120deg, rgba(10, 43, 62, 0.94), rgba(13, 76, 100, 0.86) 46%, rgba(10, 37, 55, 0.94)),
+    #0a2738;
+  border: 1px solid rgba(98, 128, 143, 0.36);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 28px 90px rgba(255, 255, 255, 0.025),
+    0 20px 56px rgba(0, 0, 0, 0.28);
+}
+
+.workspace-builder-board::before {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.12), transparent 18%),
+    linear-gradient(110deg, transparent 0 35%, rgba(255, 255, 255, 0.045) 35.2% 35.6%, transparent 35.8% 68%, rgba(255, 255, 255, 0.035) 68.2% 68.6%, transparent 68.8%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 62px);
+  opacity: 0.54;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.24));
+}
+
+.workspace-builder-board::after {
+  background:
+    linear-gradient(135deg, transparent 0 44%, rgba(255, 255, 255, 0.045) 44.1% 44.45%, transparent 44.55% 58%, rgba(87, 183, 209, 0.09) 58.1% 58.5%, transparent 58.6%),
+    radial-gradient(ellipse at 50% 56%, rgba(65, 167, 199, 0.16), transparent 46%);
+  opacity: 0.44;
+}
+
+.workspace-grid-5 {
+  grid-template-columns: minmax(240px, 0.98fr) repeat(3, minmax(240px, 1fr)) minmax(242px, 0.68fr);
+  gap: clamp(0.9rem, 1.15vw, 1.35rem);
+}
+
+.workspace-board-column {
+  gap: clamp(0.9rem, 1.45vh, 1.2rem);
+}
+
+.workspace-board-column::before,
+.workspace-board-column::after,
+.workspace-category--weapon::before,
+.workspace-category--weapon::after,
+.workspace-builder-board .valorant-weapon-card::before,
+.workspace-builder-board .valorant-weapon-card::after {
+  display: none;
+}
+
+.workspace-category--weapon {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  clip-path: none;
+}
+
+.workspace-board-column:not(.workspace-board-column--sidearms) {
+  justify-content: space-between;
+}
+
+.workspace-board-column--sidearms .workspace-category--weapon {
+  height: auto;
+}
+
+.workspace-builder-board .workspace-column-title--weapon {
+  justify-content: center;
+  margin: 0 0 0.7rem;
+  padding: 0;
+  color: rgba(246, 247, 244, 0.96);
+  font-family: var(--font-sans);
+  font-size: clamp(1rem, 1.28vw, 1.42rem);
+  font-weight: 900;
+  letter-spacing: -0.015em;
+  line-height: 1;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.workspace-builder-board .workspace-column-title--weapon::before {
+  display: none;
+}
+
+.workspace-column-items {
+  gap: clamp(0.74rem, 1.22vh, 1rem);
+}
+
+.workspace-builder-board .valorant-weapon-card,
+.workspace-builder-board .valorant-weapon-card--rifle,
+.workspace-builder-board .valorant-weapon-card--sniper,
+.workspace-builder-board .valorant-weapon-card--heavy,
+.workspace-builder-board .valorant-weapon-card--melee {
+  height: clamp(104px, 11.5vh, 124px);
+  min-height: 104px;
+  max-height: 124px;
+  border-radius: 0;
+  clip-path: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018) 44%, rgba(0, 0, 0, 0.08)),
+    rgba(27, 62, 81, 0.46);
+  border: 1px solid rgba(123, 151, 163, 0.62);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.018),
+    0 10px 22px rgba(0, 0, 0, 0.08);
+}
+
+.workspace-builder-board .valorant-weapon-card:hover {
+  border-color: rgba(176, 204, 215, 0.82);
+  transform: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.038),
+    0 10px 24px rgba(0, 0, 0, 0.16);
+}
+
+.workspace-builder-board .valorant-weapon-card.is-active {
+  border-color: rgba(123, 151, 163, 0.68);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.024),
+    0 10px 22px rgba(0, 0, 0, 0.08);
+}
+
+.workspace-builder-board .valorant-weapon-card-tier,
+.workspace-builder-board .weapon-card-equipped-badge {
+  display: none;
+}
+
+.workspace-builder-board .valorant-weapon-card-media {
+  inset: 0.72rem 1.1rem 2.1rem;
+  overflow: visible;
+}
+
+.workspace-builder-board .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--smg .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--shotgun .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--rifle .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--sniper .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--heavy .valorant-weapon-card-image {
+  max-width: 86%;
+  max-height: 82%;
+  object-fit: contain;
+  object-position: center;
+  filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.26));
+}
+
+.workspace-builder-board .valorant-weapon-card--sidearm .valorant-weapon-card-image {
+  max-width: 68%;
+  max-height: 80%;
+}
+
+.workspace-builder-board .valorant-weapon-card--melee .valorant-weapon-card-image {
+  max-width: 78%;
+  max-height: 84%;
+}
+
+.workspace-builder-board .valorant-weapon-card-footer {
+  min-height: 2.05rem;
+  padding: 0.36rem 0.72rem 0.5rem;
+  background: none;
+}
+
+.workspace-builder-board .valorant-weapon-card-footer::after {
+  content: "";
+  position: absolute;
+  left: 0.7rem;
+  right: 0.7rem;
+  bottom: 0.28rem;
+  height: 2px;
+  background:
+    linear-gradient(90deg, rgba(123, 151, 163, 0.68) 0 22%, transparent 22% 25%, rgba(123, 151, 163, 0.68) 25% 69%, transparent 69% 72%, rgba(123, 151, 163, 0.68) 72% 100%);
+  opacity: 0.72;
+}
+
+.workspace-builder-board .valorant-weapon-card-name {
+  color: rgba(207, 220, 224, 0.62);
+  font-size: clamp(0.64rem, 0.72vw, 0.78rem);
+  font-weight: 800;
+  letter-spacing: 0.015em;
+}
+
+.workspace-builder-board .valorant-weapon-card-skin {
+  color: rgba(207, 220, 224, 0.4);
+  font-size: clamp(0.44rem, 0.5vw, 0.54rem);
+  font-weight: 600;
+}
+
+.workspace-builder-board .valorant-weapon-card.is-active .valorant-weapon-card-skin {
+  color: rgba(207, 220, 224, 0.44);
+  font-weight: 600;
+  text-shadow: none;
+}
+
+.workspace-builder-rail {
+  border-color: rgba(123, 151, 163, 0.34);
+  background:
+    linear-gradient(180deg, rgba(27, 62, 81, 0.58), rgba(9, 26, 37, 0.84)),
+    rgba(8, 24, 34, 0.84);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.018),
+    0 18px 42px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-builder-rail::before {
+  opacity: 0.24;
+}
+
+.workspace-builder-rail .workspace-column-title {
+  color: rgba(246, 247, 244, 0.96);
+  border-color: rgba(123, 151, 163, 0.34);
+}
+
+.workspace-builder-rail .workspace-column-title::before {
+  background: rgba(246, 247, 244, 0.8);
+}
+
+@media (min-width: 1100px) and (max-height: 780px) {
+  .workspace-builder-board {
+    padding: 0.58rem 0.72rem;
+  }
+
+  .workspace-grid-5 {
+    gap: 0.76rem;
+  }
+
+  .workspace-column-items {
+    gap: 0.55rem;
+  }
+
+  .workspace-builder-board .workspace-column-title--weapon {
+    margin-bottom: 0.48rem;
+    font-size: 0.96rem;
+  }
+
+  .workspace-builder-board .valorant-weapon-card,
+  .workspace-builder-board .valorant-weapon-card--rifle,
+  .workspace-builder-board .valorant-weapon-card--sniper,
+  .workspace-builder-board .valorant-weapon-card--heavy,
+  .workspace-builder-board .valorant-weapon-card--melee {
+    height: 94px;
+    min-height: 94px;
+    max-height: 94px;
+  }
+
+  .workspace-builder-board .valorant-weapon-card-media {
+    inset: 0.48rem 0.88rem 1.82rem;
+  }
+}
+
+/* Proportional loadout slot tuning: taller holders, capped width on large screens */
+.workspace-centered-wrapper {
+  width: min(1760px, calc(100vw - 3rem));
+}
+
+.workspace-builder-board {
+  padding: clamp(0.72rem, 1vw, 1.05rem);
+}
+
+.workspace-grid-5 {
+  grid-template-columns:
+    minmax(238px, 342px)
+    minmax(238px, 342px)
+    minmax(238px, 342px)
+    minmax(238px, 342px)
+    minmax(220px, 286px);
+  justify-content: center;
+  align-items: stretch;
+  gap: clamp(0.82rem, 1.05vw, 1.18rem);
+}
+
+.workspace-board-column {
+  min-width: 0;
+  gap: clamp(0.76rem, 1.04vh, 0.95rem);
+}
+
+.workspace-column-items {
+  gap: clamp(0.54rem, 0.82vh, 0.76rem);
+}
+
+.workspace-builder-board .valorant-weapon-card,
+.workspace-builder-board .valorant-weapon-card--rifle,
+.workspace-builder-board .valorant-weapon-card--sniper,
+.workspace-builder-board .valorant-weapon-card--heavy,
+.workspace-builder-board .valorant-weapon-card--melee {
+  height: clamp(112px, 10.9vh, 126px);
+  min-height: 112px;
+  max-height: 126px;
+}
+
+.workspace-builder-board .valorant-weapon-card-media {
+  inset: 0.62rem 1rem 2rem;
+}
+
+.workspace-builder-board .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--smg .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--shotgun .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--rifle .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--sniper .valorant-weapon-card-image,
+.workspace-builder-board .valorant-weapon-card--heavy .valorant-weapon-card-image {
+  max-width: min(84%, 286px);
+  max-height: 78%;
+}
+
+.workspace-builder-board .valorant-weapon-card--sidearm .valorant-weapon-card-image {
+  max-width: min(66%, 220px);
+}
+
+.workspace-builder-board .valorant-weapon-card--melee .valorant-weapon-card-image {
+  max-width: min(72%, 246px);
+}
+
+@media (min-width: 1680px) {
+  .workspace-builder-board .valorant-weapon-card,
+  .workspace-builder-board .valorant-weapon-card--rifle,
+  .workspace-builder-board .valorant-weapon-card--sniper,
+  .workspace-builder-board .valorant-weapon-card--heavy,
+  .workspace-builder-board .valorant-weapon-card--melee {
+    height: 124px;
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 780px) {
+  .workspace-centered-wrapper {
+    width: min(1500px, calc(100vw - 1.5rem));
+  }
+
+  .workspace-grid-5 {
+    grid-template-columns:
+      minmax(200px, 280px)
+      minmax(200px, 280px)
+      minmax(200px, 280px)
+      minmax(200px, 280px)
+      minmax(190px, 238px);
+    gap: 0.58rem;
+  }
+
+  .workspace-builder-board .valorant-weapon-card,
+  .workspace-builder-board .valorant-weapon-card--rifle,
+  .workspace-builder-board .valorant-weapon-card--sniper,
+  .workspace-builder-board .valorant-weapon-card--heavy,
+  .workspace-builder-board .valorant-weapon-card--melee {
+    height: 98px;
+    min-height: 98px;
+    max-height: 98px;
+  }
+
+  .workspace-builder-board .valorant-weapon-card-media {
+    inset: 0.42rem 0.72rem 1.74rem;
+  }
+}
+
+/* Equal-baseline lanes: each category divides vertical room by its slot count */
+.workspace-builder-board.workspace-grid-5 {
+  --lane-gap: clamp(0.78rem, 1.05vh, 1rem);
+  --slot-gap: clamp(0.62rem, 0.88vh, 0.82rem);
+  height: clamp(660px, calc(100dvh - 205px), 770px);
+  max-height: 770px;
+  overflow: hidden;
+}
+
+.workspace-builder-board .workspace-board-column {
+  height: 100%;
+  gap: var(--lane-gap);
+}
+
+.workspace-builder-board .workspace-board-column:not(.workspace-board-column--sidearms) {
+  justify-content: stretch;
+}
+
+.workspace-builder-board .workspace-category--weapon {
+  flex: var(--category-weight, 1) 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-builder-board .workspace-board-column--sidearms .workspace-category--weapon {
+  height: auto;
+}
+
+.workspace-builder-board .workspace-column-title--weapon {
+  flex: 0 0 auto;
+  margin-bottom: clamp(0.42rem, 0.62vh, 0.58rem);
+}
+
+.workspace-builder-board .workspace-column-items {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: repeat(var(--slot-count, 1), minmax(0, 1fr));
+  gap: var(--slot-gap);
+}
+
+.workspace-builder-board .draggable-weapon-wrapper {
+  min-height: 0;
+  height: 100%;
+}
+
+.workspace-builder-board .valorant-weapon-card,
+.workspace-builder-board .valorant-weapon-card--rifle,
+.workspace-builder-board .valorant-weapon-card--sniper,
+.workspace-builder-board .valorant-weapon-card--heavy,
+.workspace-builder-board .valorant-weapon-card--melee {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.workspace-builder-board .workspace-category--smgs .valorant-weapon-card,
+.workspace-builder-board .workspace-category--shotguns .valorant-weapon-card {
+  min-height: 0;
+}
+
+.workspace-builder-board .valorant-weapon-card-media {
+  inset: clamp(0.48rem, 0.78vh, 0.72rem) 1rem clamp(1.74rem, 2.1vh, 2.08rem);
+}
+
+@media (min-width: 1680px) and (min-height: 880px) {
+  .workspace-builder-board.workspace-grid-5 {
+    height: clamp(710px, calc(100dvh - 215px), 815px);
+    max-height: 815px;
+  }
+}
+
+@media (min-width: 1100px) and (max-height: 780px) {
+  .workspace-builder-board.workspace-grid-5 {
+    --lane-gap: 0.5rem;
+    --slot-gap: 0.42rem;
+    height: clamp(540px, calc(100dvh - 160px), 620px);
+    max-height: 620px;
+  }
+
+  .workspace-builder-board .workspace-column-title--weapon {
+    margin-bottom: 0.32rem;
+  }
+
+  .workspace-builder-board .valorant-weapon-card,
+  .workspace-builder-board .valorant-weapon-card--rifle,
+  .workspace-builder-board .valorant-weapon-card--sniper,
+  .workspace-builder-board .valorant-weapon-card--heavy,
+  .workspace-builder-board .valorant-weapon-card--melee {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+  }
 }

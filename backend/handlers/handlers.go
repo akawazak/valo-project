@@ -60,12 +60,16 @@ func NewHandler(Val *valclient.ValClient) *Handler {
 func (h *Handler) SetTicker(ticker *tick.Ticker) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.Ticker != nil && h.Ticker != ticker {
+		h.Ticker.Stop()
+	}
 	h.Ticker = ticker
 }
 
 func (h *Handler) RestartTicker(newVal *valclient.ValClient) {
-	h.Ticker.Stop()
-	h.Ticker.Start()
+	ticker := tick.NewTicker(newVal)
+	h.SetTicker(ticker)
+	go ticker.Start()
 }
 
 // trackingDB returns the lazily-initialized tracking DB handle. The

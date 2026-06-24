@@ -12,9 +12,16 @@ import {
     getProfileOverview,
     getProfileSyncStatus,
     getRRHistory,
+    getContracts,
+    getAccountHealth,
+    getLiveMatch,
+    getLiveLoadouts,
     postProfileSync,
+    getPartyStatus,
     getMissions,
+    getSocialStatus,
     getPlayerLoadoutData,
+    AccountHealthResponse,
     ProfileAgentStatsResponse,
     ProfileMapStatsResponse,
     ProfileMatchDetails,
@@ -23,7 +30,12 @@ import {
     ProfilePlayerStats,
     ProfileRRHistory,
     ProfileSyncStatus,
+    PlayerContractsResponse,
+    LiveMatchResponse,
+    LiveLoadoutsResponse,
+    PartyStatusResponse,
     RiotMissionsResponse,
+    SocialStatusResponse,
 } from "@/services/api";
 import AgentStatsTable from "./AgentStatsTable";
 import MapStatsTable from "./MapStatsTable";
@@ -42,6 +54,22 @@ interface MapMeta {
     name: string;
     splash: string;
 }
+
+interface ContractMeta {
+    name: string;
+    icon: string;
+    relationType: string;
+    totalLevels: number;
+    totalXp: number;
+}
+
+interface ContractMetadataLevel {
+    xp?: number | string;
+    xpRequired?: number | string;
+    progressToComplete?: number | string;
+}
+
+type ProgressTab = "daily" | "weekly" | "battlepass" | "contracts";
 
 const RANK_GROUPS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
 const QUEUE_OPTIONS: Array<{ value: string; label: string }> = [
@@ -161,7 +189,7 @@ function cleanError(err: unknown): string {
     const raw = err instanceof Error ? err.message : String(err || "");
     if (!raw) return "Something went wrong.";
     if (/error sending request|failed to fetch|connection refused|unable to connect|localhost:31719/i.test(raw)) {
-        return "Local backend is not reachable. Restart ValoVault/the backend, then sync again.";
+        return "Local backend is not reachable. Restart VantaVault/the backend, then sync again.";
     }
     try {
         const parsed = JSON.parse(raw);
@@ -268,7 +296,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
 }
 
 export default function ProfilePanel({ onConnectAccount }: Props) {
-    const { activeAccount } = useData();
+    const { activeAccount, isBackendOnline, isClientHealthy } = useData();
     const puuid = activeAccount?.puuid ?? "";
     const region = activeAccount?.region ?? "na";
 
@@ -305,9 +333,18 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [toast, setToast] = useState<string | null>(null);
     const [missions, setMissions] = useState<RiotMissionsResponse | null>(null);
     const [missionsMeta, setMissionsMeta] = useState<Record<string, { title: string; description: string; xp: number; target: number; type: string }>>({});
+    const [contracts, setContracts] = useState<PlayerContractsResponse | null>(null);
+    const [contractsMeta, setContractsMeta] = useState<Record<string, ContractMeta>>({});
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
     const [playerCards, setPlayerCards] = useState<Record<string, { wide: string; icon: string; name: string }>>({});
     const [playerTitles, setPlayerTitles] = useState<Record<string, string>>({});
+    const [progressTab, setProgressTab] = useState<ProgressTab>("daily");
+    const [liveStatus, setLiveStatus] = useState<LiveMatchResponse | null>(null);
+    const [partyStatus, setPartyStatus] = useState<PartyStatusResponse | null>(null);
+    const [loadoutStatus, setLoadoutStatus] = useState<LiveLoadoutsResponse | null>(null);
+    const [accountHealth, setAccountHealth] = useState<AccountHealthResponse | null>(null);
+    const [socialStatus, setSocialStatus] = useState<SocialStatusResponse | null>(null);
+    const [liveUpdatedAt, setLiveUpdatedAt] = useState(0);
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
@@ -339,6 +376,30 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 }
                 setMissionsMeta(meta);
             }).catch(e => console.warn("Failed to load missions metadata", e));
+
+        fetch("https://valorant-api.com/v1/contracts")
+            .then(res => res.json())
+            .then(d => {
+                if (cancelled) return;
+                const meta: Record<string, ContractMeta> = {};
+                for (const c of d.data || []) {
+                    if (!c.uuid) continue;
+                    const chapters = Array.isArray(c.content?.chapters) ? c.content.chapters : [];
+                    const levels = chapters.flatMap((chapter: { levels?: ContractMetadataLevel[] }) => Array.isArray(chapter.levels) ? chapter.levels : []);
+                    const totalXp = levels.reduce((sum: number, level: ContractMetadataLevel) => {
+                        const xp = Number(level?.xp || level?.xpRequired || level?.progressToComplete || 0);
+                        return sum + (Number.isFinite(xp) ? xp : 0);
+                    }, 0);
+                    meta[c.uuid.toLowerCase()] = {
+                        name: c.displayName || "Contract",
+                        icon: c.displayIcon || c.freeRewardScheduleUuid || "",
+                        relationType: c.content?.relationType || "",
+                        totalLevels: levels.length,
+                        totalXp,
+                    };
+                }
+                setContractsMeta(meta);
+            }).catch(e => console.warn("Failed to load contracts metadata", e));
 
         fetch("https://valorant-api.com/v1/playercards")
             .then(res => res.json())
@@ -392,12 +453,14 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             setAgentStats(null);
             setMapStats(null);
             setSyncStatus(null);
+            setMissions(null);
+            setContracts(null);
             return;
         }
         setLoading(true);
         setError("");
         try {
-            const [ov, rr, mh, ag, mp, st, ms, ld] = await Promise.all([
+            const [ov, rr, mh, ag, mp, st, ms, ct, ld] = await Promise.all([
                 getProfileOverview(opts),
                 getRRHistory(undefined, opts),
                 getProfileMatchHistory(0, pageSize, queue || undefined, opts),
@@ -405,6 +468,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 getMapStats(queue || undefined, opts),
                 getProfileSyncStatus(opts).catch(() => null),
                 getMissions().catch(() => null),
+                getContracts().catch(() => null),
                 getPlayerLoadoutData().catch(() => null),
             ]);
             setOverview(ov);
@@ -415,6 +479,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             setMapStats(mp);
             setSyncStatus(st);
             setMissions(ms);
+            setContracts(ct);
             if (ld && ld.identity) {
                 setIdentity(ld.identity);
             } else {
@@ -437,6 +502,65 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     useEffect(() => {
         void refresh();
     }, [refresh]);
+
+    useEffect(() => {
+        if (!activeAccount || !isBackendOnline) {
+            setLiveStatus(null);
+            setPartyStatus(null);
+            setLoadoutStatus(null);
+            setAccountHealth(null);
+            setSocialStatus(null);
+            setLiveUpdatedAt(0);
+            return;
+        }
+
+        let active = true;
+        const pollLiveSystems = async () => {
+            const [match, party, loadouts, health, social] = await Promise.all([
+                getLiveMatch().catch((err) => ({
+                    phase: "none" as const,
+                    matchId: "",
+                    mapId: "",
+                    queueId: "",
+                    timeLeft: 0,
+                    error: err instanceof Error ? err.message : String(err || ""),
+                })),
+                getPartyStatus().catch((err) => ({
+                    phase: "error" as const,
+                    error: err instanceof Error ? err.message : String(err || ""),
+                })),
+                getLiveLoadouts().catch((err) => ({
+                    phase: "error" as const,
+                    error: err instanceof Error ? err.message : String(err || ""),
+                })),
+                getAccountHealth().catch((err) => ({
+                    services: {},
+                    penalties: { status: "unavailable", count: 0, detail: err instanceof Error ? err.message : String(err || "") },
+                })),
+                getSocialStatus().catch((err) => ({
+                    status: "unavailable" as const,
+                    friendCount: 0,
+                    onlineCount: 0,
+                    inGameCount: 0,
+                    error: err instanceof Error ? err.message : String(err || ""),
+                })),
+            ]);
+            if (!active) return;
+            setLiveStatus(match);
+            setPartyStatus(party);
+            setLoadoutStatus(loadouts);
+            setAccountHealth(health);
+            setSocialStatus(social);
+            setLiveUpdatedAt(Date.now());
+        };
+
+        void pollLiveSystems();
+        const interval = window.setInterval(pollLiveSystems, 5000);
+        return () => {
+            active = false;
+            window.clearInterval(interval);
+        };
+    }, [activeAccount, isBackendOnline]);
 
     const runSync = useCallback(async (manual = false) => {
         if (!currentPuuid) return;
@@ -548,6 +672,63 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const cardData = identity?.playerCardId ? playerCards[identity.playerCardId.toLowerCase()] : null;
     const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
+    const visibleMissions = useMemo(() => {
+        return [...(missions?.Missions ?? [])].sort((a, b) => {
+            if (a.Complete !== b.Complete) return a.Complete ? 1 : -1;
+            return a.ID.localeCompare(b.ID);
+        });
+    }, [missions]);
+    const missionWithMeta = useMemo(() => {
+        return visibleMissions.map((mission) => {
+            const meta = missionsMeta[mission.ID.toLowerCase()];
+            const rawType = (meta?.type || "").toLowerCase();
+            const type: "daily" | "weekly" = rawType.includes("weekly") ? "weekly" : "daily";
+            const target = Math.max(1, meta?.target || Object.values(mission.Objectives || {}).reduce((max, value) => Math.max(max, Number(value) || 0), 1));
+            const current = mission.Complete ? target : Object.values(mission.Objectives || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
+            const pct = mission.Complete ? 100 : Math.max(0, Math.min(100, (current / target) * 100));
+            return { mission, meta, type, current, target, pct };
+        });
+    }, [missionsMeta, visibleMissions]);
+    const missionCounts = useMemo(() => {
+        const complete = visibleMissions.filter((mission) => mission.Complete).length;
+        return {
+            complete,
+            active: visibleMissions.length - complete,
+            total: visibleMissions.length,
+            daily: missionWithMeta.filter((mission) => mission.type === "daily").length,
+            weekly: missionWithMeta.filter((mission) => mission.type === "weekly").length,
+        };
+    }, [missionWithMeta, visibleMissions]);
+    const visibleContracts = useMemo(() => {
+        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
+        return [...(contracts?.contracts ?? [])]
+            .filter((contract) => contract.id)
+            .sort((a, b) => {
+                const aActive = a.id.toLowerCase() === activeSpecial;
+                const bActive = b.id.toLowerCase() === activeSpecial;
+                if (aActive !== bActive) return aActive ? -1 : 1;
+                return b.totalProgressionEarned - a.totalProgressionEarned;
+            })
+            .slice(0, 8);
+    }, [contracts]);
+    const battlepassContracts = useMemo(() => {
+        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
+        return visibleContracts.filter((contract) => contract.id.toLowerCase() === activeSpecial);
+    }, [contracts, visibleContracts]);
+    const progressionContracts = useMemo(() => {
+        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
+        return visibleContracts.filter((contract) => contract.id.toLowerCase() !== activeSpecial);
+    }, [contracts, visibleContracts]);
+    const currentProgressMissions = progressTab === "weekly"
+        ? missionWithMeta.filter((mission) => mission.type === "weekly")
+        : missionWithMeta.filter((mission) => mission.type === "daily");
+    const currentProgressContracts = progressTab === "battlepass" ? battlepassContracts : progressionContracts;
+    const liveLoadoutPlayers = loadoutStatus?.players?.length ?? 0;
+    const liveLoadoutSkins = loadoutStatus?.players?.reduce((sum, player) => sum + (player.skinIds?.length ?? 0), 0) ?? 0;
+    const serviceList = Object.values(accountHealth?.services ?? {});
+    const serviceWarnCount = serviceList.filter((service) => !["ok", "unknown"].includes((service.status || "").toLowerCase())).length;
+    const serviceOkCount = serviceList.filter((service) => (service.status || "").toLowerCase() === "ok").length;
+    const ticker = accountHealth?.services?.ticker;
 
     if (!activeAccount) {
         return (
@@ -727,58 +908,198 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 </div>
             </section>
 
+            <section className="live-systems-grid mb-4" aria-label="Live systems status">
+                <LiveSystemCard
+                    title="Match Watch"
+                    status={liveStatus?.phase === "pregame" ? "Agent select detected" : liveStatus?.phase === "coregame" ? "Live match detected" : liveStatus?.error ? "Ready, no match found" : "Watching for match"}
+                    detail={liveStatus?.phase === "pregame" || liveStatus?.phase === "coregame"
+                        ? `${liveStatus.queueId || "Queue"}${liveStatus.source ? ` via ${liveStatus.source}` : ""}`
+                        : isClientHealthy ? "Local client is connected. Match overlay appears when agent select or match starts." : "Local client is not connected. Open VALORANT for live match detection."}
+                    tone={liveStatus?.phase === "pregame" || liveStatus?.phase === "coregame" ? "active" : isClientHealthy ? "idle" : "warn"}
+                    pulse={!!activeAccount && isBackendOnline}
+                    meta={liveUpdatedAt ? `Checked ${new Date(liveUpdatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Not checked yet"}
+                />
+                <LiveSystemCard
+                    title="Party Watch"
+                    status={partyStatus?.phase === "party" ? "Party detected" : partyStatus?.phase === "matchmaking" ? "In matchmaking" : partyStatus?.phase === "pregame" ? "Party in agent select" : partyStatus?.phase === "coregame" ? "Party in match" : partyStatus?.phase === "error" ? "Ready, no party found" : "Watching for party"}
+                    detail={partyStatus?.members?.length
+                        ? `${partyStatus.members.length}/5 members${partyStatus.queueId ? ` in ${partyStatus.queueId}` : ""}${partyStatus.source ? ` via ${partyStatus.source}` : ""}`
+                        : "Party widget appears automatically when Riot reports a party."}
+                    tone={partyStatus?.members?.length ? "active" : partyStatus?.phase === "error" ? "warn" : "idle"}
+                    pulse={!!activeAccount && isBackendOnline}
+                    meta={partyStatus?.source ? `Source ${partyStatus.source}` : isBackendOnline ? "Token-first polling" : "Backend offline"}
+                />
+            </section>
+
+            <section className="riot-signals-panel mb-4" aria-label="Riot API signals">
+                <div className="riot-signals-header">
+                    <div>
+                        <span>Riot Signals</span>
+                        <small>Read-only API checks for live and account systems</small>
+                    </div>
+                    <div className="riot-signals-time">
+                        {liveUpdatedAt ? `Updated ${new Date(liveUpdatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Waiting"}
+                    </div>
+                </div>
+                <div className="riot-signals-grid">
+                    <RiotSignalCard
+                        label="Live Loadouts"
+                        value={loadoutStatus?.phase === "pregame" ? "Agent Select" : loadoutStatus?.phase === "coregame" ? "In Match" : loadoutStatus?.phase === "error" ? "Unavailable" : "No live game"}
+                        detail={liveLoadoutPlayers
+                            ? `${liveLoadoutPlayers} players, ${liveLoadoutSkins} cosmetic ids visible`
+                            : loadoutStatus?.phase === "none" ? "Hidden until Riot reports pregame or current game." : loadoutStatus?.error || "Waiting for match context."}
+                        tone={loadoutStatus?.phase === "pregame" || loadoutStatus?.phase === "coregame" ? "active" : loadoutStatus?.phase === "error" ? "warn" : "idle"}
+                        source={loadoutStatus?.source}
+                    />
+                    <RiotSignalCard
+                        label="Penalties"
+                        value={accountHealth?.penalties?.status === "clear" ? "Clear" : accountHealth?.penalties?.status === "warn" ? `${accountHealth.penalties.count} active` : "Unavailable"}
+                        detail={accountHealth?.penalties?.detail || "Checks Riot restriction status without changing anything."}
+                        tone={accountHealth?.penalties?.status === "warn" ? "warn" : accountHealth?.penalties?.status === "clear" ? "active" : "idle"}
+                        source={accountHealth?.source}
+                    />
+                    <RiotSignalCard
+                        label="Services"
+                        value={serviceList.length ? `${serviceOkCount}/${serviceList.length} OK` : "Waiting"}
+                        detail={serviceWarnCount > 0 ? `${serviceWarnCount} service flags need attention.` : "Config, store, party, friends, queue and platform flags are readable."}
+                        tone={serviceWarnCount > 0 ? "warn" : serviceList.length ? "active" : "idle"}
+                        source={accountHealth?.source}
+                    />
+                    <RiotSignalCard
+                        label="Friends Presence"
+                        value={socialStatus?.status === "ok" ? `${socialStatus.onlineCount}/${socialStatus.friendCount} online` : "Local only"}
+                        detail={socialStatus?.status === "ok"
+                            ? `${socialStatus.inGameCount} friends exposing VALORANT presence right now.`
+                            : socialStatus?.error || "Open VALORANT to allow local chat presence checks."}
+                        tone={socialStatus?.status === "ok" ? "active" : "idle"}
+                        source={socialStatus?.source}
+                    />
+                    <RiotSignalCard
+                        label="Service Ticker"
+                        value={ticker?.status && ticker.status !== "ok" ? ticker.status : "Quiet"}
+                        detail={ticker?.detail || "No Riot ticker message returned."}
+                        tone={ticker?.status && !["ok", "unknown"].includes(ticker.status.toLowerCase()) ? "warn" : ticker ? "active" : "idle"}
+                        source={accountHealth?.source}
+                    />
+                </div>
+            </section>
+
             <div className="profile-layout-grid">
                 <section className="profile-main-column">
-                    {/* Daily & Weekly Missions — main column */}
-                    {missions && missions.Missions && missions.Missions.filter(m => !m.Complete).length > 0 && (
-                        <div className="rank-card clip-tactical mb-4">
-                            <div className="rank-card-header d-flex justify-content-between align-items-center">
-                                <span>Daily & Weekly Missions</span>
-                                {missions.MissionMetadata?.WeeklyRefillTime && (
-                                    <span style={{ fontSize: '0.7rem', color: 'var(--yellow)', fontFamily: 'var(--font-mono)' }}>
-                                        Refill: {new Date(missions.MissionMetadata.WeeklyRefillTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    <div className="rank-card clip-tactical mb-4 profile-progress-module">
+                        <div className="rank-card-header profile-progress-header">
+                            <div>
+                                <span>Progress Center</span>
+                                <small>Missions, battlepass, and contracts</small>
+                            </div>
+                            <div className="missions-header-meta">
+                                <span>{missionCounts.active} active</span>
+                                <span>{missionCounts.complete} complete</span>
+                                {missions?.MissionMetadata?.WeeklyRefillTime && (
+                                    <span>
+                                        Weekly refill {new Date(missions.MissionMetadata.WeeklyRefillTime).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                                     </span>
                                 )}
                             </div>
-                            <div className="rank-card-body p-3">
-                                <div className="missions-grid">
-                                    {missions.Missions.filter(m => !m.Complete).map((m) => {
-                                        const meta = missionsMeta[m.ID.toLowerCase()];
-                                        const title = meta?.title || "Daily Mission";
-                                        const desc = meta?.description || "";
-                                        const xp = meta?.xp || 0;
-                                        const target = meta?.target || 1;
-                                        const current = Object.values(m.Objectives || {})[0] || 0;
-                                        const pct = Math.max(0, Math.min(100, (current / target) * 100));
-                                        return (
-                                            <div key={m.ID} className="mission-item-container">
-                                                <div className="d-flex justify-content-between align-items-start mb-1">
-                                                    <div style={{ flex: 1, paddingRight: '8px' }}>
-                                                        <div className="fw-bold" style={{ fontSize: '0.85rem' }}>{title}</div>
-                                                        {desc && <div className="text-secondary" style={{ fontSize: '0.75rem', lineHeight: '1.2' }}>{desc}</div>}
+                        </div>
+                        <div className="progress-tab-bar" role="tablist" aria-label="Progress views">
+                            {([
+                                ["daily", `Daily (${missionCounts.daily})`],
+                                ["weekly", `Weekly (${missionCounts.weekly})`],
+                                ["battlepass", `Battlepass (${battlepassContracts.length})`],
+                                ["contracts", `Contracts (${progressionContracts.length})`],
+                            ] as Array<[ProgressTab, string]>).map(([tab, label]) => (
+                                <button
+                                    key={tab}
+                                    type="button"
+                                    className={progressTab === tab ? "is-active" : ""}
+                                    onClick={() => setProgressTab(tab)}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="rank-card-body p-3">
+                            {(progressTab === "daily" || progressTab === "weekly") ? (
+                                currentProgressMissions.length > 0 ? (
+                                    <div className="missions-grid progress-rail">
+                                        {currentProgressMissions.map(({ mission: m, meta, type, current, target, pct }) => {
+                                            const title = meta?.title || (type === "weekly" ? "Weekly Mission" : "Daily Mission");
+                                            const desc = meta?.description || "Mission progress is live from Riot's contracts endpoint.";
+                                            const xp = meta?.xp || 0;
+                                            return (
+                                                <div key={m.ID} className={`mission-item-container progress-item-card${m.Complete ? " mission-item-container--complete" : ""}`}>
+                                                    <div className="progress-item-topline">
+                                                        <span>{type}</span>
+                                                        <strong>{m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}</strong>
                                                     </div>
-                                                    <div className="text-end" style={{ whiteSpace: 'nowrap' }}>
-                                                        <span className="badge bg-danger text-white px-2 py-1" style={{ fontSize: '0.65rem' }}>+{xp.toLocaleString()} XP</span>
-                                                        <div className="text-secondary font-monospace mt-1" style={{ fontSize: '0.7rem' }}>{meta?.type || "Daily"}</div>
+                                                    <div className="progress-item-title">{title}</div>
+                                                    <div className="progress-item-desc">{desc}</div>
+                                                    <div className="rank-progress-wrap mt-3">
+                                                        <div className="rank-progress" style={{ height: "7px" }}>
+                                                            <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: type === "weekly" ? "var(--yellow)" : "var(--green)" }} />
+                                                        </div>
+                                                        <div className="progress-foot">
+                                                            <span>{m.Complete ? "Finished" : "Progress"}</span>
+                                                            <span>{current} / {target}</span>
+                                                        </div>
                                                     </div>
                                                 </div>
-                                                <div className="rank-progress-wrap mt-2">
-                                                    <div className="rank-progress" style={{ height: '6px' }}>
-                                                        <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: 'var(--yellow)' }} />
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="progress-empty-state">
+                                        <strong>No {progressTab} missions showing right now.</strong>
+                                        <span>Riot sometimes returns only currently active missions. Refresh after a game or when missions rotate.</span>
+                                    </div>
+                                )
+                            ) : currentProgressContracts.length > 0 ? (
+                                <div className="contracts-strip progress-rail">
+                                    {currentProgressContracts.map((contract) => {
+                                        const meta = contractsMeta[contract.id.toLowerCase()];
+                                        const isActiveSpecial = contract.id.toLowerCase() === contracts?.activeSpecialContract?.toLowerCase();
+                                        const earned = Math.max(0, contract.totalProgressionEarned || 0);
+                                        const target = Math.max(meta?.totalXp || 0, earned);
+                                        const pct = target > 0 ? Math.max(0, Math.min(100, (earned / target) * 100)) : 0;
+                                        const level = contract.progressionLevelReached || contract.highestRewardedLevel || 0;
+                                        return (
+                                            <div key={contract.id} className={`contract-item-container progress-item-card${isActiveSpecial ? " contract-item-container--active" : ""}`}>
+                                                <div className="contract-item-top">
+                                                    {meta?.icon ? (
+                                                        <img src={meta.icon} alt="" className="contract-item-icon" />
+                                                    ) : (
+                                                        <div className="contract-item-icon contract-item-icon--fallback">{(meta?.name || "C").slice(0, 1)}</div>
+                                                    )}
+                                                    <div className="min-w-0">
+                                                        <div className="contract-item-name">{meta?.name || (isActiveSpecial ? "Battlepass" : "Contract")}</div>
+                                                        <div className="contract-item-meta">
+                                                            {isActiveSpecial ? "Active battlepass" : meta?.relationType || "Progression"}
+                                                        </div>
                                                     </div>
-                                                    <div className="d-flex justify-content-between text-secondary" style={{ fontSize: '0.65rem', marginTop: '4px' }}>
-                                                        <span>Progress</span>
-                                                        <span>{current} / {target}</span>
+                                                </div>
+                                                <div className="rank-progress-wrap mt-3">
+                                                    <div className="rank-progress" style={{ height: "7px" }}>
+                                                        <div className="rank-progress-fill" style={{ width: `${pct}%` }} />
+                                                    </div>
+                                                    <div className="progress-foot">
+                                                        <span>Level {level}{meta?.totalLevels ? ` / ${meta.totalLevels}` : ""}</span>
+                                                        <span>{earned.toLocaleString()} XP{target > earned ? ` / ${target.toLocaleString()}` : ""}</span>
                                                     </div>
                                                 </div>
                                             </div>
                                         );
                                     })}
                                 </div>
-                            </div>
+                            ) : (
+                                <div className="progress-empty-state">
+                                    <strong>No {progressTab === "battlepass" ? "battlepass" : "contract"} progress found.</strong>
+                                    <span>Connect a refreshed Riot session or play a match, then refresh Profile.</span>
+                                </div>
+                            )}
                         </div>
-                    )}
-
+                    </div>
+                    {/* Daily & Weekly Missions — main column */}
                     <div className="rank-card clip-tactical mb-4">
                         <div className="rank-card-header">
                             <span>Recent RR</span>
@@ -847,6 +1168,61 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                     </div>
                 </aside>
             </div>
+        </div>
+    );
+}
+
+function LiveSystemCard({
+    title,
+    status,
+    detail,
+    tone,
+    pulse,
+    meta,
+}: {
+    title: string;
+    status: string;
+    detail: string;
+    tone: "active" | "idle" | "warn";
+    pulse: boolean;
+    meta: string;
+}) {
+    return (
+        <div className={`live-system-card live-system-card--${tone}`}>
+            <div className="live-system-orb" aria-hidden="true">
+                {pulse && <span />}
+            </div>
+            <div className="live-system-main">
+                <div className="live-system-kicker">{title}</div>
+                <div className="live-system-status">{status}</div>
+                <div className="live-system-detail">{detail}</div>
+            </div>
+            <div className="live-system-meta">{meta}</div>
+        </div>
+    );
+}
+
+function RiotSignalCard({
+    label,
+    value,
+    detail,
+    tone,
+    source,
+}: {
+    label: string;
+    value: string;
+    detail: string;
+    tone: "active" | "idle" | "warn";
+    source?: string;
+}) {
+    return (
+        <div className={`riot-signal-card riot-signal-card--${tone}`}>
+            <div className="riot-signal-topline">
+                <span>{label}</span>
+                {source && <small>{source}</small>}
+            </div>
+            <div className="riot-signal-value">{value}</div>
+            <div className="riot-signal-detail">{detail}</div>
         </div>
     );
 }

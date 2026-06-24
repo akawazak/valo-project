@@ -1,6 +1,6 @@
-# ValoVault
+# VantaVault
 
-ValoVault is a Windows desktop companion app for VALORANT loadouts and storefront viewing.
+VantaVault is a Windows desktop companion app for VALORANT loadouts and storefront viewing.
 
 It lets you save/apply skin presets, manage agent-specific loadouts, connect Riot accounts, and view your live Riot storefront including daily offers, featured bundles, Night Market, accessories, and wallet balances.
 
@@ -14,7 +14,7 @@ Releases are published at:
 
 Recommended build:
 
-- `ValoVault-Portable-x64.zip`: extract anywhere and run `ValoVault.exe`.
+- `VantaVault.exe`: run directly from anywhere.
 
 Optional installer:
 
@@ -103,7 +103,7 @@ https://github.com/akawazak/valo-project/releases/latest/download/latest.json
 GitHub Actions builds the Tauri app and uploads release artifacts. Portable packaging is generated as:
 
 ```text
-ValoVault-Portable-x64.zip
+VantaVault.exe
 ```
 
 For updater signing, add this repository secret before creating production releases:

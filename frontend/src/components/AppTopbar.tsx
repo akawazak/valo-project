@@ -1,6 +1,7 @@
 "use client";
 
 import { RiotAccount } from "@/lib/types";
+import Image from "next/image";
 
 interface AppTopbarProps {
     activeTab: "store" | "skins" | "profile";
@@ -29,14 +30,14 @@ export default function AppTopbar({
         <header className="app-topbar">
             {!isBackendOnline && (
                 <div className="backend-offline-banner" role="status">
-                    Local client offline — run <code>go run .</code> in the backend folder, then restart the app.
+                    Backend offline. Restart VantaVault so Tauri can relaunch the backend.
                 </div>
             )}
             <div className="topbar-inner">
                 <button type="button" className="topbar-brand" onClick={() => onTabChange("store")}>
-                    <span className="brand-mark">V</span>
+                    <Image className="brand-mark brand-mark-img" src="/brand-mark.svg" alt="" width={30} height={30} priority />
                     <span>
-                        VALO<span>VAULT</span>
+                        VANTA<span>VAULT</span>
                     </span>
                 </button>
                 <nav className="topbar-nav" aria-label="Primary">

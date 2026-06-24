@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type CSSProperties } from "react";
 import { Weapon, LoadoutItemV1, Preset, Agent, SpraySlot, IdentityV1 } from "@/lib/types";
 import WeaponCard from "@/features/gun-skins/WeaponCard";
 import PlayerCardPanel from "@/features/presets/PlayerCardPanel";
@@ -187,9 +187,6 @@ export default function ArsenalView({
     const heavies = getColumnWeapons("heavies", sortWeapons(weapons.filter(w => HEAVIES_NAMES.includes(w.displayName.toLowerCase())), HEAVIES_NAMES));
     const builderSlotCount = sidearms.length + smgs.length + shotguns.length + rifles.length + melee.length + snipers.length + heavies.length;
     const commandState = isEditing ? (isEditingDefault ? "LIVE DRAFT" : "UNSAVED") : (isViewingDefault ? "LIVE" : "PRESET");
-    const commandLabel = isEditing
-        ? (isEditingDefault ? "Current Loadout Draft" : activePreset?.name || "Preset Draft")
-        : (activePreset?.name || "Current Loadout");
     const commandHint = isEditing
         ? (isEditingDefault ? "Apply to Valorant or save as a reusable preset." : "Save, apply, or fork this preset.")
         : (isViewingDefault ? "Click any slot to edit the live loadout." : "Click any slot to edit this preset.");
@@ -245,8 +242,18 @@ export default function ArsenalView({
         return <div style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textAlign: 'center', padding: '2rem' }}>Loading game data…</div>;
     }
 
-    const renderWeaponCategory = (title: string, wList: Weapon[], colKey: string) => (
-        <section className="workspace-category workspace-category--weapon" aria-label={title}>
+    const renderWeaponCategory = (title: string, wList: Weapon[], colKey: string) => {
+        const categoryStyle = {
+            "--slot-count": Math.max(wList.length, 1),
+            "--category-weight": Math.max(wList.length, 1),
+        } as CSSProperties;
+
+        return (
+        <section
+            className={`workspace-category workspace-category--weapon workspace-category--${colKey}`}
+            aria-label={title}
+            style={categoryStyle}
+        >
             <h3 className="workspace-column-title workspace-column-title--weapon">{title}</h3>
             <div className="workspace-column-items">
                 {wList.map(weapon => (
@@ -269,7 +276,8 @@ export default function ArsenalView({
                 ))}
             </div>
         </section>
-    );
+        );
+    };
 
     return (
         <div className="workspace-centered-wrapper">
@@ -310,10 +318,9 @@ export default function ArsenalView({
             </div>
 
             {/* Current Loadout Reference Card — only show on the current loadout */}
-            <div className={`workspace-command-strip${isEditing ? " is-editing" : ""}`}>
+            <div className={`workspace-command-strip workspace-command-strip--compact${isEditing ? " is-editing" : ""}`}>
                 <div className="workspace-command-copy">
                     <span className="clr-reference-badge">{commandState}</span>
-                    <span className="clr-reference-label">{commandLabel}</span>
                     <span className="clr-reference-hint">{commandHint}</span>
                 </div>
                 {isEditing && (

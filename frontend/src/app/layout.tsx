@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ValoVault - Valorant Inventory Manager",
+  title: "VantaVault - Valorant Inventory Manager",
   description: "Manage your Valorant skins and presets",
 };
 

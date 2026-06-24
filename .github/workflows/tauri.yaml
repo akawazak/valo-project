@@ -82,16 +82,16 @@ jobs:
         with:
           projectPath: frontend
           tagName: v__VERSION__
-          releaseName: ValoVault v__VERSION__
+          releaseName: VantaVault v__VERSION__
           args: ${{ matrix.settings.tauri-args }}
           releaseBody: |
-            ## ValoVault v__VERSION__
+            ## VantaVault v__VERSION__
 
             ### Download
-            - **Windows Portable (recommended):** `ValoVault.exe` — run directly from anywhere (no installation needed)
-            - **Windows Installer:** `ValoVault_*_x64-setup.exe` — per-user install, no admin required
-            - **Linux AppImage:** `ValoVault_*_amd64.AppImage` — portable Linux execution
-            - **Linux Debian Package:** `ValoVault_*_amd64.deb` — standard Linux install
+            - **Windows Portable (recommended):** `VantaVault.exe` — run directly from anywhere (no installation needed)
+            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — per-user install, no admin required
+            - **Linux AppImage:** `VantaVault_*_amd64.AppImage` — portable Linux execution
+            - **Linux Debian Package:** `VantaVault_*_amd64.deb` — standard Linux install
 
             ### Auto-update
             Installed copies check for updates automatically on launch.
@@ -105,7 +105,7 @@ jobs:
           $release = "frontend/src-tauri/target/release"
           $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } | Select-Object -First 1
           if (-not $exe) { throw "App executable not found in $release" }
-          Copy-Item $exe.FullName "ValoVault.exe" -Force
+          Copy-Item $exe.FullName "VantaVault.exe" -Force
 
       - name: Upload portable exe
         if: matrix.settings.platform == 'windows-latest'
@@ -119,5 +119,4 @@ jobs:
             exit 0
           }
           $tag = "v$version"
-          gh release upload "$tag" "ValoVault.exe" --repo akawazak/valo-project --clobber
-
+          gh release upload "$tag" "VantaVault.exe" --repo akawazak/valo-project --clobber
