@@ -373,6 +373,46 @@
   letter-spacing: 0.5px;
 }
 
+.player-stats-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  margin-top: 3px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.player-stats-line .player-stats-record,
+.player-stats-line .player-stats-wr,
+.player-stats-line .player-stats-kd {
+  color: var(--text-primary);
+}
+
+.player-stats-line .player-stats-sep {
+  opacity: 0.4;
+}
+
+.player-stats-line .player-stats-sample {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.player-stats-line.wr-good .player-stats-wr {
+  color: var(--green);
+}
+
+.player-stats-line.wr-bad .player-stats-wr {
+  color: var(--accent);
+}
+
+.player-stats-line.wr-mid .player-stats-wr {
+  color: var(--yellow);
+}
+
 .card-right {
   position: relative;
   z-index: 1;
@@ -520,16 +560,145 @@
   z-index: 40;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 190px;
-  padding: 10px 12px;
+  gap: 12px;
+  min-width: 260px;
+  max-width: 320px;
+  padding: 12px 14px;
   color: var(--text-primary);
-  background: rgba(7, 13, 18, 0.84);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(10px);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    radial-gradient(ellipse at 0% 0%, rgba(34, 211, 163, 0.18), transparent 56%),
+    rgba(7, 13, 18, 0.92);
+  border: 1px solid rgba(34, 211, 163, 0.42);
+  border-radius: 10px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
   pointer-events: none;
+  text-align: left;
+  font-family: inherit;
+  overflow: hidden;
+}
+
+.live-match-status-pill.is-pregame {
+  border-color: rgba(245, 197, 66, 0.5);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    radial-gradient(ellipse at 0% 0%, rgba(245, 197, 66, 0.16), transparent 56%),
+    rgba(7, 13, 18, 0.92);
+}
+
+.live-match-status-pill.is-clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.live-match-status-pill.is-clickable:hover {
+  transform: translateY(-2px);
+  border-color: rgba(34, 211, 163, 0.7);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(34, 211, 163, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-match-status-pill.is-pregame.is-clickable:hover {
+  border-color: rgba(245, 197, 66, 0.72);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(245, 197, 66, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-match-status-pill.is-clickable:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 163, 0.45), var(--shadow-md);
+}
+
+.live-match-pill-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.18), transparent 48%),
+    rgba(34, 211, 163, 0.16);
+  border: 1px solid rgba(34, 211, 163, 0.32);
+}
+
+.live-match-status-pill.is-pregame .live-match-pill-icon {
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.18), transparent 48%),
+    rgba(245, 197, 66, 0.16);
+  border-color: rgba(245, 197, 66, 0.36);
+}
+
+.live-match-pill-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 10px rgba(34, 211, 163, 0.6);
+  animation: pulseGreen 2s infinite;
+}
+
+.live-match-status-pill.is-pregame .live-match-pill-dot {
+  background: var(--yellow);
+  box-shadow: 0 0 10px rgba(245, 197, 66, 0.55);
+  animation: pulseYellow 1.5s infinite;
+}
+
+.live-match-pill-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.live-match-pill-kicker {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.live-match-status-pill.is-pregame .live-match-pill-kicker {
+  color: var(--yellow);
+}
+
+.live-match-pill-title {
+  margin-top: 2px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-match-pill-cta {
+  margin-top: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.live-match-pill-arrow {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  line-height: 1;
+  transition: transform 0.16s ease, color 0.16s ease;
+}
+
+.live-match-status-pill.is-clickable:hover .live-match-pill-arrow {
+  transform: translateX(2px);
+  color: var(--green);
+}
+
+.live-match-status-pill.is-pregame.is-clickable:hover .live-match-pill-arrow {
+  color: var(--yellow);
 }
 
 .live-match-status-pill strong {

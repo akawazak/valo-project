@@ -1051,16 +1051,65 @@ export async function getLiveMatch(): Promise<LiveMatchResponse> {
     }
 }
 
+export interface LivePlayerStats {
+    matches: number;
+    wins: number;
+    winrate: number;
+    kd: number;
+    kda: number;
+    loaded: boolean;
+}
+
+const EMPTY_STATS: LivePlayerStats = { matches: 0, wins: 0, winrate: 0, kd: 0, kda: 0, loaded: false };
+
+/**
+ * Fetch agent-specific stats for one player. Backed by an in-memory
+ * cache on the backend, so subsequent calls for the same (puuid,
+ * agent) pair return instantly. Returns `{ loaded: false }` on
+ * failure so the caller can degrade silently.
+ */
+export async function getLivePlayerStats(puuid: string, agentId: string): Promise<LivePlayerStats> {
+    if (!puuid || !agentId) return EMPTY_STATS;
+    try {
+        const url = `${LOCAL_URL}/live/player-stats?puuid=${encodeURIComponent(puuid)}&agent=${encodeURIComponent(agentId)}`;
+        const response = await fetchWithAuth(url);
+        if (!response.ok) return EMPTY_STATS;
+        const data = await response.json();
+        return {
+            matches: Number(data?.matches) || 0,
+            wins: Number(data?.wins) || 0,
+            winrate: Number(data?.winrate) || 0,
+            kd: Number(data?.kd) || 0,
+            kda: Number(data?.kda) || 0,
+            loaded: !!data?.loaded,
+        };
+    } catch {
+        return EMPTY_STATS;
+    }
+}
+
 export interface RiotMissionsResponse {
-    Missions: {
-        ID: string;
-        Objectives: Record<string, number>;
-        Complete: boolean;
-        ExpirationTime: string;
-    }[];
+    Version: number;
+    Subject: string;
+    ActiveSpecialContract: string;
+    Contracts: RiotContractProgress[];
+    Missions: RiotMissionProgress[];
     MissionMetadata: {
         WeeklyRefillTime: string;
+        DailyRefillTime: string;
     };
+}
+
+export interface RiotContractProgress {
+    ContractDefinitionID: string;
+    ContractProgression: Record<string, any>;
+}
+
+export interface RiotMissionProgress {
+    ID: string;
+    Objectives: Record<string, number>;
+    Complete: boolean;
+    ExpirationTime: string;
 }
 
 export async function getMissions(): Promise<RiotMissionsResponse> {

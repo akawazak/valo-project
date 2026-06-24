@@ -1,6 +1,169 @@
+/* ----- Compact detection pill (bottom-left, click to expand) ----- */
+.live-party-pill {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 10px 14px;
+  color: var(--text-primary);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    radial-gradient(ellipse at 100% 0%, rgba(34, 211, 163, 0.18), transparent 56%),
+    rgba(7, 13, 18, 0.92);
+  border: 1px solid rgba(34, 211, 163, 0.42);
+  border-radius: 10px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  text-align: left;
+  font-family: inherit;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.live-party-pill:hover {
+  transform: translateY(-2px);
+  border-color: rgba(34, 211, 163, 0.72);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(34, 211, 163, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-party-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 163, 0.45), var(--shadow-md);
+}
+
+.live-party-pill.is-pregame,
+.live-party-pill.is-matchmaking {
+  border-color: rgba(245, 197, 66, 0.5);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    radial-gradient(ellipse at 100% 0%, rgba(245, 197, 66, 0.18), transparent 56%),
+    rgba(7, 13, 18, 0.92);
+}
+
+.live-party-pill.is-pregame:hover,
+.live-party-pill.is-matchmaking:hover {
+  border-color: rgba(245, 197, 66, 0.72);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(245, 197, 66, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-party-pill.is-coregame {
+  border-color: rgba(255, 64, 85, 0.5);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
+    radial-gradient(ellipse at 100% 0%, rgba(255, 64, 85, 0.18), transparent 56%),
+    rgba(7, 13, 18, 0.92);
+}
+
+.live-party-pill.is-coregame:hover {
+  border-color: rgba(255, 64, 85, 0.72);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 64, 85, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-party-pill-avatar {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.14), transparent 42%),
+    rgba(34, 211, 163, 0.14);
+  border: 1px solid rgba(34, 211, 163, 0.32);
+  overflow: hidden;
+}
+
+.live-party-pill-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.live-party-pill-avatar-letter {
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.live-party-pill-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.live-party-pill-kicker {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.live-party-pill.is-pregame .live-party-pill-kicker,
+.live-party-pill.is-matchmaking .live-party-pill-kicker {
+  color: var(--yellow);
+}
+
+.live-party-pill.is-coregame .live-party-pill-kicker {
+  color: var(--accent);
+}
+
+.live-party-pill-title {
+  margin-top: 2px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.live-party-pill-sub {
+  margin-top: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.live-party-pill-arrow {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  line-height: 1;
+  transition: transform 0.16s ease, color 0.16s ease;
+}
+
+.live-party-pill:hover .live-party-pill-arrow {
+  transform: translateX(2px);
+  color: var(--green);
+}
+
+.live-party-pill.is-pregame:hover .live-party-pill-arrow,
+.live-party-pill.is-matchmaking:hover .live-party-pill-arrow {
+  color: var(--yellow);
+}
+
+.live-party-pill.is-coregame:hover .live-party-pill-arrow {
+  color: var(--accent);
+}
+
+/* ----- Expanded party widget ----- */
 .live-party-widget {
   position: fixed;
-  right: 18px;
+  left: 18px;
   bottom: 18px;
   z-index: 42;
   width: min(390px, calc(100vw - 32px));
@@ -54,6 +217,12 @@
   font-weight: 800;
 }
 
+.live-party-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .live-party-meta {
   display: flex;
   align-items: center;
@@ -79,6 +248,36 @@
   text-transform: uppercase;
 }
 
+.live-party-minimize {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform 0.12s ease, color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.live-party-minimize:hover {
+  color: var(--green);
+  border-color: rgba(34, 211, 163, 0.45);
+  background: rgba(34, 211, 163, 0.1);
+}
+
+.live-party-minimize:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 163, 0.45);
+}
+
 .live-party-members {
   display: flex;
   flex-direction: column;
@@ -87,6 +286,7 @@
 }
 
 .live-party-member {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.65rem;
@@ -97,16 +297,35 @@
     rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+}
+
+.live-party-member.has-card-bg {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.live-party-member-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(7, 13, 18, 0.82) 0%, rgba(7, 13, 18, 0.55) 56%, rgba(7, 13, 18, 0.78) 100%);
+  pointer-events: none;
 }
 
 .live-party-member.is-local {
-  border-color: rgba(34, 211, 163, 0.32);
-  background: rgba(34, 211, 163, 0.065);
+  border-color: rgba(34, 211, 163, 0.42);
+  background-color: rgba(34, 211, 163, 0.065);
+}
+
+.live-party-member > * {
+  position: relative;
+  z-index: 1;
 }
 
 .live-party-avatar {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -116,9 +335,46 @@
   background:
     radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.14), transparent 42%),
     rgba(34, 211, 163, 0.12);
-  border: 1px solid rgba(34, 211, 163, 0.24);
-  font-size: 0.85rem;
+  border: 1px solid rgba(34, 211, 163, 0.28);
+  overflow: hidden;
+}
+
+.live-party-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.live-party-avatar-letter {
+  font-size: 0.95rem;
   font-weight: 900;
+}
+
+.live-party-rank {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: rgba(7, 13, 18, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.live-party-rank-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.live-party-rank-letter {
+  font-size: 0.78rem;
+  font-weight: 800;
+  font-family: var(--font-mono, monospace);
 }
 
 .live-party-member-main {
@@ -139,6 +395,13 @@
   white-space: nowrap;
 }
 
+.live-party-member-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .live-party-member-sub {
   margin-top: 0.12rem;
   color: var(--text-secondary);
@@ -155,8 +418,9 @@
 }
 
 @media (max-width: 640px) {
+  .live-party-pill,
   .live-party-widget {
-    right: 12px;
+    left: 12px;
     bottom: 12px;
   }
 }

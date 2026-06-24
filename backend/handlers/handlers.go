@@ -42,6 +42,16 @@ type Handler struct {
 	namesMu    sync.RWMutex
 	mmrCache   map[string]CachedMMR
 	mmrMu      sync.RWMutex
+
+	// playerStatsCache stores per-(puuid, agent) agent-specific stats
+	// (matches, wins, winrate, kd, kda) computed from Riot's match
+	// history. Used by the live match overlay so it can show "X-Y on
+	// Jett · 12W-8L (60%)" next to each player. Key format
+	// "<puuid>:<agentUuid-lower>". Negative cache entries (fetch
+	// failures) are stored as a zero-value CachedPlayerStats{Loaded:
+	// false} so we don't hammer Riot on every poll.
+	playerStatsCache map[string]CachedPlayerStats
+	playerStatsMu    sync.RWMutex
 }
 
 type CachedMMR struct {
@@ -49,11 +59,25 @@ type CachedMMR struct {
 	RR   int
 }
 
+// CachedPlayerStats is the per-(puuid, agent) agent-specific record.
+// Loaded=false means a fetch was attempted but failed (e.g. private
+// profile, region mismatch); the frontend treats it as "no data" and
+// skips rendering the stat line.
+type CachedPlayerStats struct {
+	Matches int     `json:"matches"`
+	Wins    int     `json:"wins"`
+	Winrate float64 `json:"winrate"`
+	KD      float64 `json:"kd"`
+	KDA     float64 `json:"kda"`
+	Loaded  bool    `json:"loaded"`
+}
+
 func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
-		Val:        Val,
-		namesCache: make(map[string]string),
-		mmrCache:   make(map[string]CachedMMR),
+		Val:              Val,
+		namesCache:       make(map[string]string),
+		mmrCache:         make(map[string]CachedMMR),
+		playerStatsCache: make(map[string]CachedPlayerStats),
 	}
 }
 

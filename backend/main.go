@@ -88,6 +88,7 @@ func main() {
 	mux.HandleFunc("POST /v1/accounts", h.PostAccounts)
 	mux.HandleFunc("GET /v1/accounts/local", h.GetLocalAccount)
 	mux.HandleFunc("GET /v1/livematch", h.GetLiveMatch)
+	mux.HandleFunc("GET /v1/live/player-stats", h.GetLivePlayerStats)
 
 	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
 	mux.HandleFunc("POST /v1/auth/token", h.PostAuthToken)

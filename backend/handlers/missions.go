@@ -5,18 +5,64 @@ import (
 	"net/http"
 )
 
+// RiotMissionsResponse is the full payload from
+// https://pd.{shard}.a.pvp.net/contracts/v1/contracts/{puuid}.
+//
+// The endpoint actually returns both Contracts (battlepass, event
+// progression, agent unlocks) and Missions (daily / weekly / BTE)
+// in one shot. We expose both so the frontend doesn't need two
+// round trips and so the "Progress Center" can render every kind of
+// XP-earning track — daily checkpoints, weekly missions, the
+// active battlepass, and limited-time event contracts — from one
+// response.
+//
+// Field names mirror Riot's PascalCase JSON schema.
 type RiotMissionsResponse struct {
-	Missions []struct {
-		ID             string         `json:"ID"`
-		Objectives     map[string]int `json:"Objectives"`
-		Complete       bool           `json:"Complete"`
-		ExpirationTime string         `json:"ExpirationTime"`
-	} `json:"Missions"`
-	MissionMetadata struct {
-		WeeklyRefillTime string `json:"WeeklyRefillTime"`
-	} `json:"MissionMetadata"`
+	Version               int                       `json:"Version"`
+	Subject               string                    `json:"Subject"`
+	ActiveSpecialContract string                    `json:"ActiveSpecialContract"`
+	Contracts             []RiotContractProgress    `json:"Contracts"`
+	Missions              []RiotMissionProgress     `json:"Missions"`
+	MissionMetadata       RiotMissionMetadata       `json:"MissionMetadata"`
 }
 
+// RiotContractProgress is one row of the user's tracked contracts.
+// `ContractDefinitionID` matches the uuid field from
+// valorant-api.com /v1/contracts (battlepass, event contracts,
+// agent unlocks). `ContractProgression` is Riot's freeform progress
+// bag — see normalizeContractProgression for the fields we surface.
+type RiotContractProgress struct {
+	ContractDefinitionID string         `json:"ContractDefinitionID"`
+	ContractProgression  map[string]any `json:"ContractProgression"`
+}
+
+// RiotMissionProgress is one daily/weekly/BTE mission. The ID maps
+// to the uuid field from valorant-api.com /v1/missions.
+type RiotMissionProgress struct {
+	ID             string         `json:"ID"`
+	Objectives     map[string]int `json:"Objectives"`
+	Complete       bool           `json:"Complete"`
+	ExpirationTime string         `json:"ExpirationTime"`
+}
+
+// RiotMissionMetadata carries the refill schedule. WeeklyRefillTime
+// and DailyRefillTime are both ISO timestamps (zero string when
+// not yet known).
+type RiotMissionMetadata struct {
+	WeeklyRefillTime string `json:"WeeklyRefillTime"`
+	DailyRefillTime  string `json:"DailyRefillTime"`
+}
+
+// GetMissions returns the full contracts payload — both the
+// Missions[] (daily / weekly / BTE) and Contracts[] (battlepass /
+// event contracts) so the frontend can render every XP-earning
+// track in one place.
+//
+// Both /v1/missions and /v1/contracts hit the same Riot endpoint,
+// so this handler is also used as the data source for the
+// contracts-only call sites. See normalizeContractsResponse below
+// for the trimmed view that the legacy /v1/contracts endpoint
+// serves for backward compatibility.
 func (h *Handler) GetMissions(w http.ResponseWriter, r *http.Request) {
 	val, err := h.getClient(r)
 	if err != nil || val == nil {
@@ -60,6 +106,10 @@ type PlayerContractsResponse struct {
 	Contracts             []PlayerContractSummary `json:"contracts"`
 }
 
+// GetContracts keeps the legacy /v1/contracts endpoint shape so
+// older clients don't break, but pulls from the same source.
+// `ActiveSpecialContract` is preserved so the frontend can keep
+// tagging the active battlepass.
 func (h *Handler) GetContracts(w http.ResponseWriter, r *http.Request) {
 	val, err := h.getClient(r)
 	if err != nil || val == nil {

@@ -204,6 +204,22 @@ function cleanError(err: unknown): string {
     return raw;
 }
 
+// Small helper used by the missions panel to pull numeric fields
+// out of Riot's freeform ContractProgression map. Mirrors the
+// backend's `numberFromMap` in handlers/missions.go.
+function numberFromContractMap(map: Record<string, any> | undefined, ...keys: string[]): number {
+    if (!map) return 0;
+    for (const key of keys) {
+        const v = map[key];
+        if (typeof v === "number" && Number.isFinite(v)) return v;
+        if (typeof v === "string") {
+            const n = Number(v);
+            if (Number.isFinite(n)) return n;
+        }
+    }
+    return 0;
+}
+
 async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
     if (agentCache) return agentCache;
     if (agentPromise) return agentPromise;
@@ -700,8 +716,23 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         };
     }, [missionWithMeta, visibleMissions]);
     const visibleContracts = useMemo(() => {
-        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
-        return [...(contracts?.contracts ?? [])]
+        // Prefer contracts from the unified /v1/missions response so we
+        // get ActiveSpecialContract alongside them; fall back to the
+        // dedicated /v1/contracts payload if the missions endpoint
+        // didn't return any.
+        const raw = missions?.Contracts?.length
+            ? missions.Contracts.map((c) => ({
+                id: c.ContractDefinitionID,
+                totalProgressionEarned: numberFromContractMap(c.ContractProgression, "TotalProgressionEarned", "totalProgressionEarned"),
+                totalProgressionEarnedVersion: numberFromContractMap(c.ContractProgression, "TotalProgressionEarnedVersion", "totalProgressionEarnedVersion"),
+                highestRewardedLevel: numberFromContractMap(c.ContractProgression, "HighestRewardedLevel", "highestRewardedLevel", "LevelReached", "levelReached"),
+                progressionLevelReached: numberFromContractMap(c.ContractProgression, "ProgressionLevelReached", "progressionLevelReached", "LevelReached", "levelReached"),
+                progressionTowardsNextLevel: numberFromContractMap(c.ContractProgression, "ProgressionTowardsNextLevel", "progressionTowardsNextLevel"),
+            }))
+            : (contracts?.contracts ?? []);
+
+        const activeSpecial = (missions?.ActiveSpecialContract || contracts?.activeSpecialContract || "").toLowerCase();
+        return [...raw]
             .filter((contract) => contract.id)
             .sort((a, b) => {
                 const aActive = a.id.toLowerCase() === activeSpecial;
@@ -710,18 +741,33 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 return b.totalProgressionEarned - a.totalProgressionEarned;
             })
             .slice(0, 8);
-    }, [contracts]);
+    }, [contracts, missions]);
+    const activeSpecialId = useMemo(() => {
+        return (missions?.ActiveSpecialContract || contracts?.activeSpecialContract || "").toLowerCase();
+    }, [missions, contracts]);
     const battlepassContracts = useMemo(() => {
-        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
-        return visibleContracts.filter((contract) => contract.id.toLowerCase() === activeSpecial);
-    }, [contracts, visibleContracts]);
+        return visibleContracts.filter((contract) => contract.id.toLowerCase() === activeSpecialId);
+    }, [visibleContracts, activeSpecialId]);
     const progressionContracts = useMemo(() => {
-        const activeSpecial = contracts?.activeSpecialContract?.toLowerCase() || "";
-        return visibleContracts.filter((contract) => contract.id.toLowerCase() !== activeSpecial);
-    }, [contracts, visibleContracts]);
+        // Events + agent unlocks + any other non-battlepass contracts.
+        // Empty activeSpecialId means "no active battlepass right now"
+        // so we surface ALL contracts as progression.
+        if (!activeSpecialId) return visibleContracts;
+        return visibleContracts.filter((contract) => contract.id.toLowerCase() !== activeSpecialId);
+    }, [visibleContracts, activeSpecialId]);
     const currentProgressMissions = progressTab === "weekly"
         ? missionWithMeta.filter((mission) => mission.type === "weekly")
         : missionWithMeta.filter((mission) => mission.type === "daily");
+
+    // Daily checkpoint summary: 4 diamond slots, filled = completed daily.
+    // Mirrors the in-game Daily Checkpoints UI from the player-facing
+    // missions screen.
+    const dailyCheckpointSummary = useMemo(() => {
+        const dailyMissions = missionWithMeta.filter((m) => m.type === "daily");
+        const completed = dailyMissions.filter((m) => m.mission.Complete).length;
+        const slots = Math.max(4, dailyMissions.length || 4);
+        return { completed, total: slots, dailyMissions };
+    }, [missionWithMeta]);
     const currentProgressContracts = progressTab === "battlepass" ? battlepassContracts : progressionContracts;
     const liveLoadoutPlayers = loadoutStatus?.players?.length ?? 0;
     const liveLoadoutSkins = loadoutStatus?.players?.reduce((sum, player) => sum + (player.skinIds?.length ?? 0), 0) ?? 0;
@@ -1021,39 +1067,70 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         </div>
                         <div className="rank-card-body p-3">
                             {(progressTab === "daily" || progressTab === "weekly") ? (
-                                currentProgressMissions.length > 0 ? (
-                                    <div className="missions-grid progress-rail">
-                                        {currentProgressMissions.map(({ mission: m, meta, type, current, target, pct }) => {
-                                            const title = meta?.title || (type === "weekly" ? "Weekly Mission" : "Daily Mission");
-                                            const desc = meta?.description || "Mission progress is live from Riot's contracts endpoint.";
-                                            const xp = meta?.xp || 0;
-                                            return (
-                                                <div key={m.ID} className={`mission-item-container progress-item-card${m.Complete ? " mission-item-container--complete" : ""}`}>
-                                                    <div className="progress-item-topline">
-                                                        <span>{type}</span>
-                                                        <strong>{m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}</strong>
-                                                    </div>
-                                                    <div className="progress-item-title">{title}</div>
-                                                    <div className="progress-item-desc">{desc}</div>
-                                                    <div className="rank-progress-wrap mt-3">
-                                                        <div className="rank-progress" style={{ height: "7px" }}>
-                                                            <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: type === "weekly" ? "var(--yellow)" : "var(--green)" }} />
+                                <>
+                                    {/* Daily checkpoint UI - 4 diamond slots, mirrors
+                                        the in-game Daily Checkpoints display */}
+                                    {progressTab === "daily" && dailyCheckpointSummary.dailyMissions.length > 0 && (
+                                        <div className="daily-checkpoint-strip">
+                                            <div className="daily-checkpoint-header">
+                                                <span className="daily-checkpoint-label">CHECKPOINTS</span>
+                                                <span className="daily-checkpoint-xp">+1,000 XP · +150 PER CHECKPOINT</span>
+                                            </div>
+                                            <div className="daily-checkpoint-diamonds" role="list">
+                                                {Array.from({ length: dailyCheckpointSummary.total }).map((_, i) => {
+                                                    const isDone = i < dailyCheckpointSummary.completed;
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            role="listitem"
+                                                            className={`daily-checkpoint-diamond${isDone ? " is-complete" : ""}`}
+                                                            aria-label={isDone ? "Checkpoint complete" : "Checkpoint pending"}
+                                                        >
+                                                            {isDone ? (
+                                                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                                    <path d="M5 12l5 5 9-11" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                                                </svg>
+                                                            ) : (
+                                                                <span className="daily-checkpoint-num">{i + 1}</span>
+                                                            )}
                                                         </div>
-                                                        <div className="progress-foot">
-                                                            <span>{m.Complete ? "Finished" : "Progress"}</span>
-                                                            <span>{current} / {target}</span>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {currentProgressMissions.length > 0 ? (
+                                        <div className="missions-grid progress-rail">
+                                            {currentProgressMissions.map(({ mission: m, meta, type, current, target, pct }) => {
+                                                const title = meta?.title || (type === "weekly" ? "Weekly Mission" : "Daily Mission");
+                                                const xp = meta?.xp || 0;
+                                                return (
+                                                    <div key={m.ID} className={`mission-item-container progress-item-card${m.Complete ? " mission-item-container--complete" : ""}`}>
+                                                        <div className="progress-item-topline">
+                                                            <span>{type}</span>
+                                                            <strong>{m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}</strong>
+                                                        </div>
+                                                        <div className="progress-item-title">{title}</div>
+                                                        <div className="rank-progress-wrap mt-3">
+                                                            <div className="rank-progress" style={{ height: "7px" }}>
+                                                                <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: type === "weekly" ? "var(--yellow)" : "var(--green)" }} />
+                                                            </div>
+                                                            <div className="progress-foot">
+                                                                <span>{m.Complete ? "Finished" : "Progress"}</span>
+                                                                <span>{current} / {target}</span>
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ) : (
-                                    <div className="progress-empty-state">
-                                        <strong>No {progressTab} missions showing right now.</strong>
-                                        <span>Riot sometimes returns only currently active missions. Refresh after a game or when missions rotate.</span>
-                                    </div>
-                                )
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="progress-empty-state">
+                                            <strong>No {progressTab} missions showing right now.</strong>
+                                            <span>Riot sometimes returns only currently active missions. Refresh after a game or when missions rotate.</span>
+                                        </div>
+                                    )}
+                                </>
                             ) : currentProgressContracts.length > 0 ? (
                                 <div className="contracts-strip progress-rail">
                                     {currentProgressContracts.map((contract) => {

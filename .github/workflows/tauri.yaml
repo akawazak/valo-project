@@ -106,48 +106,65 @@ jobs:
 
       - name: Package portable zip (Windows)
         if: matrix.settings.platform == 'windows-latest'
-        shell: pwsh
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $version = "${{ steps.tauri.outputs.appVersion }}"
-          if (-not $version) {
-            Write-Host "No app version output found, skipping portable upload."
+          set -euo pipefail
+          version="${{ steps.tauri.outputs.appVersion }}"
+          if [[ -z "$version" ]]; then
+            echo "No app version output, skipping portable upload."
             exit 0
-          }
-          $tag = "v$version"
-          $releaseDir = "frontend/src-tauri/target/release"
+          fi
+          tag="v$version"
+          releaseDir="frontend/src-tauri/target/release"
 
-          Write-Host "Looking for app exe in $releaseDir ..."
-          $appExe = Get-ChildItem -Path $releaseDir -Filter "*.exe" |
-            Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } |
-            Select-Object -First 1
-          if (-not $appExe) { throw "App executable not found in $releaseDir" }
-          Write-Host "Found app exe: $($appExe.Name) ($($appExe.Length) bytes)"
+          echo "Release dir: $releaseDir"
+          echo "Contents of release dir:"
+          ls -la "$releaseDir" 2>&1 | head -40
 
-          Write-Host "Looking for backend sidecar in $releaseDir ..."
-          $sidecar = Get-ChildItem -Path $releaseDir -Filter "valovault-backend-*.exe" |
-            Select-Object -First 1
-          if (-not $sidecar) { throw "Backend sidecar not found in $releaseDir" }
-          Write-Host "Found sidecar: $($sidecar.Name) ($($sidecar.Length) bytes)"
+          appExe=$(ls "$releaseDir"/*.exe 2>/dev/null | grep -vE 'backend|wix|light|candle|nsis' | head -n 1 || true)
+          if [[ -z "$appExe" ]]; then
+            echo "ERROR: app exe not found in $releaseDir"
+            exit 1
+          fi
+          echo "App exe: $appExe"
 
-          # Build a clean staging directory with the two binaries.
-          $work = New-Item -ItemType Directory -Force -Path "portable-build"
-          Copy-Item $appExe.FullName (Join-Path $work.FullName "VantaVault.exe")
-          Copy-Item $sidecar.FullName (Join-Path $work.FullName $sidecar.Name)
-          Write-Host "Staged files: VantaVault.exe + $($sidecar.Name)"
+          sidecar=$(ls "$releaseDir"/valovault-backend-*.exe 2>/dev/null | head -n 1 || true)
+          if [[ -z "$sidecar" ]]; then
+            echo "ERROR: sidecar not found in $releaseDir"
+            exit 1
+          fi
+          echo "Sidecar: $sidecar"
 
-          # Use .NET ZipFile directly — bulletproof, no wildcard quirks.
-          $zipPath = Join-Path (Get-Location) "VantaVault-portable.zip"
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($work.FullName, $zipPath)
-          if (-not (Test-Path $zipPath)) { throw "Zip was not created at $zipPath" }
-          $zipSize = (Get-Item $zipPath).Length
-          Write-Host "Created zip: $zipPath ($zipSize bytes)"
+          # Stage into a clean directory with the canonical exe name.
+          work="portable-build"
+          rm -rf "$work" VantaVault-portable.zip
+          mkdir -p "$work"
+          cp "$appExe" "$work/VantaVault.exe"
+          cp "$sidecar" "$work/"
+          echo "Staged files:"
+          ls -la "$work/"
 
-          # Upload to the release. Use --clobber to overwrite any prior upload.
-          gh release upload "$tag" $zipPath --repo akawazak/valo-project --clobber
-          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
-          Write-Host "Uploaded $zipPath to release $tag"
+          # Use Python for zipping — bulletproof, no shell quirks.
+          python -c "
+import os, sys, zipfile
+src = os.path.abspath('portable-build')
+dst = os.path.abspath('VantaVault-portable.zip')
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
+    for name in os.listdir(src):
+        full = os.path.join(src, name)
+        if os.path.isfile(full):
+            z.write(full, arcname=name)
+            print(f'  added: {name} ({os.path.getsize(full)} bytes)')
+print(f'wrote {dst} ({os.path.getsize(dst)} bytes)')
+"
+
+          if [[ ! -f VantaVault-portable.zip ]]; then
+            echo "ERROR: zip not created"
+            exit 1
+          fi
+          ls -la VantaVault-portable.zip
+
+          gh release upload "$tag" VantaVault-portable.zip --repo akawazak/valo-project --clobber
+          echo "Uploaded portable zip to $tag"

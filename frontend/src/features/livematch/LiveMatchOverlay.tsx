@@ -1,9 +1,31 @@
 "use client";
 
-import { useEffect, useState } from 'react';
-import { getLiveMatch, LiveMatchResponse, LivePlayer } from '@/services/api';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import './LiveMatchOverlay.css';
+
+// Sort players for stable rendering. The 5-second poll can reorder
+// the array between updates; sorting on a deterministic key keeps
+// each row glued to its slot. Order of precedence:
+//   1. Local user first
+//   2. Locked > Selecting > None (so confirmed picks surface up)
+//   3. PUUID ascending (stable, content-free tiebreaker)
+//   4. Display name ascending (used when PUUID is hidden, e.g. enemy
+//      pregame placeholders)
+const SELECTION_RANK: Record<string, number> = { locked: 0, selected: 1, none: 2 };
+
+function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
+    if (!players || players.length === 0) return [];
+    return [...players].sort((a, b) => {
+        if (!!a.isLocal !== !!b.isLocal) return a.isLocal ? -1 : 1;
+        const ar = SELECTION_RANK[a.selectionState] ?? 99;
+        const br = SELECTION_RANK[b.selectionState] ?? 99;
+        if (ar !== br) return ar - br;
+        if (a.puuid && b.puuid) return a.puuid < b.puuid ? -1 : 1;
+        return (a.name || "").localeCompare(b.name || "");
+    });
+}
 
 export default function LiveMatchOverlay() {
     const { activeAccount } = useData();
@@ -13,22 +35,70 @@ export default function LiveMatchOverlay() {
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
 
+    // ---- Local countdown timer ----
+    // The backend only emits timeLeft at each 5s poll. We capture the
+    // server's snapshot + the wall-clock at which we received it, then
+    // tick down locally every second so the user sees a smooth
+    // countdown. When a new poll arrives with a HIGHER timeLeft (Riot
+    // resets the clock on phase changes / dodges) we re-anchor.
+    const [timerSnapshot, setTimerSnapshot] = useState<{ seconds: number; receivedAt: number } | null>(null);
+    const [now, setNow] = useState(() => Date.now());
+    const lastPollPhaseRef = useRef<string>("");
+
+    useEffect(() => {
+        if (!timerSnapshot) return;
+        const id = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(id);
+    }, [timerSnapshot]);
+
+    const displayedTimeLeft = useMemo(() => {
+        if (!timerSnapshot) return 0;
+        const elapsed = Math.floor((now - timerSnapshot.receivedAt) / 1000);
+        return Math.max(0, timerSnapshot.seconds - elapsed);
+    }, [timerSnapshot, now]);
+
     // Poll live match status
     useEffect(() => {
         if (!activeAccount) {
             setMatch(null);
+            setTimerSnapshot(null);
+            lastPollPhaseRef.current = "";
             return;
         }
 
         let active = true;
         const poll = async () => {
             const data = await getLiveMatch();
+            if (!active) return;
+
             if (data.phase === "none" && data.error) {
                 console.debug("No live match detected:", data.error);
             }
             if (active) {
                 const liveKey = liveMatchKey(data);
                 setMatch(data);
+
+                // ---- Anchor the local countdown timer ----
+                // 1. Phase changed -> reset the timer.
+                // 2. Polled value rose (server reset / dodge re-anchor).
+                // 3. First pregame poll -> start counting.
+                if (data.phase !== lastPollPhaseRef.current) {
+                    lastPollPhaseRef.current = data.phase;
+                    if (data.phase === "pregame" && data.timeLeft > 0) {
+                        setTimerSnapshot({ seconds: data.timeLeft, receivedAt: Date.now() });
+                    } else {
+                        setTimerSnapshot(null);
+                    }
+                } else if (data.phase === "pregame") {
+                    setTimerSnapshot((prev) => {
+                        const received = data.timeLeft;
+                        if (!prev || received > prev.seconds) {
+                            return { seconds: received, receivedAt: Date.now() };
+                        }
+                        return prev;
+                    });
+                }
+
                 if (liveKey && liveKey !== dismissedMatchKey) {
                     setDismissedMatchKey("");
                 }
@@ -45,7 +115,6 @@ export default function LiveMatchOverlay() {
 
     // Load Valorant-API metadata
     useEffect(() => {
-        // Maps
         fetch("https://valorant-api.com/v1/maps")
             .then(res => res.json())
             .then(d => {
@@ -54,15 +123,12 @@ export default function LiveMatchOverlay() {
                     if (item.uuid) {
                         const meta = { name: item.displayName, splash: item.splash || "" };
                         m[item.uuid.toLowerCase()] = meta;
-                        if (item.mapUrl) {
-                            m[item.mapUrl.toLowerCase()] = meta;
-                        }
+                        if (item.mapUrl) m[item.mapUrl.toLowerCase()] = meta;
                     }
                 }
                 setMapCache(m);
             }).catch(err => console.error("Error loading maps API", err));
 
-        // Agents
         fetch("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
             .then(res => res.json())
             .then(d => {
@@ -79,7 +145,6 @@ export default function LiveMatchOverlay() {
                 setAgentCache(a);
             }).catch(err => console.error("Error loading agents API", err));
 
-        // Competitive Tiers
         fetch("https://valorant-api.com/v1/competitivetiers")
             .then(res => res.json())
             .then(d => {
@@ -95,18 +160,13 @@ export default function LiveMatchOverlay() {
             }).catch(err => console.error("Error loading competitive tiers API", err));
     }, []);
 
-    if (!activeAccount) {
-        return null;
-    }
+    if (!activeAccount) return null;
 
     const matchKey = liveMatchKey(match);
+    if (!match || match.phase === "none") return null;
 
-    if (!match || match.phase === "none" || (matchKey && matchKey === dismissedMatchKey)) {
-        return null;
-    }
+    const isDismissed = !!(matchKey && matchKey === dismissedMatchKey);
 
-    const currentMap = mapCache[match.mapId?.toLowerCase()] || { name: "Unknown Map", splash: "" };
-    
     // Format queue name
     const getQueueName = (id: string) => {
         const key = id?.toLowerCase?.() || "";
@@ -129,6 +189,42 @@ export default function LiveMatchOverlay() {
         return labels[key] || id.charAt(0).toUpperCase() + id.slice(1);
     };
 
+    if (isDismissed) {
+        const reopen = () => setDismissedMatchKey("");
+        const isPregame = match.phase === "pregame";
+        const pillPhaseLabel = isPregame ? "Agent select" : "Live match";
+        const queueName = getQueueName(match.queueId);
+        const mapName = mapCache[match.mapId?.toLowerCase()]?.name;
+        const tier = "is-" + (isPregame ? "pregame" : "live");
+        return (
+            <button
+                type="button"
+                className={`live-match-status-pill is-clickable ${tier}`}
+                onClick={reopen}
+                aria-label="Reopen live match overlay"
+                title="Reopen live match"
+            >
+                <span className="live-match-pill-icon" aria-hidden="true">
+                    <span className="live-match-pill-dot" />
+                </span>
+                <span className="live-match-pill-body">
+                    <span className="live-match-pill-kicker">
+                        {queueName} · {pillPhaseLabel}
+                    </span>
+                    <span className="live-match-pill-title">
+                        {mapName || "Match in progress"}
+                    </span>
+                    <span className="live-match-pill-cta">Click to view</span>
+                </span>
+                <span className="live-match-pill-arrow" aria-hidden="true">›</span>
+            </button>
+        );
+    }
+
+    const currentMap = mapCache[match.mapId?.toLowerCase()] || { name: "Unknown Map", splash: "" };
+    const sortedAllies = stablePlayerSort(match.allyTeam);
+    const sortedEnemies = stablePlayerSort(match.enemyTeam);
+
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
             <div className="overlay-scrim"></div>
@@ -140,18 +236,17 @@ export default function LiveMatchOverlay() {
             >
                 <span aria-hidden="true">×</span>
             </button>
-            
-            {/* Header info */}
+
             <header className="live-match-header">
                 <div className="live-match-header-row">
                     <div className="game-mode-tag">{getQueueName(match.queueId)}</div>
                     {match.source && <div className="game-source-tag">{match.source}</div>}
                 </div>
                 <h1 className="map-display-name">{currentMap.name}</h1>
-                {match.phase === "pregame" && match.timeLeft > 0 && (
+                {match.phase === "pregame" && displayedTimeLeft > 0 && (
                     <div className="timer-display">
                         <span className="timer-label">AGENT SELECT</span>
-                        <span className="timer-val">{match.timeLeft}s</span>
+                        <span className="timer-val">{displayedTimeLeft}s</span>
                     </div>
                 )}
                 {match.phase === "coregame" && (
@@ -159,37 +254,33 @@ export default function LiveMatchOverlay() {
                 )}
             </header>
 
-            {/* Teams comparison container */}
             <div className="teams-container">
-                {/* Ally Team */}
                 <div className="team-column ally-team">
                     <h2 className="team-title"><span>YOUR TEAM</span><small>{match.allyTeam?.length || 0} players</small></h2>
                     <div className="players-list">
-                        {match.allyTeam?.map((player, idx) => (
-                            <PlayerCard 
-                                key={player.puuid || idx} 
-                                player={player} 
-                                agent={agentCache[player.agentId?.toLowerCase()]} 
+                        {sortedAllies.map((player, idx) => (
+                            <PlayerCard
+                                key={player.puuid || `ally-${idx}`}
+                                player={player}
+                                agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
                             />
                         ))}
                     </div>
                 </div>
 
-                {/* VS Indicator */}
                 <div className="vs-divider">
                     <div className="vs-circle">VS</div>
                 </div>
 
-                {/* Enemy Team */}
                 <div className="team-column enemy-team">
                     <h2 className="team-title"><span>ENEMY TEAM</span><small>{match.enemyTeam?.length || 0} players</small></h2>
                     <div className="players-list">
-                        {match.enemyTeam?.map((player, idx) => (
-                            <PlayerCard 
-                                key={player.puuid || idx} 
-                                player={player} 
-                                agent={agentCache[player.agentId?.toLowerCase()]} 
+                        {sortedEnemies.map((player, idx) => (
+                            <PlayerCard
+                                key={player.puuid || `enemy-${idx}`}
+                                player={player}
+                                agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
                             />
                         ))}
@@ -205,37 +296,38 @@ function liveMatchKey(match: LiveMatchResponse | null) {
     return match.matchId || `${match.phase}:${match.mapId || "map"}:${match.queueId || "queue"}`;
 }
 
-function PlayerCard({ player, agent, tier }: { 
-    player: LivePlayer; 
-    agent?: { name: string; icon: string; full: string }; 
-    tier?: { name: string; icon: string } 
+function PlayerCard({
+    player,
+    agent,
+    tier,
+}: {
+    player: LivePlayer;
+    agent?: { name: string; icon: string; full: string };
+    tier?: { name: string; icon: string };
 }) {
     const isLocked = player.selectionState === "locked";
     const isSelecting = player.selectionState === "selected";
     const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
-    
+
     return (
         <div className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}>
-            {/* Agent background silhouette/fullart */}
             {agent?.full && (
                 <div className="agent-card-full-art" style={{ backgroundImage: `url(${agent.full})` }}></div>
             )}
-            
+
             <div className="card-left">
-                {/* Agent Icon or Placeholder */}
                 <div className="agent-icon-container">
                     {agent?.icon ? (
                         <img src={agent.icon} alt={agent.name} className="agent-icon-img" />
                     ) : (
                         <div className="agent-placeholder-icon">?</div>
                     )}
-                        {player.accountLevel > 0 && (
+                    {player.accountLevel > 0 && (
                         <span className="player-lvl-badge">LVL {player.accountLevel}</span>
                     )}
                 </div>
 
-                {/* Player Identity Details */}
                 <div className="player-details">
                     <div className="player-name-row">
                         <span className="player-display-name">{player.name || "Selecting..."}</span>
@@ -244,10 +336,10 @@ function PlayerCard({ player, agent, tier }: {
                     <span className="agent-name-display">
                         {agent ? agent.name : (isLocked || isSelecting ? "Agent Selection" : "Selecting...")}
                     </span>
+                    <PlayerStatsLine player={player} agentId={player.agentId} />
                 </div>
             </div>
 
-            {/* Rank / MMR rating */}
             <div className="card-right">
                 {tier ? (
                     <div className="player-rank-container">
@@ -265,12 +357,50 @@ function PlayerCard({ player, agent, tier }: {
                     </div>
                 ) : null}
 
-                {/* State indicator (Selecting / Locked) */}
                 <div className="selection-status">
                     {isLocked && <span className="badge-locked">LOCKED</span>}
                     {isSelecting && <span className="badge-selecting">SELECTING</span>}
                 </div>
             </div>
         </div>
+    );
+}
+
+// Lightweight inline stat line: "12W-8L · 60% · 1.4 KD" rendered
+// under the agent name. Fetches lazily (once per puuid+agent pair)
+// and silently stays empty for placeholder / private profiles.
+function PlayerStatsLine({ player, agentId }: { player: LivePlayer; agentId?: string }) {
+    const [stats, setStats] = useState<LivePlayerStats | null>(null);
+    const cacheKey = player.puuid && agentId ? `${player.puuid}:${agentId.toLowerCase()}` : "";
+
+    useEffect(() => {
+        if (!cacheKey) {
+            setStats(null);
+            return;
+        }
+        let cancelled = false;
+        getLivePlayerStats(player.puuid, agentId!).then((s) => {
+            if (!cancelled) setStats(s);
+        });
+        return () => { cancelled = true; };
+        // Re-fetch only when the (puuid, agent) key changes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cacheKey]);
+
+    if (!stats || !stats.loaded || stats.matches <= 0) return null;
+
+    const losses = stats.matches - stats.wins;
+    const pct = Math.round(stats.winrate);
+    const wrColor = pct >= 55 ? "wr-good" : pct <= 45 ? "wr-bad" : "wr-mid";
+
+    return (
+        <span className={`player-stats-line ${wrColor}`}>
+            <span className="player-stats-record">{stats.wins}W-{losses}L</span>
+            <span className="player-stats-sep">·</span>
+            <span className="player-stats-wr">{pct}%</span>
+            <span className="player-stats-sep">·</span>
+            <span className="player-stats-kd">{stats.kd.toFixed(2)} KD</span>
+            <span className="player-stats-sample">({stats.matches})</span>
+        </span>
     );
 }
