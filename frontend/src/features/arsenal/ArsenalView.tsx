@@ -280,8 +280,8 @@ export default function ArsenalView({
     };
 
     return (
-        <div className="workspace-centered-wrapper">
-            {/* Header */}
+        <div className="workspace-centered-wrapper workspace-three-column">
+            {/* Header spanning full width */}
             <div className="workspace-header-row workspace-builder-header">
                 <div className="workspace-title-area">
                     <span className="tactical-kicker">
@@ -354,27 +354,84 @@ export default function ArsenalView({
                 </div>
             )}
 
-            <div className="workspace-grid-5 workspace-builder-board">
-                <div className="workspace-board-column workspace-board-column--sidearms">
-                    {renderWeaponCategory("SIDEARMS", sidearms, "sidearms")}
+            {/* Three-column layout container */}
+            <div className="workspace-three-column-layout">
+                {/* Left Sidebar: Presets */}
+                <aside className="workspace-sidebar workspace-sidebar--left workspace-presets-sidebar">
+                    <div className="workspace-sidebar-header">
+                        <span className="workspace-sidebar-label">// SAVED PRESETS</span>
+                    </div>
+                    <div className="workspace-sidebar-content">
+                        {presets && presets.length > 0 ? (
+                            <div className="workspace-presets-list">
+                                {presets.filter(p => p.uuid !== defaultPreset.uuid).map(preset => {
+                                    const variants = presets.filter(c => c.parentUuid === preset.uuid);
+                                    return (
+                                        <div key={preset.uuid} className="workspace-preset-group">
+                                            <PresetCard
+                                                preset={preset}
+                                                isSelected={selectedPreset?.uuid === preset.uuid}
+                                                onSelect={onPresetSelect}
+                                                onApply={() => onPresetApply(preset)}
+                                                onRename={onPresetRename}
+                                                onDelete={onPresetDelete}
+                                                onCreateVariant={onCreateVariant}
+                                                onToggle={onTogglePreset}
+                                                onExport={onExportPreset}
+                                                agents={agents}
+                                                variantCount={variants.length}
+                                            />
+                                            {variants.map(child => (
+                                                <PresetCard
+                                                    key={child.uuid}
+                                                    preset={child}
+                                                    isSelected={selectedPreset?.uuid === child.uuid}
+                                                    onSelect={onPresetSelect}
+                                                    onApply={() => onPresetApply(child)}
+                                                    onRename={onPresetRename}
+                                                    onDelete={onPresetDelete}
+                                                    onToggle={onTogglePreset}
+                                                    onExport={onExportPreset}
+                                                    agents={agents}
+                                                    isVariant
+                                                />
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '1rem 0.5rem', fontSize: '0.75rem' }}>
+                                No saved presets
+                            </div>
+                        )}
+                    </div>
+                </aside>
+
+                {/* Center: Weapons Grid */}
+                <div className="workspace-grid-5 workspace-builder-board workspace-center-content">
+                    <div className="workspace-board-column workspace-board-column--sidearms">
+                        {renderWeaponCategory("SIDEARMS", sidearms, "sidearms")}
+                    </div>
+
+                    <div className="workspace-board-column">
+                        {renderWeaponCategory("SMGS", smgs, "smgs")}
+                        {renderWeaponCategory("SHOTGUNS", shotguns, "shotguns")}
+                    </div>
+
+                    <div className="workspace-board-column">
+                        {renderWeaponCategory("RIFLES", rifles, "rifles")}
+                        {renderWeaponCategory("MELEE", melee, "melee")}
+                    </div>
+
+                    <div className="workspace-board-column">
+                        {renderWeaponCategory("SNIPER RIFLES", snipers, "snipers")}
+                        {renderWeaponCategory("MACHINE GUNS", heavies, "heavies")}
+                    </div>
                 </div>
 
-                <div className="workspace-board-column">
-                    {renderWeaponCategory("SMGS", smgs, "smgs")}
-                    {renderWeaponCategory("SHOTGUNS", shotguns, "shotguns")}
-                </div>
-
-                <div className="workspace-board-column">
-                    {renderWeaponCategory("RIFLES", rifles, "rifles")}
-                    {renderWeaponCategory("MELEE", melee, "melee")}
-                </div>
-
-                <div className="workspace-board-column">
-                    {renderWeaponCategory("SNIPER RIFLES", snipers, "snipers")}
-                    {renderWeaponCategory("MACHINE GUNS", heavies, "heavies")}
-                </div>
-
-                <aside className="workspace-column workspace-column--cosmetics workspace-builder-rail">
+                {/* Right Sidebar: Cosmetics */}
+                <aside className="workspace-column workspace-column--cosmetics workspace-builder-rail workspace-sidebar workspace-sidebar--right">
                     <section className="workspace-rail-section">
                         <h3 className="workspace-column-title">PLAYER CARDS</h3>
                         <PlayerCardPanel
@@ -390,61 +447,6 @@ export default function ArsenalView({
                     </section>
                 </aside>
             </div>
-
-            {/* Preset List at the bottom */}
-            {presets && presets.length > 0 && (
-                <div className="workspace-presets-row">
-                    <div className="workspace-presets-header">
-                        <span className="workspace-presets-label">// SAVED PRESETS</span>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 'auto', marginLeft: '0.5rem' }}>
-                            Click a card to edit · ✓ to apply to your game
-                        </span>
-                        <button type="button" className="btn-tactical btn-tactical-ghost btn-sm" onClick={onImportPresetClick}>
-                            Import
-                        </button>
-                        <button type="button" className="btn-tactical btn-tactical-accent btn-sm" onClick={onNewPreset}>
-                            + New
-                        </button>
-                    </div>
-                    <div className="workspace-presets-scroll">
-                        {presets.filter(p => p.uuid !== defaultPreset.uuid).map(preset => {
-                            const variants = presets.filter(c => c.parentUuid === preset.uuid);
-                            return (
-                                <div key={preset.uuid} className="workspace-preset-group">
-                                    <PresetCard
-                                        preset={preset}
-                                        isSelected={selectedPreset?.uuid === preset.uuid}
-                                        onSelect={onPresetSelect}
-                                        onApply={() => onPresetApply(preset)}
-                                        onRename={onPresetRename}
-                                        onDelete={onPresetDelete}
-                                        onCreateVariant={onCreateVariant}
-                                        onToggle={onTogglePreset}
-                                        onExport={onExportPreset}
-                                        agents={agents}
-                                        variantCount={variants.length}
-                                    />
-                                    {variants.map(child => (
-                                        <PresetCard
-                                            key={child.uuid}
-                                            preset={child}
-                                            isSelected={selectedPreset?.uuid === child.uuid}
-                                            onSelect={onPresetSelect}
-                                            onApply={() => onPresetApply(child)}
-                                            onRename={onPresetRename}
-                                            onDelete={onPresetDelete}
-                                            onToggle={onTogglePreset}
-                                            onExport={onExportPreset}
-                                            agents={agents}
-                                            isVariant
-                                        />
-                                    ))}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
 
             {/* Unified Selector Modal */}
             {activeWeapon && (
