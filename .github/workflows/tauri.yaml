@@ -126,29 +126,10 @@ jobs:
           $work = New-Item -ItemType Directory -Force -Path "portable-build"
           Copy-Item $appExe.FullName (Join-Path $work.FullName "VantaVault.exe")
           Copy-Item $sidecar.FullName $work.FullName
-          Compress-Archive -Path "$($work.FullName)/*" -DestinationPath "VantaVault-portable.zip" -Force
+          # Compress-Archive does not expand wildcards — enumerate files explicitly.
+          $files = @(Get-ChildItem -Path $work.FullName -File)
+          if ($files.Count -lt 2) { throw "Expected app + sidecar in $($work.FullName), found $($files.Count) file(s)" }
+          Compress-Archive -Path $files.FullName -DestinationPath "VantaVault-portable.zip" -Force
+          if (-not (Test-Path "VantaVault-portable.zip")) { throw "VantaVault-portable.zip was not created" }
           gh release upload "$tag" "VantaVault-portable.zip" --repo akawazak/valo-project --clobber
           Write-Host "Uploaded portable zip with: VantaVault.exe + $($sidecar.Name)"
-
-      - name: Package portable AppImage (Linux)
-        if: matrix.settings.platform == 'ubuntu-22.04'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${{ steps.tauri.outputs.appVersion }}"
-          if [[ -z "$version" ]]; then
-            echo "No app version output found, skipping AppImage sidecar upload."
-            exit 0
-          fi
-          tag="v$version"
-          releaseDir="frontend/src-tauri/target/release"
-          sidecar="$(ls $releaseDir/valovault-backend-* 2>/dev/null | head -n 1 || true)"
-          if [[ -z "$sidecar" ]]; then
-            echo "No sidecar found in $releaseDir, AppImage is self-contained — nothing to upload."
-            exit 0
-          fi
-          mkdir -p portable-build
-          cp "$sidecar" portable-build/
-          gh release upload "$tag" "$sidecar" --repo akawazak/valo-project --clobber || true
-          echo "Sidecar available next to AppImage: $(basename $sidecar)"
