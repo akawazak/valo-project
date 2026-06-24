@@ -495,7 +495,7 @@ export function PresetBarCard({
     }, [preset.loadout, weapons]);
 
     const assignedAgent = (preset.agents?.[0])
-        ? agents.find((a) => a.uuid === preset.agents?.[0])
+        ? agents.find((a) => a.uuid === preset.agents[0])
         : null;
 
     return (
