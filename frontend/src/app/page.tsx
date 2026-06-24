@@ -76,6 +76,9 @@ export default function Home() {
     const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
     const [updateReady, setUpdateReady] = useState(false);
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
+    const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
 
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
@@ -135,6 +138,39 @@ export default function Home() {
             alive = false;
         };
     }, []);
+
+    const checkForUpdatesNow = useCallback(async () => {
+        if (isCheckingUpdate) return;
+        setIsCheckingUpdate(true);
+        setUpdateCheckError(null);
+        try {
+            const [{ getVersion }, { check }] = await Promise.all([
+                import("@tauri-apps/api/app"),
+                import("@tauri-apps/plugin-updater"),
+            ]);
+            const version = await getVersion();
+            setAppVersion(version);
+            const update = await check();
+            setAvailableUpdate(update ?? null);
+            setLastUpdateCheck(Date.now());
+        } catch (error) {
+            setUpdateCheckError(
+                error instanceof Error ? error.message : String(error || "Update check failed.")
+            );
+        } finally {
+            setIsCheckingUpdate(false);
+        }
+    }, [isCheckingUpdate]);
+
+    // Background periodic re-check every 6 hours so users get notified
+    // even if they leave the app running for days.
+    useEffect(() => {
+        const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+        const handle = setInterval(() => {
+            void checkForUpdatesNow();
+        }, SIX_HOURS_MS);
+        return () => clearInterval(handle);
+    }, [checkForUpdatesNow]);
 
     const installUpdate = useCallback(async () => {
         if (!availableUpdate || isUpdating) return;
@@ -480,9 +516,14 @@ export default function Home() {
                 activeAccount={activeAccount}
                 appVersion={appVersion}
                 updateAvailable={!!availableUpdate}
+                updateVersion={availableUpdate?.version ?? null}
+                isCheckingUpdate={isCheckingUpdate}
+                lastUpdateCheck={lastUpdateCheck}
+                updateCheckError={updateCheckError}
                 isUpdating={isUpdating}
                 updateReady={updateReady}
                 onInstallUpdate={installUpdate}
+                onCheckForUpdates={checkForUpdatesNow}
             />
 
             {showAddAccount && (

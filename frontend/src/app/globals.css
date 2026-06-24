@@ -10763,6 +10763,21 @@ div#__next>div {
   cursor: not-allowed;
 }
 
+.settings-update-lastcheck {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.settings-update-lastcheck--inline {
+  display: block;
+  margin-top: 0.5rem;
+  font-style: normal;
+}
+
 /* Connection Mode Card */
 .connection-mode-card {
   background: var(--bg-elevated);

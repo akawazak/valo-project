@@ -53,6 +53,12 @@ jobs:
             go build -o ${{ matrix.settings.go-target }} .
           fi
 
+      - name: Stage backend sidecar for Tauri
+        shell: bash
+        run: |
+          mkdir -p frontend/src-tauri/binaries
+          cp "backend/${{ matrix.settings.go-target }}" "frontend/src-tauri/binaries/"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -88,8 +94,8 @@ jobs:
             ## VantaVault v__VERSION__
 
             ### Download
-            - **Windows Portable (recommended):** `VantaVault.exe` — run directly from anywhere (no installation needed)
-            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — per-user install, no admin required
+            - **Windows Portable (recommended):** `VantaVault-portable.zip` — extract anywhere, run `VantaVault.exe` (no install)
+            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — per-user install, no admin required, includes auto-update
             - **Linux AppImage:** `VantaVault_*_amd64.AppImage` — portable Linux execution
             - **Linux Debian Package:** `VantaVault_*_amd64.deb` — standard Linux install
 
@@ -98,16 +104,7 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-      - name: Package portable build
-        if: matrix.settings.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $release = "frontend/src-tauri/target/release"
-          $exe = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } | Select-Object -First 1
-          if (-not $exe) { throw "App executable not found in $release" }
-          Copy-Item $exe.FullName "VantaVault.exe" -Force
-
-      - name: Upload portable exe
+      - name: Package portable zip (Windows)
         if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
         env:
@@ -119,4 +116,39 @@ jobs:
             exit 0
           }
           $tag = "v$version"
-          gh release upload "$tag" "VantaVault.exe" --repo akawazak/valo-project --clobber
+          $releaseDir = "frontend/src-tauri/target/release"
+          $appExe = Get-ChildItem "$releaseDir/*.exe" |
+            Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } |
+            Select-Object -First 1
+          if (-not $appExe) { throw "App executable not found in $releaseDir" }
+          $sidecar = Get-ChildItem "$releaseDir/valovault-backend-*.exe" | Select-Object -First 1
+          if (-not $sidecar) { throw "Backend sidecar not found in $releaseDir" }
+          $work = New-Item -ItemType Directory -Force -Path "portable-build"
+          Copy-Item $appExe.FullName (Join-Path $work.FullName "VantaVault.exe")
+          Copy-Item $sidecar.FullName $work.FullName
+          Compress-Archive -Path "$($work.FullName)/*" -DestinationPath "VantaVault-portable.zip" -Force
+          gh release upload "$tag" "VantaVault-portable.zip" --repo akawazak/valo-project --clobber
+          Write-Host "Uploaded portable zip with: VantaVault.exe + $($sidecar.Name)"
+
+      - name: Package portable AppImage (Linux)
+        if: matrix.settings.platform == 'ubuntu-22.04'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ steps.tauri.outputs.appVersion }}"
+          if [[ -z "$version" ]]; then
+            echo "No app version output found, skipping AppImage sidecar upload."
+            exit 0
+          fi
+          tag="v$version"
+          releaseDir="frontend/src-tauri/target/release"
+          sidecar="$(ls $releaseDir/valovault-backend-* 2>/dev/null | head -n 1 || true)"
+          if [[ -z "$sidecar" ]]; then
+            echo "No sidecar found in $releaseDir, AppImage is self-contained — nothing to upload."
+            exit 0
+          fi
+          mkdir -p portable-build
+          cp "$sidecar" portable-build/
+          gh release upload "$tag" "$sidecar" --repo akawazak/valo-project --clobber || true
+          echo "Sidecar available next to AppImage: $(basename $sidecar)"

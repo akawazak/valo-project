@@ -25,9 +25,27 @@ interface SettingsModalProps {
     // Updater state
     appVersion: string;
     updateAvailable: boolean;
+    updateVersion: string | null;
+    isCheckingUpdate: boolean;
+    lastUpdateCheck: number | null;
+    updateCheckError: string | null;
     isUpdating: boolean;
     updateReady: boolean;
     onInstallUpdate: () => void;
+    onCheckForUpdates: () => void;
+}
+
+function formatRelativeTime(timestamp: number | null): string {
+    if (timestamp === null) return "never";
+    const diffMs = Date.now() - timestamp;
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return "just now";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin} min ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    return `${diffDay}d ago`;
 }
 
 export default function SettingsModal({
@@ -47,9 +65,14 @@ export default function SettingsModal({
     activeAccount,
     appVersion,
     updateAvailable,
+    updateVersion,
+    isCheckingUpdate,
+    lastUpdateCheck,
+    updateCheckError,
     isUpdating,
     updateReady,
     onInstallUpdate,
+    onCheckForUpdates,
 }: SettingsModalProps) {
     if (!isOpen) return null;
 
@@ -79,11 +102,14 @@ export default function SettingsModal({
                                         onClick={onInstallUpdate}
                                         disabled={isUpdating}
                                     >
-                                        {isUpdating ? "Updating..." : "Update Available"}
+                                        {isUpdating ? "Updating..." : `Update to v${updateVersion || "?"}`}
                                     </button>
                                 ) : (
                                     <span className="settings-update-status clean">Up to date</span>
                                 )}
+                                <span className="settings-update-lastcheck">
+                                    Last check: {formatRelativeTime(lastUpdateCheck)}
+                                </span>
                             </div>
                         )}
                     </div>
@@ -178,6 +204,47 @@ export default function SettingsModal({
                                             </button>
                                         ))}
                                     </div>
+                                </div>
+                            </div>
+
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Updates</div>
+                                    <div className="settings-item-desc">
+                                        {isCheckingUpdate
+                                            ? "Contacting the update server..."
+                                            : updateReady
+                                            ? "An update is ready — restart VantaVault to apply it."
+                                            : updateAvailable
+                                            ? `Version ${updateVersion || "?"} is available for download.`
+                                            : updateCheckError
+                                            ? `Couldn't reach the update server: ${updateCheckError}`
+                                            : "Manually check for new releases. VantaVault also checks automatically every 6 hours."}
+                                        <span className="settings-update-lastcheck settings-update-lastcheck--inline">
+                                            Last check: {formatRelativeTime(lastUpdateCheck)}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="settings-item-control">
+                                    {updateAvailable && !updateReady ? (
+                                        <button
+                                            type="button"
+                                            className="settings-update-now-btn"
+                                            onClick={onInstallUpdate}
+                                            disabled={isUpdating}
+                                        >
+                                            {isUpdating ? "Updating..." : `Download v${updateVersion || "?"}`}
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className="settings-update-now-btn"
+                                            onClick={onCheckForUpdates}
+                                            disabled={isCheckingUpdate}
+                                        >
+                                            {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
 
