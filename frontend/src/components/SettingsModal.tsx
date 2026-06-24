@@ -32,6 +32,7 @@ interface SettingsModalProps {
     isUpdating: boolean;
     updateReady: boolean;
     onInstallUpdate: () => void;
+    onRestartForUpdate: () => void;
     onCheckForUpdates: () => void;
 }
 
@@ -72,6 +73,7 @@ export default function SettingsModal({
     isUpdating,
     updateReady,
     onInstallUpdate,
+    onRestartForUpdate,
     onCheckForUpdates,
 }: SettingsModalProps) {
     if (!isOpen) return null;
@@ -90,28 +92,34 @@ export default function SettingsModal({
                     </div>
 
                     <div className="settings-sidebar-footer">
-                        {appVersion && (
-                            <div className="settings-version-info">
-                                <span>Version {appVersion}</span>
-                                {updateReady ? (
-                                    <span className="settings-update-status ready">Update ready to apply</span>
-                                ) : updateAvailable ? (
-                                    <button
-                                        type="button"
-                                        className="settings-update-now-btn"
-                                        onClick={onInstallUpdate}
-                                        disabled={isUpdating}
-                                    >
-                                        {isUpdating ? "Updating..." : `Update to v${updateVersion || "?"}`}
-                                    </button>
-                                ) : (
-                                    <span className="settings-update-status clean">Up to date</span>
+                                {appVersion && (
+                                    <div className="settings-version-info">
+                                        <span>Version {appVersion}</span>
+                                        {updateReady ? (
+                                            <button
+                                                type="button"
+                                                className="settings-update-now-btn"
+                                                onClick={onRestartForUpdate}
+                                            >
+                                                Restart now
+                                            </button>
+                                        ) : updateAvailable ? (
+                                            <button
+                                                type="button"
+                                                className="settings-update-now-btn"
+                                                onClick={onInstallUpdate}
+                                                disabled={isUpdating}
+                                            >
+                                                {isUpdating ? "Updating..." : `Update to v${updateVersion || "?"}`}
+                                            </button>
+                                        ) : (
+                                            <span className="settings-update-status clean">Up to date</span>
+                                        )}
+                                        <span className="settings-update-lastcheck">
+                                            Last check: {formatRelativeTime(lastUpdateCheck)}
+                                        </span>
+                                    </div>
                                 )}
-                                <span className="settings-update-lastcheck">
-                                    Last check: {formatRelativeTime(lastUpdateCheck)}
-                                </span>
-                            </div>
-                        )}
                     </div>
                 </div>
 
@@ -226,7 +234,15 @@ export default function SettingsModal({
                                     </div>
                                 </div>
                                 <div className="settings-item-control">
-                                    {updateAvailable && !updateReady ? (
+                                    {updateReady ? (
+                                        <button
+                                            type="button"
+                                            className="settings-update-now-btn"
+                                            onClick={onRestartForUpdate}
+                                        >
+                                            Restart now
+                                        </button>
+                                    ) : updateAvailable ? (
                                         <button
                                             type="button"
                                             className="settings-update-now-btn"

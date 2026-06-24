@@ -110,6 +110,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $ErrorActionPreference = "Stop"
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (-not $version) {
             Write-Host "No app version output found, skipping portable upload."
@@ -117,19 +118,36 @@ jobs:
           }
           $tag = "v$version"
           $releaseDir = "frontend/src-tauri/target/release"
-          $appExe = Get-ChildItem "$releaseDir/*.exe" |
+
+          Write-Host "Looking for app exe in $releaseDir ..."
+          $appExe = Get-ChildItem -Path $releaseDir -Filter "*.exe" |
             Where-Object { $_.Name -notmatch 'backend|wix|light|candle|nsis' } |
             Select-Object -First 1
           if (-not $appExe) { throw "App executable not found in $releaseDir" }
-          $sidecar = Get-ChildItem "$releaseDir/valovault-backend-*.exe" | Select-Object -First 1
+          Write-Host "Found app exe: $($appExe.Name) ($($appExe.Length) bytes)"
+
+          Write-Host "Looking for backend sidecar in $releaseDir ..."
+          $sidecar = Get-ChildItem -Path $releaseDir -Filter "valovault-backend-*.exe" |
+            Select-Object -First 1
           if (-not $sidecar) { throw "Backend sidecar not found in $releaseDir" }
+          Write-Host "Found sidecar: $($sidecar.Name) ($($sidecar.Length) bytes)"
+
+          # Build a clean staging directory with the two binaries.
           $work = New-Item -ItemType Directory -Force -Path "portable-build"
           Copy-Item $appExe.FullName (Join-Path $work.FullName "VantaVault.exe")
-          Copy-Item $sidecar.FullName $work.FullName
-          # Compress-Archive does not expand wildcards — enumerate files explicitly.
-          $files = @(Get-ChildItem -Path $work.FullName -File)
-          if ($files.Count -lt 2) { throw "Expected app + sidecar in $($work.FullName), found $($files.Count) file(s)" }
-          Compress-Archive -Path $files.FullName -DestinationPath "VantaVault-portable.zip" -Force
-          if (-not (Test-Path "VantaVault-portable.zip")) { throw "VantaVault-portable.zip was not created" }
-          gh release upload "$tag" "VantaVault-portable.zip" --repo akawazak/valo-project --clobber
-          Write-Host "Uploaded portable zip with: VantaVault.exe + $($sidecar.Name)"
+          Copy-Item $sidecar.FullName (Join-Path $work.FullName $sidecar.Name)
+          Write-Host "Staged files: VantaVault.exe + $($sidecar.Name)"
+
+          # Use .NET ZipFile directly — bulletproof, no wildcard quirks.
+          $zipPath = Join-Path (Get-Location) "VantaVault-portable.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($work.FullName, $zipPath)
+          if (-not (Test-Path $zipPath)) { throw "Zip was not created at $zipPath" }
+          $zipSize = (Get-Item $zipPath).Length
+          Write-Host "Created zip: $zipPath ($zipSize bytes)"
+
+          # Upload to the release. Use --clobber to overwrite any prior upload.
+          gh release upload "$tag" $zipPath --repo akawazak/valo-project --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
+          Write-Host "Uploaded $zipPath to release $tag"

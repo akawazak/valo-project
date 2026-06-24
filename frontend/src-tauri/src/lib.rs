@@ -755,6 +755,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             open_login_window,
             show_login_window,
@@ -821,8 +822,18 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { .. } = &event {
             let state: State<AppState> = app_handle.state();
-            if let Some(child) = state.child.lock().unwrap().take() {
-                child.kill().expect("Failed to kill sidecar");
+            // Recover from a poisoned mutex instead of panicking during shutdown.
+            let child_opt = match state.child.lock() {
+                Ok(mut guard) => guard.take(),
+                Err(poisoned) => {
+                    eprintln!("sidecar child lock was poisoned during exit; recovering");
+                    poisoned.into_inner().take()
+                }
+            };
+            if let Some(child) = child_opt {
+                if let Err(e) = child.kill() {
+                    eprintln!("failed to kill sidecar on exit: {e}");
+                }
             };
         }
 

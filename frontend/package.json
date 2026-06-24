@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -15,6 +15,7 @@
     "@tauri-apps/api": "~2.8.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-http": "^2.5.2",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.9.0",
     "bootstrap": "^5.3.8",

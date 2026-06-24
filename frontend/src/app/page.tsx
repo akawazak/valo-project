@@ -187,6 +187,20 @@ export default function Home() {
         }
     }, [availableUpdate, isUpdating, setErrorMessage, setShowErrorModal]);
 
+    const restartForUpdate = useCallback(async () => {
+        try {
+            const { relaunch } = await import("@tauri-apps/plugin-process");
+            await relaunch();
+        } catch (error) {
+            setErrorMessage(
+                error instanceof Error
+                    ? `Couldn't relaunch the app: ${error.message}. Please close and reopen VantaVault manually.`
+                    : "Couldn't relaunch the app. Please close and reopen VantaVault manually."
+            );
+            setShowErrorModal(true);
+        }
+    }, [setErrorMessage, setShowErrorModal]);
+
     const loadInitialData = useCallback(async () => {
         try {
             setIsLoading(true);
@@ -523,6 +537,7 @@ export default function Home() {
                 isUpdating={isUpdating}
                 updateReady={updateReady}
                 onInstallUpdate={installUpdate}
+                onRestartForUpdate={restartForUpdate}
                 onCheckForUpdates={checkForUpdatesNow}
             />
 
