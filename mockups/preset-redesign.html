@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ValoVault — Preset UI Redesign (Concept)</title>
+<style>
+/* ============================================================
+   CONCEPT MOCKUP — not wired to real data.
+   Shows a proposed visual direction for the Preset UI.
+   Click preset rows / tabs to see interactions.
+   ============================================================ */
+
+:root {
+    --bg-void:       #0f1923;
+    --bg-panel:      #1f2731;
+    --bg-panel-2:    #28323e;
+    --bg-elevated:   #323d49;
+    --border-faint:  rgba(255,255,255,0.06);
+    --border-line:   rgba(255,255,255,0.10);
+    --text-main:     #ece8e1;
+    --text-dim:      #8b978f;
+    --text-muted:    #5a6472;
+    --red:           #ff4655;
+    --red-dim:       #bd3942;
+    --teal:          #00e5c4;
+    --gold:          #f1c453;
+    --green:         #3dd68c;
+    --font-display:  "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --font-mono:     "Consolas", "SF Mono", "Roboto Mono", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    background: var(--bg-void);
+    color: var(--text-main);
+    font-family: var(--font-display);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+/* faint bg grid texture */
+body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* tactical clip-path (VALORANT-style angled corners) */
+.clip-tactical {
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+
+.app {
+    position: relative;
+    z-index: 1;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 24px 32px 48px;
+}
+
+/* ───────── TOP BAR ───────── */
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding-bottom: 20px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border-line);
+}
+.brand {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 1.15rem;
+    letter-spacing: 0.12em;
+}
+.brand span { color: var(--red); }
+.topbar-tabs {
+    display: flex;
+    gap: 2px;
+    margin-left: 16px;
+}
+.topbar-tab {
+    padding: 8px 16px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+}
+.topbar-tab:hover { color: var(--text-main); }
+.topbar-tab.active { color: var(--text-main); border-bottom-color: var(--red); }
+.account-chip {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 14px 6px 6px;
+    background: var(--bg-panel);
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+.account-avatar {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--red), var(--red-dim));
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 0.7rem;
+}
+.account-chip .rank-tag { color: var(--gold); font-weight: 700; font-size: 0.72rem; }
+
+/* ───────── MAIN GRID: 3 columns ───────── */
+.layout {
+    display: grid;
+    grid-template-columns: 280px 1fr 300px;
+    gap: 20px;
+    align-items: start;
+}
+
+/* ───────── LEFT: PRESET LIST ───────── */
+.preset-rail {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-line);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 140px);
+    position: sticky;
+    top: 20px;
+}
+.rail-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-faint);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.rail-header .title {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.rail-header .count {
+    background: var(--bg-elevated);
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.rail-search {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-faint);
+}
+.rail-search input {
+    width: 100%;
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    color: var(--text-main);
+    padding: 7px 10px;
+    font-size: 0.8rem;
+    font-family: var(--font-display);
+}
+.rail-search input:focus { outline: none; border-color: var(--red-dim); }
+
+.preset-list { overflow-y: auto; flex: 1; padding: 8px; }
+.preset-list::-webkit-scrollbar { width: 6px; }
+.preset-list::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 3px; }
+
+.preset-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    background: transparent;
+    transition: background .12s, border-color .12s;
+}
+.preset-card:hover { background: var(--bg-panel-2); }
+.preset-card.active {
+    background: var(--bg-panel-2);
+    border-left-color: var(--red);
+}
+.preset-card.active::after {
+    content: "ACTIVE";
+    position: absolute;
+    top: 6px; right: 8px;
+    font-size: 0.55rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--green);
+    background: rgba(61,214,140,0.12);
+    padding: 1px 5px;
+    border-radius: 2px;
+}
+.preset-card .preview {
+    width: 44px; height: 44px;
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    position: relative;
+    overflow: hidden;
+}
+.preset-card .preview .tier-glow {
+    position: absolute; inset: 0;
+    opacity: 0.25;
+}
+.preset-card .info { min-width: 0; }
+.preset-card .name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.preset-card .sub {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin-top: 2px;
+    display: flex; gap: 6px; align-items: center;
+}
+.preset-card .agents { display: flex; gap: 2px; }
+.preset-card .agent-dot {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-line);
+    font-size: 0.6rem;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim);
+}
+.preset-card .apply-btn {
+    width: 26px; height: 26px;
+    border: 1px solid var(--border-line);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.8rem;
+    opacity: 0;
+    transition: opacity .12s, background .12s, color .12s;
+}
+.preset-card:hover .apply-btn { opacity: 1; }
+.preset-card .apply-btn:hover { background: var(--red); color: white; border-color: var(--red); }
+
+.preset-card.variant { margin-left: 16px; grid-template-columns: 36px 1fr auto; }
+.preset-card.variant .preview { width: 36px; height: 36px; }
+.preset-card.variant .name { font-size: 0.78rem; }
+
+.rail-footer {
+    padding: 12px;
+    border-top: 1px solid var(--border-faint);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.btn {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border: 1px solid var(--border-line);
+    background: transparent;
+    color: var(--text-main);
+    transition: background .12s, border-color .12s;
+}
+.btn:hover { background: var(--bg-panel-2); }
+.btn-accent { background: var(--red); border-color: var(--red); color: white; }
+.btn-accent:hover { background: var(--red-dim); border-color: var(--red-dim); }
+.btn-ghost { color: var(--text-dim); }
+
+/* ───────── CENTER: HERO + WEAPON BUILDER ───────── */
+.center { display: flex; flex-direction: column; gap: 20px; }
+
+/* HERO — the "what's currently applied" moment */
+.hero {
+    position: relative;
+    background: linear-gradient(135deg, var(--bg-panel) 0%, var(--bg-panel-2) 100%);
+    border: 1px solid var(--border-line);
+    overflow: hidden;
+}
+.hero-bg-glow {
+    position: absolute;
+    top: -60%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(255,70,85,0.12) 0%, transparent 60%);
+    pointer-events: none;
+}
+.hero-content {
+    position: relative;
+    padding: 24px 28px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    align-items: center;
+}
+.hero-kicker {
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.16em;
+    color: var(--red);
+    margin-bottom: 6px;
+}
+.hero-name {
+    font-size: 1.9rem;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 12px;
+}
+.hero-name .live-badge {
+    font-size: 0.62rem;
+    font-family: var(--font-mono);
+    color: var(--green);
+    background: rgba(61,214,140,0.1);
+    border: 1px solid rgba(61,214,140,0.3);
+    padding: 2px 8px;
+    letter-spacing: 0.1em;
+}
+.hero-meta {
+    display: flex; gap: 20px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+.hero-meta .stat strong { color: var(--text-main); font-family: var(--font-mono); }
+.hero-actions { display: flex; gap: 10px; }
+
+/* WEAPON BUILDER */
+.builder {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-line);
+    padding: 20px;
+}
+.builder-toolbar {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-faint);
+}
+.builder-toolbar .label {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.command-badge {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    padding: 3px 9px;
+    background: var(--bg-elevated);
+    color: var(--text-main);
+}
+.command-badge.unsaved { background: rgba(241,196,83,0.15); color: var(--gold); }
+.command-badge.live { background: rgba(61,214,140,0.12); color: var(--green); }
+
+.weapon-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+}
+.weapon-col-title {
+    font-size: 0.62rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-faint);
+}
+.weapon-slot {
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    padding: 12px 10px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color .12s, transform .12s;
+    position: relative;
+    overflow: hidden;
+}
+.weapon-slot:hover { border-color: var(--red-dim); transform: translateY(-1px); }
+.weapon-slot.equipped { border-color: rgba(0,229,196,0.4); }
+.weapon-slot.equipped::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--teal);
+}
+.weapon-name {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    letter-spacing: 0.04em;
+}
+.weapon-skin {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-main);
+    line-height: 1.2;
+    min-height: 2.4em;
+}
+.weapon-tier-bar {
+    height: 2px;
+    margin-top: 8px;
+    background: var(--border-line);
+    position: relative;
+}
+.weapon-tier-bar .fill { position: absolute; left:0; top:0; bottom:0; }
+.tier-select .fill { background: var(--gold); }
+.tier-premium .fill { background: var(--red); }
+.tier-exclusive .fill { background: var(--teal); }
+.tier-none .fill { background: transparent; }
+
+.weapon-slot.equipped .weapon-skin { color: var(--teal); }
+
+/* ───────── RIGHT: AGENTS + EXTRAS ───────── */
+.right-rail { display: flex; flex-direction: column; gap: 20px; }
+.panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-line);
+}
+.panel-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-faint);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.panel-title {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.panel-body { padding: 14px 16px; }
+
+/* Agent grid */
+.agent-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+}
+.agent-cell {
+    aspect-ratio: 1;
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: border-color .12s, background .12s;
+    position: relative;
+}
+.agent-cell:hover { border-color: var(--red-dim); }
+.agent-cell.assigned {
+    border-color: var(--red);
+    background: rgba(255,70,85,0.1);
+    color: var(--text-main);
+}
+.agent-cell.assigned::after {
+    content: ""; position: absolute; top: 2px; right: 2px;
+    width: 6px; height: 6px; background: var(--red); border-radius: 50%;
+}
+
+/* Tabs in right rail */
+.tabs { display: flex; border-bottom: 1px solid var(--border-faint); }
+.tab {
+    flex: 1;
+    padding: 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+.tab:hover { color: var(--text-main); }
+.tab.active { color: var(--text-main); border-bottom-color: var(--red); }
+
+.spray-wheel {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+}
+.spray-slot {
+    aspect-ratio: 1;
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+}
+.spray-slot:hover { border-color: var(--red-dim); }
+.spray-slot .num { font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-muted); }
+.spray-slot .icon { font-size: 1.4rem; color: var(--text-dim); }
+.spray-slot.filled { border-color: var(--teal); }
+.spray-slot.filled .icon { color: var(--teal); }
+
+.player-card-preview {
+    background: var(--bg-void);
+    border: 1px solid var(--border-line);
+    aspect-ratio: 16/9;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-bottom: 10px;
+    position: relative;
+    overflow: hidden;
+}
+.player-card-preview::before {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(255,70,85,0.08), transparent);
+}
+
+.title-row {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+.title-row .val { color: var(--text-main); font-style: italic; }
+
+/* note box */
+.note {
+    position: fixed;
+    bottom: 16px; right: 16px;
+    max-width: 280px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--red-dim);
+    border-left: 3px solid var(--red);
+    padding: 12px 14px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    z-index: 50;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.note strong { color: var(--text-main); }
+</style>
+</head>
+<body>
+<div class="app">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+        <div class="brand">VALO<span>VAULT</span></div>
+        <nav class="topbar-tabs">
+            <button class="topbar-tab active">Arsenal</button>
+            <button class="topbar-tab">Store</button>
+            <button class="topbar-tab">Profile</button>
+            <button class="topbar-tab">Collection</button>
+        </nav>
+        <div class="account-chip">
+            <div class="account-avatar">AK</div>
+            <div>
+                <div>akawazak <span style="color:var(--text-muted)">#EUW</span></div>
+                <div class="rank-tag">◆ Diamond 2 · 47 RR</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="layout">
+
+        <!-- LEFT RAIL: PRESETS -->
+        <aside class="preset-rail">
+            <div class="rail-header">
+                <span class="title">Presets</span>
+                <span class="count">7</span>
+            </div>
+            <div class="rail-search">
+                <input placeholder="Search presets…" />
+            </div>
+            <div class="preset-list">
+
+                <div class="preset-card" data-name="Phantom Aggro">
+                    <div class="preview" style="background:linear-gradient(135deg,#3a1a1a,#1a0808)">
+                        <div class="tier-glow" style="background:radial-gradient(circle,var(--red),transparent 70%)"></div>
+                        <span>PH</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Phantom Aggro</div>
+                        <div class="sub">
+                            <span>17 items</span>
+                            <span class="agents">
+                                <span class="agent-dot">J</span>
+                                <span class="agent-dot">R</span>
+                            </span>
+                        </div>
+                    </div>
+                    <button class="apply-btn" title="Apply">✓</button>
+                </div>
+
+                <div class="preset-card active" data-name="Operator ESL">
+                    <div class="preview" style="background:linear-gradient(135deg,#1a2a3a,#08121a)">
+                        <div class="tier-glow" style="background:radial-gradient(circle,var(--teal),transparent 70%)"></div>
+                        <span>OP</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Operator ESL</div>
+                        <div class="sub">
+                            <span>17 items</span>
+                            <span class="agents">
+                                <span class="agent-dot">C</span>
+                                <span class="agent-dot">S</span>
+                                <span class="agent-dot">Vy</span>
+                            </span>
+                        </div>
+                    </div>
+                    <button class="apply-btn" title="Apply">✓</button>
+                </div>
+
+                <div class="preset-card variant" data-name="Op ESL — Ranked">
+                    <div class="preview" style="background:linear-gradient(135deg,#1a2a3a,#08121a)">
+                        <span style="font-size:0.8rem">OP′</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Op ESL — Ranked</div>
+                        <div class="sub"><span>variant</span></div>
+                    </div>
+                    <button class="apply-btn">✓</button>
+                </div>
+
+                <div class="preset-card" data-name="Vandal One-Tap">
+                    <div class="preview" style="background:linear-gradient(135deg,#3a2a0a,#1a1208)">
+                        <div class="tier-glow" style="background:radial-gradient(circle,var(--gold),transparent 70%)"></div>
+                        <span>VD</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Vandal One-Tap</div>
+                        <div class="sub">
+                            <span>16 items</span>
+                            <span class="agents"><span class="agent-dot">J</span></span>
+                        </div>
+                    </div>
+                    <button class="apply-btn">✓</button>
+                </div>
+
+                <div class="preset-card" data-name="Sheriff Only">
+                    <div class="preview" style="background:var(--bg-void)">
+                        <span style="color:var(--text-muted)">SH</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Sheriff Only</div>
+                        <div class="sub"><span>6 items · default skins</span></div>
+                    </div>
+                    <button class="apply-btn">✓</button>
+                </div>
+
+                <div class="preset-card" data-name="Night Market Flex">
+                    <div class="preview" style="background:linear-gradient(135deg,#2a0a2a,#180818)">
+                        <div class="tier-glow" style="background:radial-gradient(circle,#a040c0,transparent 70%)"></div>
+                        <span>NM</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Night Market Flex</div>
+                        <div class="sub">
+                            <span>14 items</span>
+                            <span class="agents"><span class="agent-dot">Sk</span></span>
+                        </div>
+                    </div>
+                    <button class="apply-btn">✓</button>
+                </div>
+
+                <div class="preset-card" data-name="Full Prime">
+                    <div class="preview" style="background:linear-gradient(135deg,#0a2a1a,#08180a)">
+                        <div class="tier-glow" style="background:radial-gradient(circle,var(--green),transparent 70%)"></div>
+                        <span>PR</span>
+                    </div>
+                    <div class="info">
+                        <div class="name">Full Prime</div>
+                        <div class="sub">
+                            <span>17 items</span>
+                            <span class="agents"><span class="agent-dot">A</span><span class="agent-dot">Br</span></span>
+                        </div>
+                    </div>
+                    <button class="apply-btn">✓</button>
+                </div>
+
+            </div>
+            <div class="rail-footer">
+                <button class="btn btn-ghost">Import Code</button>
+                <button class="btn btn-accent">+ New Preset</button>
+            </div>
+        </aside>
+
+        <!-- CENTER: HERO + BUILDER -->
+        <main class="center">
+
+            <!-- HERO -->
+            <div class="hero clip-tactical">
+                <div class="hero-bg-glow"></div>
+                <div class="hero-content">
+                    <div>
+                        <div class="hero-kicker">// ACTIVE LOADOUT</div>
+                        <h1 class="hero-name">
+                            Operator ESL
+                            <span class="live-badge">● APPLIED TO GAME</span>
+                        </h1>
+                        <div class="hero-meta">
+                            <div class="stat">Weapon skins <strong>15/17</strong></div>
+                            <div class="stat">Buddies <strong>11</strong></div>
+                            <div class="stat">Highest tier <strong style="color:var(--teal)">Exclusive</strong></div>
+                            <div class="stat">Agents <strong>3</strong></div>
+                        </div>
+                    </div>
+                    <div class="hero-actions">
+                        <button class="btn btn-ghost">↻ Refresh</button>
+                        <button class="btn">Edit</button>
+                        <button class="btn btn-accent">Apply to Game</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BUILDER -->
+            <div class="builder">
+                <div class="builder-toolbar">
+                    <span class="label">Loadout Builder</span>
+                    <span class="command-badge live">● LIVE</span>
+                    <span style="font-size:0.72rem;color:var(--text-muted);font-family:var(--font-mono)">Click a slot to edit · drag to reorder</span>
+                    <div style="margin-left:auto;display:flex;gap:8px">
+                        <button class="btn btn-ghost btn-sm" style="padding:6px 10px">Import</button>
+                        <button class="btn btn-accent" style="padding:6px 12px">+ New</button>
+                    </div>
+                </div>
+
+                <div class="weapon-grid">
+                    <!-- Sidearms -->
+                    <div>
+                        <div class="weapon-col-title">Sidearms</div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Classic</div>
+                            <div class="weapon-skin">Arambol<br>Splash</div>
+                            <div class="weapon-tier-bar tier-select"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="weapon-slot">
+                            <div class="weapon-name">Ghost</div>
+                            <div class="weapon-skin">Default</div>
+                            <div class="weapon-tier-bar tier-none"></div>
+                        </div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Sheriff</div>
+                            <div class="weapon-skin">Prime // 2.0</div>
+                            <div class="weapon-tier-bar tier-exclusive"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                    </div>
+                    <!-- SMGs/Shotguns -->
+                    <div>
+                        <div class="weapon-col-title">SMGs</div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Spectre</div>
+                            <div class="weapon-skin">Forsaken</div>
+                            <div class="weapon-tier-bar tier-premium"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="weapon-col-title" style="margin-top:14px">Shotguns</div>
+                        <div class="weapon-slot">
+                            <div class="weapon-name">Bucky</div>
+                            <div class="weapon-skin">Default</div>
+                            <div class="weapon-tier-bar tier-none"></div>
+                        </div>
+                    </div>
+                    <!-- Rifles + Melee -->
+                    <div>
+                        <div class="weapon-col-title">Rifles</div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Phantom</div>
+                            <div class="weapon-skin">Reaver</div>
+                            <div class="weapon-tier-bar tier-premium"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Vandal</div>
+                            <div class="weapon-skin">Prime // 2.0</div>
+                            <div class="weapon-tier-bar tier-exclusive"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="weapon-col-title" style="margin-top:14px">Melee</div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Knife</div>
+                            <div class="weapon-skin">Kuronami<br>no Yaiba</div>
+                            <div class="weapon-tier-bar tier-exclusive"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                    </div>
+                    <!-- Snipers + Heavies -->
+                    <div>
+                        <div class="weapon-col-title">Snipers</div>
+                        <div class="weapon-slot equipped">
+                            <div class="weapon-name">Operator</div>
+                            <div class="weapon-skin">Elderflame</div>
+                            <div class="weapon-tier-bar tier-exclusive"><div class="fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="weapon-col-title" style="margin-top:14px">Heavies</div>
+                        <div class="weapon-slot">
+                            <div class="weapon-name">Odin</div>
+                            <div class="weapon-skin">Default</div>
+                            <div class="weapon-tier-bar tier-none"></div>
+                        </div>
+                    </div>
+
+                    <!-- Cosmetics mini-rail embedded as 5th col -->
+                    <div>
+                        <div class="weapon-col-title">Identity</div>
+                        <div class="weapon-slot" style="text-align:center">
+                            <div class="weapon-name">Player Card</div>
+                            <div class="weapon-skin" style="min-height:3.2em;display:flex;align-items:center;justify-content:center;color:var(--red)">Kuronami</div>
+                        </div>
+                        <div class="weapon-slot" style="text-align:center">
+                            <div class="weapon-name">Title</div>
+                            <div class="weapon-skin" style="font-style:italic">Blade Reaper</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- RIGHT RAIL: AGENTS + EXTRAS -->
+        <aside class="right-rail">
+
+            <!-- Agent assignment -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Agents</span>
+                    <span style="font-size:0.7rem;color:var(--text-muted);font-family:var(--font-mono)">3/24</span>
+                </div>
+                <div class="panel-body">
+                    <div class="agent-grid">
+                        <div class="agent-cell assigned" title="Jett">J</div>
+                        <div class="agent-cell assigned" title="Reyna">R</div>
+                        <div class="agent-cell assigned" title="Chamber">C</div>
+                        <div class="agent-cell">Sk</div>
+                        <div class="agent-cell">Vy</div>
+                        <div class="agent-cell">A</div>
+                        <div class="agent-cell">Br</div>
+                        <div class="agent-cell">Sv</div>
+                        <div class="agent-cell">Cy</div>
+                        <div class="agent-cell">So</div>
+                        <div class="agent-cell">K/O</div>
+                        <div class="agent-cell">Kill</div>
+                        <div class="agent-cell">Ha</div>
+                        <div class="agent-cell">Gek</div>
+                        <div class="agent-cell">Fade</div>
+                        <div class="agent-cell">Ne</div>
+                        <div class="agent-cell">Raze</div>
+                        <div class="agent-cell">Brim</div>
+                        <div class="agent-cell">Omen</div>
+                        <div class="agent-cell">Yoru</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs: Cards / Sprays -->
+            <div class="panel">
+                <div class="tabs">
+                    <button class="tab active" data-tab="card">Player Card</button>
+                    <button class="tab" data-tab="spray">Sprays</button>
+                </div>
+                <div class="panel-body">
+                    <div id="tab-card">
+                        <div class="player-card-preview">KURONAMI<br>PLAYER CARD</div>
+                        <div class="title-row">
+                            <span>Title</span>
+                            <span class="val">Blade Reaper</span>
+                        </div>
+                    </div>
+                    <div id="tab-spray" style="display:none">
+                        <div class="spray-wheel">
+                            <div class="spray-slot filled"><span class="num">1</span><span class="icon">✦</span></div>
+                            <div class="spray-slot filled"><span class="num">2</span><span class="icon">★</span></div>
+                            <div class="spray-slot"><span class="num">3</span><span class="icon">+</span></div>
+                            <div class="spray-slot"><span class="num">4</span><span class="icon">+</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+    </div>
+
+    <div class="note">
+        <strong>Concept mockup.</strong> Not wired to real data — click presets, tabs, weapon slots. Built to show the proposed visual direction only.
+    </div>
+</div>
+
+<script>
+// lightweight interactions so the mockup feels alive
+document.querySelectorAll('.preset-card').forEach(card => {
+    card.addEventListener('click', () => {
+        document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+        const name = card.dataset.name;
+        const heroName = document.querySelector('.hero-name');
+        // remove old text node (keep the live-badge)
+        heroName.firstChild.textContent = name + ' ';
+    });
+});
+
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const which = tab.dataset.tab;
+        document.getElementById('tab-card').style.display = which === 'card' ? '' : 'none';
+        document.getElementById('tab-spray').style.display = which === 'spray' ? '' : 'none';
+    });
+});
+
+document.querySelectorAll('.topbar-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.topbar-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+    });
+});
+
+document.querySelectorAll('.apply-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const orig = btn.textContent;
+        btn.textContent = '…';
+        setTimeout(() => {
+            btn.textContent = '✓';
+            btn.style.background = 'var(--green)';
+            btn.style.color = '#0f1923';
+            setTimeout(() => {
+                btn.textContent = orig;
+                btn.style.background = '';
+                btn.style.color = '';
+            }, 1200);
+        }, 600);
+    });
+});
+
+document.querySelectorAll('.agent-cell').forEach(cell => {
+    cell.addEventListener('click', () => cell.classList.toggle('assigned'));
+});
+</script>
+</body>
+</html>

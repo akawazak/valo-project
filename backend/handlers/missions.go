@@ -29,11 +29,18 @@ type RiotMissionsResponse struct {
 // RiotContractProgress is one row of the user's tracked contracts.
 // `ContractDefinitionID` matches the uuid field from
 // valorant-api.com /v1/contracts (battlepass, event contracts,
-// agent unlocks). `ContractProgression` is Riot's freeform progress
-// bag — see normalizeContractProgression for the fields we surface.
+// agent unlocks).
+//
+// Note from the Riot API docs: ProgressionLevelReached and
+// ProgressionTowardsNextLevel are TOP-LEVEL fields on the contract
+// item, NOT nested inside ContractProgression. HighestRewardedLevel
+// is a map keyed by season (legacy), so the frontend / api.ts
+// code is responsible for picking the right entry.
 type RiotContractProgress struct {
-	ContractDefinitionID string         `json:"ContractDefinitionID"`
-	ContractProgression  map[string]any `json:"ContractProgression"`
+	ContractDefinitionID       string         `json:"ContractDefinitionID"`
+	ContractProgression        map[string]any `json:"ContractProgression"`
+	ProgressionLevelReached    int            `json:"ProgressionLevelReached"`
+	ProgressionTowardsNextLevel int           `json:"ProgressionTowardsNextLevel"`
 }
 
 // RiotMissionProgress is one daily/weekly/BTE mission. The ID maps
@@ -45,12 +52,15 @@ type RiotMissionProgress struct {
 	ExpirationTime string         `json:"ExpirationTime"`
 }
 
-// RiotMissionMetadata carries the refill schedule. WeeklyRefillTime
-// and DailyRefillTime are both ISO timestamps (zero string when
-// not yet known).
+// RiotMissionMetadata carries the refill schedule. Per the Riot
+// contracts endpoint schema (valapidocs.techchrism.me/endpoint/contracts),
+// the only fields exposed are NPECompleted, WeeklyCheckpoint, and
+// WeeklyRefillTime. There's no DailyRefillTime — daily missions
+// just refresh 24h after they're issued.
 type RiotMissionMetadata struct {
+	NPECompleted     bool   `json:"NPECompleted"`
+	WeeklyCheckpoint string `json:"WeeklyCheckpoint"`
 	WeeklyRefillTime string `json:"WeeklyRefillTime"`
-	DailyRefillTime  string `json:"DailyRefillTime"`
 }
 
 // GetMissions returns the full contracts payload — both the
@@ -85,8 +95,10 @@ type RiotContractsResponse struct {
 	Subject               string `json:"Subject"`
 	ActiveSpecialContract string `json:"ActiveSpecialContract"`
 	Contracts             []struct {
-		ContractDefinitionID string         `json:"ContractDefinitionID"`
-		ContractProgression  map[string]any `json:"ContractProgression"`
+		ContractDefinitionID        string         `json:"ContractDefinitionID"`
+		ContractProgression         map[string]any `json:"ContractProgression"`
+		ProgressionLevelReached     int            `json:"ProgressionLevelReached"`
+		ProgressionTowardsNextLevel int            `json:"ProgressionTowardsNextLevel"`
 	} `json:"Contracts"`
 }
 
@@ -139,8 +151,8 @@ func (h *Handler) GetContracts(w http.ResponseWriter, r *http.Request) {
 			TotalProgressionEarned:        numberFromMap(contract.ContractProgression, "TotalProgressionEarned", "totalProgressionEarned"),
 			TotalProgressionEarnedVersion: numberFromMap(contract.ContractProgression, "TotalProgressionEarnedVersion", "totalProgressionEarnedVersion"),
 			HighestRewardedLevel:          numberFromMap(contract.ContractProgression, "HighestRewardedLevel", "highestRewardedLevel", "LevelReached", "levelReached"),
-			ProgressionLevelReached:       numberFromMap(contract.ContractProgression, "ProgressionLevelReached", "progressionLevelReached", "LevelReached", "levelReached"),
-			ProgressionTowardsNextLevel:   numberFromMap(contract.ContractProgression, "ProgressionTowardsNextLevel", "progressionTowardsNextLevel"),
+			ProgressionLevelReached:       contract.ProgressionLevelReached,
+			ProgressionTowardsNextLevel:   contract.ProgressionTowardsNextLevel,
 		})
 	}
 

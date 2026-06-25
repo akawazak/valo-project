@@ -61,15 +61,47 @@ interface ContractMeta {
     relationType: string;
     totalLevels: number;
     totalXp: number;
+    // Per-level cumulative XP thresholds so the UI can show
+    // "next level needs N XP". Indexed 0..levels.length-1, where
+    // level[0].xp is the XP required to UNLOCK that level (0 for
+    // the first level, 2000 for the second, etc).
+    levels: ContractMetadataLevel[];
+    // Reward label per level, e.g. "Skin", "Gun Buddy", "Player Card",
+    // "Currency", "Spray", "Title". Resolved from
+    // `level.reward.type` (no image lookup yet — that needs a
+    // second valorant-api.com call per uuid).
+    rewardLabels: string[];
+    // Relation uuid so we can later fetch season/event end dates
+    // for the "ends in X days" countdown.
+    relationUuid: string;
+    // Activation + expiration date for the contract itself (event
+    // contracts typically set this; battlepasses leave it null).
+    activationDate: string;
+    expirationDate: string;
 }
 
 interface ContractMetadataLevel {
     xp?: number | string;
     xpRequired?: number | string;
     progressToComplete?: number | string;
+    // Reward preview label (free-reward track).
+    rewardType?: string;
+    rewardAmount?: number | string;
 }
 
-type ProgressTab = "daily" | "weekly" | "battlepass" | "contracts";
+type ProgressTab = "daily" | "weekly" | "battlepass" | "events" | "contracts";
+
+// Tick the clock every 30s so "Refills in 5d 4h" / "Ends in 26d"
+// countdown labels update live without forcing a full re-render
+// of the mission panel.
+function useMinuteTick(): number {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const id = window.setInterval(() => setNow(Date.now()), 30_000);
+        return () => window.clearInterval(id);
+    }, []);
+    return now;
+}
 
 const RANK_GROUPS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
 const QUEUE_OPTIONS: Array<{ value: string; label: string }> = [
@@ -103,6 +135,108 @@ let tierAssetCache: Map<number, { smallIcon: string }> | null = null;
 let agentPromise: Promise<Record<string, AgentMeta>> | null = null;
 let mapPromise: Promise<Record<string, MapMeta>> | null = null;
 let tierPromise: Promise<Map<number, { smallIcon: string }>> | null = null;
+
+// Lazy-loaded reward icon cache. Each tier reward in a battlepass /
+// event-pass is identified by (type, uuid). We don't know the image
+// up front — valorant-api.com returns it from a per-uuid endpoint —
+// so we fetch on demand and cache in a session-scoped Map.
+const rewardIconCache = new Map<string, string>();
+const rewardIconInflight = new Map<string, Promise<string | null>>();
+
+// Returns an icon URL for a single reward item. The label is the
+// short human label (Skin, Gun Buddy, Player Card, Currency, Spray,
+// Title). The uuid is the item's UUID from valorant-api.com.
+function ContractRewardIcon({ rewardType, uuid }: { rewardType: string; uuid: string }) {
+    const [url, setUrl] = useState<string | null>(() => rewardIconCache.get(`${rewardType}:${uuid}`) || null);
+    const [tried, setTried] = useState<boolean>(false);
+
+    useEffect(() => {
+        if (!uuid) {
+            setTried(true);
+            return;
+        }
+        const key = `${rewardType}:${uuid}`;
+        const cached = rewardIconCache.get(key);
+        if (cached) {
+            setUrl(cached);
+            setTried(true);
+            return;
+        }
+        const inflight = rewardIconInflight.get(key);
+        if (inflight) {
+            inflight.then((u) => {
+                if (u) setUrl(u);
+                setTried(true);
+            });
+            return;
+        }
+
+        // Map rewardType + uuid to the right valorant-api.com endpoint.
+        // Each item type uses a different catalog endpoint.
+        const endpoint = rewardEndpoint(rewardType);
+        if (!endpoint) {
+            setTried(true);
+            return;
+        }
+        const promise = fetch(`https://valorant-api.com/v1/${endpoint}/${uuid}`)
+            .then((res) => res.ok ? res.json() : null)
+            .then((d) => {
+                const icon = d?.data?.displayIcon || d?.data?.icon || d?.data?.smallArt || "";
+                if (icon) {
+                    rewardIconCache.set(key, icon);
+                    return icon;
+                }
+                return null;
+            })
+            .catch(() => null)
+            .finally(() => {
+                rewardIconInflight.delete(key);
+            });
+        rewardIconInflight.set(key, promise);
+        promise.then((u) => {
+            if (u) setUrl(u);
+            setTried(true);
+        });
+    }, [rewardType, uuid]);
+
+    if (url) {
+        return <img src={url} alt={rewardType} className="contract-tier-img" loading="lazy" />;
+    }
+    // First-load placeholder while the icon resolves. Keeps the slot
+    // reserved so the strip doesn't reflow when images stream in.
+    if (!tried) {
+        return <div className="contract-tier-placeholder" aria-hidden="true" />;
+    }
+    return (
+        <span className="contract-tier-fallback" aria-hidden="true">
+            {rewardGlyph(rewardType)}
+        </span>
+    );
+}
+
+function rewardEndpoint(rewardType: string): string | null {
+    switch (rewardType) {
+        case "Skin": return "weapons/skins";
+        case "Gun Buddy": return "buddies/levels";
+        case "Player Card": return "playercards";
+        case "Spray": return "sprays";
+        case "Title": return "playertitles";
+        case "Currency": return null; // icons are tiny and the in-game tier preview doesn't show them
+        default: return null;
+    }
+}
+
+function rewardGlyph(rewardType: string): string {
+    switch (rewardType) {
+        case "Skin": return "S";
+        case "Gun Buddy": return "B";
+        case "Player Card": return "C";
+        case "Spray": return "✦";
+        case "Title": return "T";
+        case "Currency": return "✦";
+        default: return "?";
+    }
+}
 
 function tierLabel(tier: number, fallback?: string): string {
     if (!tier || tier <= 0) return "Unranked";
@@ -207,7 +341,7 @@ function cleanError(err: unknown): string {
 // Small helper used by the missions panel to pull numeric fields
 // out of Riot's freeform ContractProgression map. Mirrors the
 // backend's `numberFromMap` in handlers/missions.go.
-function numberFromContractMap(map: Record<string, any> | undefined, ...keys: string[]): number {
+function numberFromContractMap(map: Record<string, unknown> | undefined, ...keys: string[]): number {
     if (!map) return 0;
     for (const key of keys) {
         const v = map[key];
@@ -218,6 +352,49 @@ function numberFromContractMap(map: Record<string, any> | undefined, ...keys: st
         }
     }
     return 0;
+}
+
+// Maps Riot's reward.type enum to a short human label. Used in
+// the contract card's "Next reward" line. We don't try to fetch
+// the actual reward image here — that needs a per-uuid
+// valorant-api.com call we'd rather batch lazily.
+function rewardLabel(type: string | undefined | null): string {
+    const t = (type || "").toLowerCase();
+    switch (t) {
+        case "equippableskinlevel": return "Skin";
+        case "equippablecharmlevel": return "Gun Buddy";
+        case "currency": return "Currency";
+        case "playercard": return "Player Card";
+        case "spray": return "Spray";
+        case "title": return "Title";
+        case "totem": return "Totem";
+        default: return "Reward";
+    }
+}
+
+// Formats an ISO timestamp as a relative countdown like "Refills
+// in 5d 4h" / "Ends in 26d" / "Expired 3h ago". Returns null when
+// the input is missing or unparseable so callers can skip the row.
+function relativeCountdown(targetIso: string | undefined | null, nowMs: number = Date.now()): string | null {
+    if (!targetIso) return null;
+    const t = Date.parse(targetIso);
+    if (!Number.isFinite(t)) return null;
+    const diffMs = t - nowMs;
+    const abs = Math.abs(diffMs);
+    const days = Math.floor(abs / 86_400_000);
+    const hours = Math.floor((abs % 86_400_000) / 3_600_000);
+    const mins = Math.floor((abs % 3_600_000) / 60_000);
+    const label = days > 0
+        ? `${days}d ${hours}h`
+        : hours > 0
+            ? `${hours}h ${mins}m`
+            : `${mins}m`;
+    if (diffMs >= 0) {
+        if (days >= 1) return `${days}d ${hours}h`;
+        if (hours >= 1) return `${hours}h ${mins}m`;
+        return `${mins}m`;
+    }
+    return `Expired ${label} ago`;
 }
 
 async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
@@ -315,6 +492,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const { activeAccount, isBackendOnline, isClientHealthy } = useData();
     const puuid = activeAccount?.puuid ?? "";
     const region = activeAccount?.region ?? "na";
+    const nowMs = useMinuteTick();
 
     const [selectedPuuid, setSelectedPuuid] = useState<string>("");
     const [selectedRegion, setSelectedRegion] = useState<string>("");
@@ -380,15 +558,30 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 if (cancelled) return;
                 const meta: Record<string, { title: string; description: string; xp: number; target: number; type: string }> = {};
                 for (const m of d.data || []) {
-                    if (m.uuid) {
-                        meta[m.uuid.toLowerCase()] = {
-                            title: m.title || m.displayName || "Mission",
-                            description: m.description || "",
-                            xp: m.xpGrant || 0,
-                            target: m.progressToComplete || 1,
-                            type: m.type || "Daily"
-                        };
-                    }
+                    if (!m.uuid) continue;
+                    // Per the catalog schema, the REAL target for a mission
+                    // lives in `objectives[].value` (e.g. 18000 for "Deal
+                    // 18000 damage"). `progressToComplete` is always 1 in
+                    // the catalog — using it as the target made every
+                    // weekly mission show as instantly 100% complete.
+                    const objectives = Array.isArray(m.objectives) ? m.objectives : [];
+                    const sumObjectiveTargets = objectives.reduce(
+                        (sum: number, obj: { value?: number }) => sum + (Number(obj?.value) || 0),
+                        0
+                    );
+                    const target = sumObjectiveTargets > 0
+                        ? sumObjectiveTargets
+                        : (Number(m.progressToComplete) || 1);
+                    // Strip the EAresMissionType:: prefix so the type
+                    // is just "Daily" / "Weekly" / "BTE" / "Tutorial" / "NPE".
+                    const rawType = (m.type || "Daily").replace(/^EAresMissionType::/, "");
+                    meta[m.uuid.toLowerCase()] = {
+                        title: m.title || m.displayName || "Mission",
+                        description: m.description || "",
+                        xp: m.xpGrant || 0,
+                        target,
+                        type: rawType,
+                    };
                 }
                 setMissionsMeta(meta);
             }).catch(e => console.warn("Failed to load missions metadata", e));
@@ -401,17 +594,46 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 for (const c of d.data || []) {
                     if (!c.uuid) continue;
                     const chapters = Array.isArray(c.content?.chapters) ? c.content.chapters : [];
-                    const levels = chapters.flatMap((chapter: { levels?: ContractMetadataLevel[] }) => Array.isArray(chapter.levels) ? chapter.levels : []);
-                    const totalXp = levels.reduce((sum: number, level: ContractMetadataLevel) => {
-                        const xp = Number(level?.xp || level?.xpRequired || level?.progressToComplete || 0);
-                        return sum + (Number.isFinite(xp) ? xp : 0);
-                    }, 0);
+                    const flatLevels: ContractMetadataLevel[] = chapters.flatMap((chapter: { levels?: ContractMetadataLevel[] }) =>
+                        Array.isArray(chapter.levels) ? chapter.levels : []
+                    );
+                    const rewardLabels = flatLevels.map((level) => {
+                        const r = (level as unknown as { reward?: { type?: string } })?.reward?.type;
+                        return rewardLabel(r);
+                    });
+                    // Sum of the XP thresholds (cumulative) so the
+                    // progress bar can render against the same scale
+                    // as TotalProgressionEarned. We use the LAST
+                    // non-epilogue level as the "100%" mark since
+                    // epilogue levels all share the same XP and would
+                    // otherwise inflate the total.
+                    let totalXp = 0;
+                    for (const ch of chapters) {
+                        if (ch?.isEpilogue) continue;
+                        const chLevels: ContractMetadataLevel[] = Array.isArray(ch?.levels) ? ch.levels : [];
+                        for (const lvl of chLevels) {
+                            const xp = Number((lvl as unknown as { xp?: number | string }).xp || 0);
+                            if (Number.isFinite(xp)) totalXp += xp;
+                        }
+                    }
+                    if (totalXp === 0) {
+                        // Fallback for contracts with no XP table.
+                        totalXp = flatLevels.reduce((sum, level) => {
+                            const xp = Number(level?.xp || level?.xpRequired || level?.progressToComplete || 0);
+                            return sum + (Number.isFinite(xp) ? xp : 0);
+                        }, 0);
+                    }
                     meta[c.uuid.toLowerCase()] = {
                         name: c.displayName || "Contract",
                         icon: c.displayIcon || c.freeRewardScheduleUuid || "",
                         relationType: c.content?.relationType || "",
-                        totalLevels: levels.length,
+                        totalLevels: flatLevels.length,
                         totalXp,
+                        levels: flatLevels,
+                        rewardLabels,
+                        relationUuid: c.content?.relationUuid || "",
+                        activationDate: c.content?.activationDate || "",
+                        expirationDate: c.content?.expirationDate || "",
                     };
                 }
                 setContractsMeta(meta);
@@ -697,10 +919,24 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const missionWithMeta = useMemo(() => {
         return visibleMissions.map((mission) => {
             const meta = missionsMeta[mission.ID.toLowerCase()];
+            // Normalize type from the catalog. The catalog returns
+            // values like "Daily", "Weekly", "BTE", "Tutorial", "NPE".
+            // We bucket everything that's NOT Weekly into "daily"
+            // since BTE / Tutorial / NPE are daily-tier missions
+            // from the player's perspective.
             const rawType = (meta?.type || "").toLowerCase();
             const type: "daily" | "weekly" = rawType.includes("weekly") ? "weekly" : "daily";
-            const target = Math.max(1, meta?.target || Object.values(mission.Objectives || {}).reduce((max, value) => Math.max(max, Number(value) || 0), 1));
-            const current = mission.Complete ? target : Object.values(mission.Objectives || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
+
+            // Target priority:
+            //   1. Catalog's target (sum of objectives[].value, set by the
+            //      metadata fetch above — fixed to no longer use the
+            //      misleading progressToComplete=1)
+            //   2. The max value currently in the live Objectives map
+            //      (last-resort for catalog-missed UUIDs, gives a sane
+            //      upper bound rather than dividing by 1)
+            const currentValues = Object.values(mission.Objectives || {}).map((v) => Number(v) || 0);
+            const target = Math.max(1, meta?.target || (currentValues.length ? Math.max(...currentValues) : 1));
+            const current = mission.Complete ? target : currentValues.reduce((sum, v) => sum + v, 0);
             const pct = mission.Complete ? 100 : Math.max(0, Math.min(100, (current / target) * 100));
             return { mission, meta, type, current, target, pct };
         });
@@ -726,8 +962,10 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 totalProgressionEarned: numberFromContractMap(c.ContractProgression, "TotalProgressionEarned", "totalProgressionEarned"),
                 totalProgressionEarnedVersion: numberFromContractMap(c.ContractProgression, "TotalProgressionEarnedVersion", "totalProgressionEarnedVersion"),
                 highestRewardedLevel: numberFromContractMap(c.ContractProgression, "HighestRewardedLevel", "highestRewardedLevel", "LevelReached", "levelReached"),
-                progressionLevelReached: numberFromContractMap(c.ContractProgression, "ProgressionLevelReached", "progressionLevelReached", "LevelReached", "levelReached"),
-                progressionTowardsNextLevel: numberFromContractMap(c.ContractProgression, "ProgressionTowardsNextLevel", "progressionTowardsNextLevel"),
+                // Per Riot's schema, these are TOP-LEVEL fields on the
+                // contract item, not nested in ContractProgression.
+                progressionLevelReached: c.ProgressionLevelReached ?? 0,
+                progressionTowardsNextLevel: c.ProgressionTowardsNextLevel ?? 0,
             }))
             : (contracts?.contracts ?? []);
 
@@ -740,21 +978,43 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 if (aActive !== bActive) return aActive ? -1 : 1;
                 return b.totalProgressionEarned - a.totalProgressionEarned;
             })
-            .slice(0, 8);
+            .slice(0, 12);
     }, [contracts, missions]);
     const activeSpecialId = useMemo(() => {
         return (missions?.ActiveSpecialContract || contracts?.activeSpecialContract || "").toLowerCase();
     }, [missions, contracts]);
+
+    // Bucket contracts by their relation type so each tab gets the
+    // right slice. The classification uses
+    // valorant-api.com /v1/contracts `content.relationType`, which is
+    // one of "Season" (battlepass), "Event" (event pass like VALORANT
+    // FC), or "Agent" (agent unlock contracts).
+    const classifyContract = useCallback((id: string): "battlepass" | "event" | "agent" | "other" => {
+        const meta = contractsMeta[id.toLowerCase()];
+        const rel = (meta?.relationType || "").toLowerCase();
+        if (rel === "event") return "event";
+        if (rel === "season" || id.toLowerCase() === activeSpecialId) return "battlepass";
+        if (rel === "agent") return "agent";
+        return "other";
+    }, [contractsMeta, activeSpecialId]);
+
     const battlepassContracts = useMemo(() => {
-        return visibleContracts.filter((contract) => contract.id.toLowerCase() === activeSpecialId);
-    }, [visibleContracts, activeSpecialId]);
-    const progressionContracts = useMemo(() => {
-        // Events + agent unlocks + any other non-battlepass contracts.
-        // Empty activeSpecialId means "no active battlepass right now"
-        // so we surface ALL contracts as progression.
-        if (!activeSpecialId) return visibleContracts;
-        return visibleContracts.filter((contract) => contract.id.toLowerCase() !== activeSpecialId);
-    }, [visibleContracts, activeSpecialId]);
+        const fromMeta = visibleContracts.filter((c) => classifyContract(c.id) === "battlepass");
+        // If meta hasn't loaded yet, fall back to the active-special
+        // hint from Riot so the user sees *something* in this tab.
+        if (fromMeta.length > 0) return fromMeta;
+        return visibleContracts.filter((c) => c.id.toLowerCase() === activeSpecialId);
+    }, [visibleContracts, classifyContract, activeSpecialId]);
+    const eventContracts = useMemo(() => {
+        return visibleContracts.filter((c) => classifyContract(c.id) === "event");
+    }, [visibleContracts, classifyContract]);
+    const agentContracts = useMemo(() => {
+        return visibleContracts.filter((c) => {
+            const k = classifyContract(c.id);
+            return k === "agent" || k === "other";
+        });
+    }, [visibleContracts, classifyContract]);
+    const progressionContracts = agentContracts;
     const currentProgressMissions = progressTab === "weekly"
         ? missionWithMeta.filter((mission) => mission.type === "weekly")
         : missionWithMeta.filter((mission) => mission.type === "daily");
@@ -765,10 +1025,38 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const dailyCheckpointSummary = useMemo(() => {
         const dailyMissions = missionWithMeta.filter((m) => m.type === "daily");
         const completed = dailyMissions.filter((m) => m.mission.Complete).length;
-        const slots = Math.max(4, dailyMissions.length || 4);
+        // The in-game UI always shows 4 diamond slots for daily
+        // checkpoints regardless of how many dailies Riot currently
+        // returns, so we mirror that. If we got more than 4, show
+        // the higher number so nothing gets hidden.
+        const slots = Math.max(4, dailyMissions.length);
         return { completed, total: slots, dailyMissions };
     }, [missionWithMeta]);
-    const currentProgressContracts = progressTab === "battlepass" ? battlepassContracts : progressionContracts;
+    // "Refills in X" countdown for the Weekly tab header. Live-ticking
+    // because `nowMs` updates every 30s via useMinuteTick.
+    const weeklyRefillLabel = useMemo(() => {
+        const iso = missions?.MissionMetadata?.WeeklyRefillTime;
+        return relativeCountdown(iso, nowMs);
+    }, [missions?.MissionMetadata?.WeeklyRefillTime, nowMs]);
+    // Daily reset countdown = the earliest unexpired daily mission's
+    // ExpirationTime. If no dailies exist, we fall back to "tomorrow".
+    const dailyResetLabel = useMemo(() => {
+        const dailies = missionWithMeta.filter((m) => m.type === "daily");
+        if (dailies.length === 0) {
+            return relativeCountdown(new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(), nowMs);
+        }
+        const earliest = dailies
+            .map((m) => Date.parse(m.mission.ExpirationTime))
+            .filter((t) => Number.isFinite(t))
+            .sort((a, b) => a - b)[0];
+        if (!earliest) return null;
+        return relativeCountdown(new Date(earliest).toISOString(), nowMs);
+    }, [missionWithMeta, nowMs]);
+    const currentProgressContracts = progressTab === "battlepass"
+        ? battlepassContracts
+        : progressTab === "events"
+            ? eventContracts
+            : progressionContracts;
     const liveLoadoutPlayers = loadoutStatus?.players?.length ?? 0;
     const liveLoadoutSkins = loadoutStatus?.players?.reduce((sum, player) => sum + (player.skinIds?.length ?? 0), 0) ?? 0;
     const serviceList = Object.values(accountHealth?.services ?? {});
@@ -1041,9 +1329,14 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                             <div className="missions-header-meta">
                                 <span>{missionCounts.active} active</span>
                                 <span>{missionCounts.complete} complete</span>
-                                {missions?.MissionMetadata?.WeeklyRefillTime && (
-                                    <span>
-                                        Weekly refill {new Date(missions.MissionMetadata.WeeklyRefillTime).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                                {weeklyRefillLabel && (
+                                    <span title={missions?.MissionMetadata?.WeeklyRefillTime || ""}>
+                                        Weekly refills in {weeklyRefillLabel}
+                                    </span>
+                                )}
+                                {dailyResetLabel && (
+                                    <span title="Based on earliest unexpired daily mission">
+                                        Dailies reset in {dailyResetLabel}
                                     </span>
                                 )}
                             </div>
@@ -1053,7 +1346,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 ["daily", `Daily (${missionCounts.daily})`],
                                 ["weekly", `Weekly (${missionCounts.weekly})`],
                                 ["battlepass", `Battlepass (${battlepassContracts.length})`],
-                                ["contracts", `Contracts (${progressionContracts.length})`],
+                                ["events", `Events (${eventContracts.length})`],
+                                ["contracts", `Other (${progressionContracts.length})`],
                             ] as Array<[ProgressTab, string]>).map(([tab, label]) => (
                                 <button
                                     key={tab}
@@ -1068,9 +1362,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         <div className="rank-card-body p-3">
                             {(progressTab === "daily" || progressTab === "weekly") ? (
                                 <>
-                                    {/* Daily checkpoint UI - 4 diamond slots, mirrors
-                                        the in-game Daily Checkpoints display */}
-                                    {progressTab === "daily" && dailyCheckpointSummary.dailyMissions.length > 0 && (
+                                    {/* Daily checkpoint UI - mirrors the in-game
+                                        Daily Checkpoints display. Always renders
+                                        4 slots (the in-game UI does too), even
+                                        when Riot returns 0 active dailies. */}
+                                    {progressTab === "daily" && (
                                         <div className="daily-checkpoint-strip">
                                             <div className="daily-checkpoint-header">
                                                 <span className="daily-checkpoint-label">CHECKPOINTS</span>
@@ -1135,11 +1431,99 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 <div className="contracts-strip progress-rail">
                                     {currentProgressContracts.map((contract) => {
                                         const meta = contractsMeta[contract.id.toLowerCase()];
-                                        const isActiveSpecial = contract.id.toLowerCase() === contracts?.activeSpecialContract?.toLowerCase();
+                                        const isActiveSpecial = contract.id.toLowerCase() === activeSpecialId;
                                         const earned = Math.max(0, contract.totalProgressionEarned || 0);
                                         const target = Math.max(meta?.totalXp || 0, earned);
                                         const pct = target > 0 ? Math.max(0, Math.min(100, (earned / target) * 100)) : 0;
-                                        const level = contract.progressionLevelReached || contract.highestRewardedLevel || 0;
+                                        const totalLevels = meta?.totalLevels || 0;
+
+                                        // XP-driven tier math. We don't trust
+                                        // progressionLevelReached here because
+                                        // (a) it's 0/1 for events and non-active
+                                        // contracts, and (b) it doesn't tell us
+                                        // WHERE in the XP scale we are. Walking
+                                        // the levels[] array lets one path serve
+                                        // both battlepasses AND event contracts.
+                                        const levels = meta?.levels || [];
+                                        let currentTierIndex = -1;
+                                        for (let i = 0; i < levels.length; i++) {
+                                            const lvlXp = Number((levels[i] as unknown as { xp?: number })?.xp || 0);
+                                            if (earned >= lvlXp) currentTierIndex = i;
+                                            else break;
+                                        }
+                                        const displayLevel = currentTierIndex >= 0
+                                            ? currentTierIndex + 1
+                                            : Math.max(1, contract.progressionLevelReached || 1);
+                                        const nextLevelXp = currentTierIndex + 1 < levels.length
+                                            ? Number((levels[currentTierIndex + 1] as unknown as { xp?: number })?.xp || 0)
+                                            : null;
+                                        const currentLevelXp = currentTierIndex >= 0 && currentTierIndex < levels.length
+                                            ? Number((levels[currentTierIndex] as unknown as { xp?: number })?.xp || 0)
+                                            : 0;
+                                        const intoLevel = Math.max(0, earned - currentLevelXp);
+                                        const xpForNext = nextLevelXp != null ? Math.max(0, nextLevelXp - earned) : null;
+
+                                        // Build a wider tier strip. We want
+                                        // a few claimed (with checkmarks), the
+                                        // current (highlighted), and several
+                                        // upcoming tiers. Currency tiers are
+                                        // filtered into a separate "rewards"
+                                        // row so they don't share the same
+                                        // visual treatment as cosmetic items.
+                                        const stripStart = Math.max(0, currentTierIndex - 2);
+                                        const stripEnd = Math.min(levels.length, currentTierIndex + 9);
+                                        const stripWindow = levels.slice(stripStart, stripEnd);
+                                        const cosmeticTiers: Array<{
+                                            tierNumber: number;
+                                            xp: number;
+                                            label: string;
+                                            uuid: string;
+                                            isCurrent: boolean;
+                                            isClaimed: boolean;
+                                            isFuture: boolean;
+                                            type: string;
+                                        }> = [];
+                                        const currencyTiers: Array<{
+                                            tierNumber: number;
+                                            xp: number;
+                                            amount: number;
+                                            isCurrent: boolean;
+                                            isClaimed: boolean;
+                                            isFuture: boolean;
+                                        }> = [];
+                                        stripWindow.forEach((lvl, idx) => {
+                                            const realIndex = stripStart + idx;
+                                            const r = (lvl as unknown as { reward?: { type?: string; uuid?: string; amount?: number } })?.reward;
+                                            const type = r?.type || "";
+                                            const xpVal = Number((lvl as unknown as { xp?: number })?.xp || 0);
+                                            const isCurrent = realIndex === currentTierIndex;
+                                            const isClaimed = realIndex < currentTierIndex;
+                                            const isFuture = realIndex > currentTierIndex;
+                                            if (type === "Currency") {
+                                                currencyTiers.push({
+                                                    tierNumber: realIndex + 1,
+                                                    xp: xpVal,
+                                                    amount: Number(r?.amount || 0),
+                                                    isCurrent,
+                                                    isClaimed,
+                                                    isFuture,
+                                                });
+                                            } else {
+                                                cosmeticTiers.push({
+                                                    tierNumber: realIndex + 1,
+                                                    xp: xpVal,
+                                                    label: rewardLabel(type),
+                                                    uuid: r?.uuid || "",
+                                                    isCurrent,
+                                                    isClaimed,
+                                                    isFuture,
+                                                    type,
+                                                });
+                                            }
+                                        });
+
+                                        const endLabel = relativeCountdown(meta?.expirationDate, nowMs);
+
                                         return (
                                             <div key={contract.id} className={`contract-item-container progress-item-card${isActiveSpecial ? " contract-item-container--active" : ""}`}>
                                                 <div className="contract-item-top">
@@ -1152,18 +1536,80 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                         <div className="contract-item-name">{meta?.name || (isActiveSpecial ? "Battlepass" : "Contract")}</div>
                                                         <div className="contract-item-meta">
                                                             {isActiveSpecial ? "Active battlepass" : meta?.relationType || "Progression"}
+                                                            {endLabel && <span className="contract-item-timer"> · {endLabel}</span>}
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <div className="rank-progress-wrap mt-3">
-                                                    <div className="rank-progress" style={{ height: "7px" }}>
-                                                        <div className="rank-progress-fill" style={{ width: `${pct}%` }} />
-                                                    </div>
-                                                    <div className="progress-foot">
-                                                        <span>Level {level}{meta?.totalLevels ? ` / ${meta.totalLevels}` : ""}</span>
-                                                        <span>{earned.toLocaleString()} XP{target > earned ? ` / ${target.toLocaleString()}` : ""}</span>
+                                                <div className="contract-item-levels">
+                                                    <span className="contract-item-level">
+                                                        Level {displayLevel}{totalLevels ? ` / ${totalLevels}` : ""}
+                                                    </span>
+                                                    <span className="contract-item-xp">
+                                                        {earned.toLocaleString()} XP{target > earned ? ` / ${target.toLocaleString()}` : ""}
+                                                    </span>
+                                                </div>
+                                                <div className="rank-progress-wrap mt-2">
+                                                    <div className="rank-progress" style={{ height: "8px" }}>
+                                                        <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: isActiveSpecial ? "var(--accent)" : "var(--green)" }} />
                                                     </div>
                                                 </div>
+                                                <div className="contract-item-foot">
+                                                    <span className="contract-item-next">
+                                                        {xpForNext != null && xpForNext > 0
+                                                            ? `${xpForNext.toLocaleString()} XP to next reward`
+                                                            : intoLevel > 0
+                                                                ? `${intoLevel.toLocaleString()} XP into this level`
+                                                                : "Maxed out"}
+                                                    </span>
+                                                    <span className="contract-item-progress-foot">Progress</span>
+                                                </div>
+
+                                                {cosmeticTiers.length > 0 && (
+                                                    <div className="contract-tier-row" aria-label="Cosmetic tier rewards">
+                                                        <div className="contract-tier-row-label">Prizes</div>
+                                                        <div className="contract-tier-grid" role="list">
+                                                            {cosmeticTiers.map((tier) => (
+                                                                <div
+                                                                    key={`cosmetic-${tier.tierNumber}`}
+                                                                    role="listitem"
+                                                                    className={`contract-tier${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
+                                                                    title={`Tier ${tier.tierNumber} · ${tier.label} · ${tier.xp.toLocaleString()} XP`}
+                                                                >
+                                                                    <div className="contract-tier-icon">
+                                                                        {tier.isClaimed ? (
+                                                                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                                                <path d="M5 12l5 5 9-11" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                                                            </svg>
+                                                                        ) : (
+                                                                            <ContractRewardIcon rewardType={tier.label} uuid={tier.uuid} />
+                                                                        )}
+                                                                    </div>
+                                                                    <span className="contract-tier-label">T{tier.tierNumber}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {currencyTiers.length > 0 && (
+                                                    <div className="contract-tier-row" aria-label="Currency rewards">
+                                                        <div className="contract-tier-row-label">Radianite / Currency</div>
+                                                        <div className="contract-currency-strip" role="list">
+                                                            {currencyTiers.map((tier) => (
+                                                                <div
+                                                                    key={`currency-${tier.tierNumber}`}
+                                                                    role="listitem"
+                                                                    className={`contract-currency-chip${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
+                                                                    title={`Tier ${tier.tierNumber} · ${tier.amount} · ${tier.xp.toLocaleString()} XP`}
+                                                                >
+                                                                    <span className="contract-currency-symbol" aria-hidden="true">◆</span>
+                                                                    <span className="contract-currency-num">+{tier.amount}</span>
+                                                                    <span className="contract-currency-tier">T{tier.tierNumber}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -1190,6 +1636,34 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                             <span>Recent Matches</span>
                             <span>{total} total</span>
                         </div>
+                        {(() => {
+                            // "Next Up" banner: shown when the user
+                            // is in pregame or matchmaking, mirrors the
+                            // agent pick on the live overlay so they know
+                            // what's coming next before the row lands.
+                            const isLivePregame = liveStatus?.phase === "pregame";
+                            const isPartyQueueing = partyStatus?.phase === "matchmaking" || partyStatus?.phase === "pregame";
+                            if (!isLivePregame && !isPartyQueueing) {
+                                return null;
+                            }
+                            const nextQueue = liveStatus?.queueId || partyStatus?.queueId || "Queue";
+                            const nextMap = maps[liveStatus?.mapId?.toLowerCase?.() || ""]?.name
+                                || liveStatus?.mapId?.slice(0, 12);
+                            const localLivePlayer = [...(liveStatus?.allyTeam ?? []), ...(liveStatus?.enemyTeam ?? [])]
+                                .find((player) => player.isLocal);
+                            const nextAgent = agents[localLivePlayer?.agentId?.toLowerCase?.() || ""]?.name;
+                            return (
+                                <div className="match-next-up-banner">
+                                    <span className="match-next-up-kicker">NEXT UP</span>
+                                    <div className="match-next-up-body">
+                                        <strong>{QUEUE_LABEL[nextQueue] || nextQueue}</strong>
+                                        {nextMap && <span className="match-next-up-meta">{nextMap}</span>}
+                                        {nextAgent && <span className="match-next-up-meta">Playing as {nextAgent}</span>}
+                                    </div>
+                                    <span className="match-next-up-pulse" aria-hidden="true" />
+                                </div>
+                            );
+                        })()}
                         {loading && history.length === 0 ? (
                             <div className="text-secondary py-4">Loading cached profile...</div>
                         ) : history.length === 0 ? (
@@ -1198,7 +1672,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                             </div>
                         ) : (
                             <div className="match-history-list">
-                                {history.map((match) => (
+                                {history.map((match, idx) => (
                                     <MatchRow
                                         key={match.matchId}
                                         match={match}
@@ -1214,6 +1688,10 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             setSelectedRegion(reg);
                                         }}
                                         localRegion={currentRegion}
+                                        // Flag the most recent match (the one
+                                        // that would be the user's "last game"
+                                        // for queue-context / wraparound).
+                                        isNext={idx === 0}
                                     />
                                 ))}
                             </div>
@@ -1315,8 +1793,9 @@ function MatchRow({
     onToggle,
     onSelectPlayer,
     localRegion,
+    isNext,
 }: {
-    match: ProfileMatchSummary;
+    match: MatchSummary;
     detail?: ProfileMatchDetails;
     expanded: boolean;
     loading: boolean;
@@ -1326,6 +1805,7 @@ function MatchRow({
     onToggle: () => void;
     onSelectPlayer?: (puuid: string, region: string) => void;
     localRegion: string;
+    isNext?: boolean;
 }) {
     const agentMeta = agents[match.localPlayer.characterId?.toLowerCase?.() || ""];
     const mapMeta = maps[match.mapID?.toLowerCase?.() || ""];
@@ -1333,50 +1813,95 @@ function MatchRow({
     const mapName = mapMeta?.name || match.mapID?.slice(0, 8) || "Map";
     const result = match.win ? "WIN" : "LOSS";
     const resultClass = match.win ? "win" : "loss";
+    const queueName = QUEUE_LABEL[match.queueID] || match.queueID || "Queue";
 
     const matchTier = match.tierAfter ?? 0;
     const matchRRIcon = rankIconUrl(matchTier, tierAssets);
     const matchRRLabel = tierLabel(matchTier);
     const rrEarned = match.rrEarned ?? 0;
-    const rrSign = rrEarned >= 0 ? "+" : "";
+    const rrSign = rrEarned > 0 ? "+" : rrEarned < 0 ? "" : "±";
     const rrClass = rrEarned > 0 ? "rr-gain" : rrEarned < 0 ? "rr-loss" : "rr-neutral";
 
+    // Compact stat cells so the row stays one line on desktop.
+    const kda = match.localPlayer.kda;
+    const hsPct = match.localPlayer.hsPct;
+    const adr = Math.round(match.localPlayer.adr || 0);
+    const acs = Math.round(match.localPlayer.acs || 0);
+    const kdaText = `${match.localPlayer.kills}/${match.localPlayer.deaths}/${match.localPlayer.assists}`;
+
     return (
-        <div className={`match-card-wrap ${expanded ? "expanded" : ""}`}>
-            <button type="button" className={`match-history-row clip-tactical-sm ${resultClass}`} onClick={onToggle}>
+        <div className={`match-card-wrap ${expanded ? "expanded" : ""} ${isNext ? "is-next" : ""}`}>
+            <button
+                type="button"
+                className={`match-history-row clip-tactical-sm ${resultClass}`}
+                onClick={onToggle}
+                aria-expanded={expanded}
+            >
                 {mapMeta?.splash && (
                     <div
                         className="match-row-bg-crop"
                         style={{ backgroundImage: `url(${mapMeta.splash})` }}
                     />
                 )}
-                <div className="match-result-badge">
-                    <span>{result}</span>
-                    <small>{fmtLength(match.gameLengthMillis)}</small>
+                <div className="match-row-scrim" aria-hidden="true" />
+
+                {/* Result / map thumbnail block */}
+                <div className="match-result-block">
+                    <div className={`match-result-badge ${resultClass}`}>
+                        <span className="match-result-text">{result}</span>
+                        <span className="match-result-meta">
+                            {queueName} · {fmtLength(match.gameLengthMillis)}
+                        </span>
+                    </div>
+                    {mapMeta?.splash ? (
+                        <div
+                            className="match-map-thumb"
+                            style={{ backgroundImage: `url(${mapMeta.splash})` }}
+                            aria-label={mapName}
+                        />
+                    ) : (
+                        <div className="match-map-thumb match-map-thumb--fallback" />
+                    )}
                 </div>
+
+                {/* Agent + map */}
                 <div className="match-agent">
                     {agentMeta?.icon ? (
-                        <Image src={agentMeta.icon} alt={agentName} width={46} height={46} unoptimized className="match-agent-icon" />
+                        <Image src={agentMeta.icon} alt={agentName} width={44} height={44} unoptimized className="match-agent-icon" />
                     ) : (
                         <div className="match-agent-icon match-agent-placeholder" />
                     )}
-                    <div>
+                    <div className="match-agent-meta">
                         <div className="match-agent-name">{agentName}</div>
                         <div className="match-map-name">{mapName}</div>
                     </div>
                 </div>
-                <div className="match-kda">
-                    <strong>{match.localPlayer.kills}/{match.localPlayer.deaths}/{match.localPlayer.assists}</strong>
-                    <span className={kdColor(match.localPlayer.kda)}>{fmtRatio(match.localPlayer.kda)} KDA</span>
+
+                {/* Stats grid: KDA / HS% / ADR / ACS */}
+                <div className="match-stats">
+                    <div className="match-stat">
+                        <span className="match-stat-kicker">KDA</span>
+                        <strong className="match-stat-value">{kdaText}</strong>
+                        <span className={`match-stat-sub ${kdColor(kda)}`}>{fmtRatio(kda)}</span>
+                    </div>
+                    <div className="match-stat">
+                        <span className="match-stat-kicker">HS%</span>
+                        <strong className={`match-stat-value ${hsColor(hsPct)}`}>{fmtPct(hsPct)}</strong>
+                        <span className="match-stat-sub">{Math.round((match.localPlayer as any).headshots || 0)} / {(Math.round((match.localPlayer as any).headshots || 0) + Math.round((match.localPlayer as any).bodyshots || 0) + Math.round((match.localPlayer as any).legshots || 0)) || 0} hits</span>
+                    </div>
+                    <div className="match-stat">
+                        <span className="match-stat-kicker">ADR</span>
+                        <strong className={`match-stat-value ${adrColor(adr)}`}>{adr}</strong>
+                        <span className="match-stat-sub">dmg / rd</span>
+                    </div>
+                    <div className="match-stat">
+                        <span className="match-stat-kicker">ACS</span>
+                        <strong className={`match-stat-value ${acsColor(acs)}`}>{acs}</strong>
+                        <span className="match-stat-sub">score / rd</span>
+                    </div>
                 </div>
-                <div className="match-kda">
-                    <strong className={hsColor(match.localPlayer.hsPct)}>{fmtPct(match.localPlayer.hsPct)}</strong>
-                    <span>
-                        <span className={adrColor(match.localPlayer.adr)}>{Math.round(match.localPlayer.adr || 0)} ADR</span>
-                        {" / "}
-                        <span className={acsColor(match.localPlayer.acs)}>{Math.round(match.localPlayer.acs || 0)} ACS</span>
-                    </span>
-                </div>
+
+                {/* Rank + RR delta (only for ranked) or time */}
                 {matchTier > 0 ? (
                     <div className="match-rank-rr-cell">
                         <div className="match-rank-rr-row">
@@ -1391,20 +1916,23 @@ function MatchRow({
                     </div>
                 ) : (
                     <div className="match-meta">
-                        <span className="match-queue">{QUEUE_LABEL[match.queueID] || match.queueID || "Queue"}</span>
+                        <span className="match-queue">{queueName}</span>
                         <span className="match-time">{fmtDate(match.gameStartMillis)}</span>
                     </div>
                 )}
-                <div className="match-meta match-meta-compact">
-                    <span className="match-queue">{QUEUE_LABEL[match.queueID] || match.queueID || "Queue"}</span>
-                    <span className="match-time">{fmtDate(match.gameStartMillis)}</span>
+
+                {/* Trailing "next" pill + expand chevron */}
+                <div className="match-row-tail">
+                    {isNext && <span className="match-next-pill">NEXT</span>}
+                    <span className="match-expand-btn" aria-hidden="true">
+                        {expanded ? "▲" : loading ? "…" : "▼"}
+                    </span>
                 </div>
-                <span className="match-expand-btn">{expanded ? "▲" : loading ? "…" : "▼"}</span>
             </button>
             {expanded && (
                 <div className="match-detail-panel clip-tactical-sm">
                     {loading ? (
-                        <div className="text-secondary">Loading scoreboard...</div>
+                        <div className="text-secondary">Loading scoreboard…</div>
                     ) : detail ? (
                         <Scoreboard
                             detail={detail}

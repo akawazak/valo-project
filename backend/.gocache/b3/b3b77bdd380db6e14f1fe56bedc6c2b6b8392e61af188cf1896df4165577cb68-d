@@ -1,0 +1,6 @@
+./client.go
+./local_endpoints.go
+./pre_game_endpoints.go
+./pvp_endpoints.go
+./store_endpoints.go
+./types.go

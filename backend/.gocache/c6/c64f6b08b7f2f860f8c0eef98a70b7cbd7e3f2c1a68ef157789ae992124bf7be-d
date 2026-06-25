@@ -1,0 +1,5 @@
+./db.go
+./rawfetch.go
+./sqlite_driver.go
+./sync.go
+./types.go

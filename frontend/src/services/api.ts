@@ -1095,14 +1095,17 @@ export interface RiotMissionsResponse {
     Contracts: RiotContractProgress[];
     Missions: RiotMissionProgress[];
     MissionMetadata: {
+        NPECompleted: boolean;
+        WeeklyCheckpoint: string;
         WeeklyRefillTime: string;
-        DailyRefillTime: string;
     };
 }
 
 export interface RiotContractProgress {
     ContractDefinitionID: string;
     ContractProgression: Record<string, any>;
+    ProgressionLevelReached: number;
+    ProgressionTowardsNextLevel: number;
 }
 
 export interface RiotMissionProgress {

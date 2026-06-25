@@ -446,7 +446,13 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 		}
 		ps.ADR = round1(float64(ps.DamageDealt) / float64(ps.RoundsPlayed))
 		ps.ACS = round1(float64(ps.Score) / float64(ps.RoundsPlayed))
-		ps.HSPct = round1(float64(ps.Headshots) / float64(maxInt(ps.Kills, 1)) * 100.0)
+		// HS% = headshots / (headshots + bodyshots + legshots).
+		// Riot's "Headshots" field counts ALL head-hit damage events,
+		// not just headshot kills, so dividing by kills was wrong.
+		// Total shots across all zones is the correct denominator
+		// and matches the in-game HS% number exactly.
+		totalShots := ps.Headshots + ps.Bodyshots + ps.Legshots
+		ps.HSPct = round1(float64(ps.Headshots) / float64(maxInt(totalShots, 1)) * 100.0)
 		ps.KD = ratio(ps.Kills, ps.Deaths)
 		ps.KDA = ratio(ps.Kills+ps.Assists, ps.Deaths)
 		out.Players = append(out.Players, ps)
