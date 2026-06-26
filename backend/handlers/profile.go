@@ -421,20 +421,22 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 	}
 	for _, p := range cache.Players {
 		ps := tracking.PlayerStats{
-			Subject:      p.Subject,
-			TeamID:       p.TeamID,
-			GameName:     p.GameName,
-			TagLine:      p.TagLine,
-			CharacterID:  p.CharacterID,
-			Kills:        p.Kills,
-			Deaths:       p.Deaths,
-			Assists:      p.Assists,
-			Score:        p.Score,
-			Headshots:    p.Headshots,
-			Bodyshots:    p.Bodyshots,
-			Legshots:     p.Legshots,
-			DamageDealt:  p.DamageDealt,
-			RoundsPlayed: p.RoundsPlayed,
+			Subject:         p.Subject,
+			TeamID:          p.TeamID,
+			GameName:        p.GameName,
+			TagLine:         p.TagLine,
+			PlayerCardID:    p.PlayerCardID,
+			PlayerTitleID:   p.PlayerTitleID,
+			CharacterID:     p.CharacterID,
+			Kills:           p.Kills,
+			Deaths:          p.Deaths,
+			Assists:         p.Assists,
+			Score:           p.Score,
+			Headshots:       p.Headshots,
+			Bodyshots:       p.Bodyshots,
+			Legshots:        p.Legshots,
+			DamageDealt:     p.DamageDealt,
+			RoundsPlayed:    p.RoundsPlayed,
 			IsLocal:         p.IsLocal,
 			CompetitiveTier: p.CompetitiveTier,
 		}
@@ -560,7 +562,7 @@ func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 		h.setSyncLastError(donePuuid, runErr)
 		h.unmarkSyncInFlight(donePuuid)
 	})
-	started, err := sm.Start(puuid, region)
+	started, err := sm.StartWithOptions(puuid, region, force)
 	if err != nil {
 		h.unmarkSyncInFlight(puuid)
 		h.returnError(w, err)

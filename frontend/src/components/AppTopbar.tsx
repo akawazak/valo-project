@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useEffect, useCallback } from "react";
 import { RiotAccount } from "@/lib/types";
 import Image from "next/image";
 
@@ -14,6 +15,12 @@ interface AppTopbarProps {
     onOpenAccounts: () => void;
 }
 
+const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
+    { key: "store", label: "Storefront" },
+    { key: "profile", label: "Profile" },
+    { key: "skins", label: "Presets" },
+];
+
 export default function AppTopbar({
     activeTab,
     onTabChange,
@@ -25,6 +32,32 @@ export default function AppTopbar({
     onOpenAccounts,
 }: AppTopbarProps) {
     const accountLabel = (acc: RiotAccount) => `${acc.gameName}#${acc.tagLine}`;
+    const navRef = useRef<HTMLElement>(null);
+    const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+    // Slide the pill indicator behind the active tab
+    const updateIndicator = useCallback(() => {
+        const nav = navRef.current;
+        if (!nav) return;
+        const btn = btnRefs.current.get(activeTab);
+        if (!btn) return;
+        const navRect = nav.getBoundingClientRect();
+        const btnRect = btn.getBoundingClientRect();
+        nav.style.setProperty(
+            "--nav-indicator-left",
+            `${btnRect.left - navRect.left}px`
+        );
+        nav.style.setProperty(
+            "--nav-indicator-width",
+            `${btnRect.width}px`
+        );
+    }, [activeTab]);
+
+    useEffect(() => {
+        updateIndicator();
+        const raf = requestAnimationFrame(updateIndicator);
+        return () => cancelAnimationFrame(raf);
+    }, [updateIndicator]);
 
     return (
         <header className="app-topbar">
@@ -40,28 +73,20 @@ export default function AppTopbar({
                         VANTA<span>VAULT</span>
                     </span>
                 </button>
-                <nav className="topbar-nav" aria-label="Primary">
-                    <button
-                        type="button"
-                        className={activeTab === "store" ? "active" : ""}
-                        onClick={() => onTabChange("store")}
-                    >
-                        Storefront
-                    </button>
-                    <button
-                        type="button"
-                        className={activeTab === "profile" ? "active" : ""}
-                        onClick={() => onTabChange("profile")}
-                    >
-                        Profile
-                    </button>
-                    <button
-                        type="button"
-                        className={activeTab === "skins" ? "active" : ""}
-                        onClick={() => onTabChange("skins")}
-                    >
-                        Presets
-                    </button>
+                <nav className="topbar-nav" ref={navRef} aria-label="Primary">
+                    {TABS.map(({ key, label }) => (
+                        <button
+                            key={key}
+                            ref={(el) => {
+                                if (el) btnRefs.current.set(key, el);
+                            }}
+                            type="button"
+                            className={activeTab === key ? "active" : ""}
+                            onClick={() => onTabChange(key)}
+                        >
+                            {label}
+                        </button>
+                    ))}
                 </nav>
 
                 <div className="topbar-actions">

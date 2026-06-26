@@ -44,7 +44,6 @@ import RRHistoryChart from "./RRHistoryChart";
 interface Props {
     onConnectAccount?: () => void;
 }
-
 interface AgentMeta {
     name: string;
     icon: string;
@@ -68,7 +67,7 @@ interface ContractMeta {
     levels: ContractMetadataLevel[];
     // Reward label per level, e.g. "Skin", "Gun Buddy", "Player Card",
     // "Currency", "Spray", "Title". Resolved from
-    // `level.reward.type` (no image lookup yet — that needs a
+    // `level.reward.type` (no image lookup yet - that needs a
     // second valorant-api.com call per uuid).
     rewardLabels: string[];
     // Relation uuid so we can later fetch season/event end dates
@@ -89,7 +88,21 @@ interface ContractMetadataLevel {
     rewardAmount?: number | string;
 }
 
-type ProgressTab = "daily" | "weekly" | "battlepass" | "events" | "contracts";
+interface VisibleContractProgress {
+    id: string;
+    totalProgressionEarned: number;
+    totalProgressionEarnedVersion: number;
+    highestRewardedLevel: number;
+    progressionLevelReached?: number;
+    progressionTowardsNextLevel?: number;
+}
+
+type MissionBucket = "daily" | "weekly" | "onboarding" | "other";
+type ProgressTab = MissionBucket | "battlepass" | "events" | "contracts";
+
+function isMissionProgressTab(tab: ProgressTab): tab is MissionBucket {
+    return tab === "daily" || tab === "weekly" || tab === "onboarding" || tab === "other";
+}
 
 // Tick the clock every 30s so "Refills in 5d 4h" / "Ends in 26d"
 // countdown labels update live without forcing a full re-render
@@ -138,7 +151,7 @@ let tierPromise: Promise<Map<number, { smallIcon: string }>> | null = null;
 
 // Lazy-loaded reward icon cache. Each tier reward in a battlepass /
 // event-pass is identified by (type, uuid). We don't know the image
-// up front — valorant-api.com returns it from a per-uuid endpoint —
+// up front - valorant-api.com returns it from a per-uuid endpoint -
 // so we fetch on demand and cache in a session-scoped Map.
 const rewardIconCache = new Map<string, string>();
 const rewardIconInflight = new Map<string, Promise<string | null>>();
@@ -231,9 +244,9 @@ function rewardGlyph(rewardType: string): string {
         case "Skin": return "S";
         case "Gun Buddy": return "B";
         case "Player Card": return "C";
-        case "Spray": return "✦";
+        case "Spray": return "*";
         case "Title": return "T";
-        case "Currency": return "✦";
+        case "Currency": return "*";
         default: return "?";
     }
 }
@@ -281,7 +294,7 @@ function fmtRatio(n: number | undefined): string {
     return (n ?? 0).toFixed(2);
 }
 
-/* ── Stat colour tiers ── */
+/* Stat colour tiers */
 function kdColor(kd: number | undefined): string {
     if (!Number.isFinite(kd ?? NaN)) return "";
     const v = kd ?? 0;
@@ -356,7 +369,7 @@ function numberFromContractMap(map: Record<string, unknown> | undefined, ...keys
 
 // Maps Riot's reward.type enum to a short human label. Used in
 // the contract card's "Next reward" line. We don't try to fetch
-// the actual reward image here — that needs a per-uuid
+// the actual reward image here - that needs a per-uuid
 // valorant-api.com call we'd rather batch lazily.
 function rewardLabel(type: string | undefined | null): string {
     const t = (type || "").toLowerCase();
@@ -395,6 +408,41 @@ function relativeCountdown(targetIso: string | undefined | null, nowMs: number =
         return `${mins}m`;
     }
     return `Expired ${label} ago`;
+}
+
+function classifyMissionType(rawType: string | undefined, expirationIso: string | undefined, nowMs: number): MissionBucket {
+    const type = (rawType || "").toLowerCase();
+    if (type === "daily") return "daily";
+    if (type === "weekly") return "weekly";
+    if (type === "bte" || type === "tutorial" || type === "npe") return "onboarding";
+
+    const expiresAt = Date.parse(expirationIso || "");
+    if (!Number.isFinite(expiresAt)) return "other";
+    const hoursLeft = (expiresAt - nowMs) / 3_600_000;
+    if (hoursLeft > 0 && hoursLeft <= 36) return "daily";
+    if (hoursLeft > 36) return "weekly";
+    return "other";
+}
+
+function missionBucketLabel(type: MissionBucket): string {
+    switch (type) {
+        case "daily": return "Daily";
+        case "weekly": return "Weekly";
+        case "onboarding": return "Onboarding";
+        default: return "Other";
+    }
+}
+
+function formatMissionCountdown(msRemaining: number): string {
+    if (msRemaining <= 0) return "Expired";
+    const totalSeconds = Math.floor(msRemaining / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (days >= 2) return `${days}d left`;
+    if (days === 1) return "1d left";
+    if (hours >= 1) return `${hours}h ${minutes}m left`;
+    return `${Math.max(minutes, 1)}m left`;
 }
 
 async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
@@ -505,6 +553,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const currentPuuid = selectedPuuid || puuid;
     const currentRegion = selectedRegion || region;
+    const isOwnProfile = !selectedPuuid;
 
     const [overview, setOverview] = useState<ProfileOverview | null>(null);
     const [rrHistory, setRRHistory] = useState<ProfileRRHistory | null>(null);
@@ -532,7 +581,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
     const [playerCards, setPlayerCards] = useState<Record<string, { wide: string; icon: string; name: string }>>({});
     const [playerTitles, setPlayerTitles] = useState<Record<string, string>>({});
-    const [progressTab, setProgressTab] = useState<ProgressTab>("daily");
+    const [progressTab, setProgressTab] = useState<ProgressTab>("battlepass");
+    const [expandedBattlepassId, setExpandedBattlepassId] = useState("");
     const [liveStatus, setLiveStatus] = useState<LiveMatchResponse | null>(null);
     const [partyStatus, setPartyStatus] = useState<PartyStatusResponse | null>(null);
     const [loadoutStatus, setLoadoutStatus] = useState<LiveLoadoutsResponse | null>(null);
@@ -562,7 +612,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                     // Per the catalog schema, the REAL target for a mission
                     // lives in `objectives[].value` (e.g. 18000 for "Deal
                     // 18000 damage"). `progressToComplete` is always 1 in
-                    // the catalog — using it as the target made every
+                    // the catalog - using it as the target made every
                     // weekly mission show as instantly 100% complete.
                     const objectives = Array.isArray(m.objectives) ? m.objectives : [];
                     const sumObjectiveTargets = objectives.reduce(
@@ -707,7 +757,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 getProfileSyncStatus(opts).catch(() => null),
                 getMissions().catch(() => null),
                 getContracts().catch(() => null),
-                getPlayerLoadoutData().catch(() => null),
+                isOwnProfile ? getPlayerLoadoutData().catch(() => null) : Promise.resolve(null),
             ]);
             setOverview(ov);
             setRRHistory(rr);
@@ -729,13 +779,27 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         } finally {
             setLoading(false);
         }
-    }, [opts, pageSize, currentPuuid, queue]);
+    }, [opts, pageSize, currentPuuid, queue, isOwnProfile]);
 
     useEffect(() => {
         autoSyncPuuidRef.current = "";
         setDetails({});
         setExpanded(new Set());
     }, [puuid]);
+
+    useEffect(() => {
+        setOverview(null);
+        setRRHistory(null);
+        setHistory([]);
+        setTotal(0);
+        setAgentStats(null);
+        setMapStats(null);
+        setSyncStatus(null);
+        setDetails({});
+        setExpanded(new Set());
+        setLoadingDetails(new Set());
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    }, [currentPuuid, currentRegion]);
 
     useEffect(() => {
         void refresh();
@@ -805,7 +869,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         setSyncing(true);
         setError("");
         try {
-            await postProfileSync(opts);
+            await postProfileSync({ ...opts, force: manual });
             if (manual) showToast("Sync started.");
             let finalStatus: ProfileSyncStatus | null = null;
             let pollMisses = 0;
@@ -908,8 +972,40 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         return out;
     }, [maps]);
 
-    const cardData = identity?.playerCardId ? playerCards[identity.playerCardId.toLowerCase()] : null;
-    const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
+    const liveSelectedPlayer = useMemo(() => {
+        if (!selectedPuuid) return null;
+        const selected = selectedPuuid.toLowerCase();
+        const livePlayers = [...(liveStatus?.allyTeam ?? []), ...(liveStatus?.enemyTeam ?? [])];
+        return livePlayers.find((player) => player.puuid?.toLowerCase?.() === selected)
+            || partyStatus?.members?.find((member) => member.puuid?.toLowerCase?.() === selected)
+            || null;
+    }, [liveStatus?.allyTeam, liveStatus?.enemyTeam, partyStatus?.members, selectedPuuid]);
+
+    const cachedSelectedIdentity = useMemo(() => {
+        if (!selectedPuuid) return null;
+        const selected = selectedPuuid.toLowerCase();
+        const orderedDetails = Object.values(details)
+            .sort((a, b) => (b.matchInfo?.gameStartMillis || 0) - (a.matchInfo?.gameStartMillis || 0));
+        for (const detail of orderedDetails) {
+            const player = detail.players?.find((p) => p.subject?.toLowerCase?.() === selected);
+            if (player?.playerCardId || player?.playerTitleId) {
+                return {
+                    playerCardId: player.playerCardId || "",
+                    playerTitleId: player.playerTitleId || "",
+                };
+            }
+        }
+        return null;
+    }, [details, selectedPuuid]);
+
+    const effectiveCardId = isOwnProfile
+        ? identity?.playerCardId
+        : overview?.playerCardId || cachedSelectedIdentity?.playerCardId || liveSelectedPlayer?.cardId;
+    const effectiveTitleId = isOwnProfile
+        ? identity?.playerTitleId
+        : overview?.playerTitleId || cachedSelectedIdentity?.playerTitleId || "";
+    const cardData = effectiveCardId ? playerCards[effectiveCardId.toLowerCase()] : null;
+    const titleText = effectiveTitleId ? playerTitles[effectiveTitleId.toLowerCase()] : "";
     const visibleMissions = useMemo(() => {
         return [...(missions?.Missions ?? [])].sort((a, b) => {
             if (a.Complete !== b.Complete) return a.Complete ? 1 : -1;
@@ -919,17 +1015,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const missionWithMeta = useMemo(() => {
         return visibleMissions.map((mission) => {
             const meta = missionsMeta[mission.ID.toLowerCase()];
-            // Normalize type from the catalog. The catalog returns
-            // values like "Daily", "Weekly", "BTE", "Tutorial", "NPE".
-            // We bucket everything that's NOT Weekly into "daily"
-            // since BTE / Tutorial / NPE are daily-tier missions
-            // from the player's perspective.
-            const rawType = (meta?.type || "").toLowerCase();
-            const type: "daily" | "weekly" = rawType.includes("weekly") ? "weekly" : "daily";
+            const type = classifyMissionType(meta?.type, mission.ExpirationTime, nowMs);
 
             // Target priority:
             //   1. Catalog's target (sum of objectives[].value, set by the
-            //      metadata fetch above — fixed to no longer use the
+            //      metadata fetch above - fixed to no longer use the
             //      misleading progressToComplete=1)
             //   2. The max value currently in the live Objectives map
             //      (last-resort for catalog-missed UUIDs, gives a sane
@@ -940,15 +1030,25 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             const pct = mission.Complete ? 100 : Math.max(0, Math.min(100, (current / target) * 100));
             return { mission, meta, type, current, target, pct };
         });
-    }, [missionsMeta, visibleMissions]);
+    }, [missionsMeta, nowMs, visibleMissions]);
     const missionCounts = useMemo(() => {
         const complete = visibleMissions.filter((mission) => mission.Complete).length;
+        const activeDaily = missionWithMeta.filter((mission) => mission.type === "daily" && !mission.mission.Complete).length;
+        const activeWeekly = missionWithMeta.filter((mission) => mission.type === "weekly" && !mission.mission.Complete).length;
+        const activeOnboarding = missionWithMeta.filter((mission) => mission.type === "onboarding" && !mission.mission.Complete).length;
+        const activeOther = missionWithMeta.filter((mission) => mission.type === "other" && !mission.mission.Complete).length;
         return {
             complete,
             active: visibleMissions.length - complete,
             total: visibleMissions.length,
             daily: missionWithMeta.filter((mission) => mission.type === "daily").length,
             weekly: missionWithMeta.filter((mission) => mission.type === "weekly").length,
+            onboarding: missionWithMeta.filter((mission) => mission.type === "onboarding").length,
+            other: missionWithMeta.filter((mission) => mission.type === "other").length,
+            activeDaily,
+            activeWeekly,
+            activeOnboarding,
+            activeOther,
         };
     }, [missionWithMeta, visibleMissions]);
     const visibleContracts = useMemo(() => {
@@ -998,6 +1098,13 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         return "other";
     }, [contractsMeta, activeSpecialId]);
 
+    const isContractComplete = useCallback((contract: VisibleContractProgress): boolean => {
+        const meta = contractsMeta[contract.id.toLowerCase()];
+        if (meta?.totalLevels && (contract.progressionLevelReached ?? 0) >= meta.totalLevels) return true;
+        if (meta?.totalXp && contract.totalProgressionEarned >= meta.totalXp) return true;
+        return false;
+    }, [contractsMeta]);
+
     const battlepassContracts = useMemo(() => {
         const fromMeta = visibleContracts.filter((c) => classifyContract(c.id) === "battlepass");
         // If meta hasn't loaded yet, fall back to the active-special
@@ -1015,22 +1122,24 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         });
     }, [visibleContracts, classifyContract]);
     const progressionContracts = agentContracts;
-    const currentProgressMissions = progressTab === "weekly"
-        ? missionWithMeta.filter((mission) => mission.type === "weekly")
-        : missionWithMeta.filter((mission) => mission.type === "daily");
+    const completedContractCount = useMemo(() => visibleContracts.filter(isContractComplete).length, [visibleContracts, isContractComplete]);
+    const currentProgressMissions = progressTab === "daily" || progressTab === "weekly" || progressTab === "onboarding" || progressTab === "other"
+        ? missionWithMeta.filter((mission) => mission.type === progressTab)
+        : [];
 
     // Daily checkpoint summary: 4 diamond slots, filled = completed daily.
     // Mirrors the in-game Daily Checkpoints UI from the player-facing
     // missions screen.
     const dailyCheckpointSummary = useMemo(() => {
         const dailyMissions = missionWithMeta.filter((m) => m.type === "daily");
+        const activeDailyMissions = dailyMissions.filter((m) => !m.mission.Complete);
         const completed = dailyMissions.filter((m) => m.mission.Complete).length;
         // The in-game UI always shows 4 diamond slots for daily
         // checkpoints regardless of how many dailies Riot currently
         // returns, so we mirror that. If we got more than 4, show
         // the higher number so nothing gets hidden.
         const slots = Math.max(4, dailyMissions.length);
-        return { completed, total: slots, dailyMissions };
+        return { completed, total: slots, dailyMissions, activeDailyMissions };
     }, [missionWithMeta]);
     // "Refills in X" countdown for the Weekly tab header. Live-ticking
     // because `nowMs` updates every 30s via useMinuteTick.
@@ -1057,6 +1166,24 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         : progressTab === "events"
             ? eventContracts
             : progressionContracts;
+    const activeBattlepass = battlepassContracts[0];
+    const activeBattlepassMeta = activeBattlepass ? contractsMeta[activeBattlepass.id.toLowerCase()] : undefined;
+    const activeBattlepassEarned = Math.max(0, activeBattlepass?.totalProgressionEarned || 0);
+    const activeBattlepassTarget = Math.max(activeBattlepassMeta?.totalXp || 0, activeBattlepassEarned);
+    const activeBattlepassPct = activeBattlepassTarget > 0 ? Math.max(0, Math.min(100, (activeBattlepassEarned / activeBattlepassTarget) * 100)) : 0;
+    const activeBattlepassLevel = Math.max(1, activeBattlepass?.progressionLevelReached || 1);
+    const hasMissionRows = missionCounts.total > 0;
+    useEffect(() => {
+        if (!missions && !contracts) return;
+        if (isMissionProgressTab(progressTab) && !hasMissionRows && activeBattlepass?.id) {
+            setProgressTab("battlepass");
+            setExpandedBattlepassId(activeBattlepass.id);
+            return;
+        }
+        if (progressTab === "battlepass" && !activeBattlepass?.id && hasMissionRows) {
+            setProgressTab("daily");
+        }
+    }, [activeBattlepass?.id, contracts, hasMissionRows, missions, progressTab]);
     const liveLoadoutPlayers = loadoutStatus?.players?.length ?? 0;
     const liveLoadoutSkins = loadoutStatus?.players?.reduce((sum, player) => sum + (player.skinIds?.length ?? 0), 0) ?? 0;
     const serviceList = Object.values(accountHealth?.services ?? {});
@@ -1103,11 +1230,21 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 style={cardData?.wide ? { backgroundImage: `url(${cardData.wide})` } : undefined}
             >
                 <div className="profile-header-identity">
-                    {cardData?.icon ? (
-                        <img src={cardData.icon} alt="Player Card" className="profile-avatar" />
-                    ) : (
-                        <div className="profile-avatar" />
-                    )}
+                    <div className="profile-card-frame">
+                        {cardData?.icon ? (
+                            <img src={cardData.icon} alt="Player Card" className="profile-avatar" />
+                        ) : currentRankIcon ? (
+                            <Image src={currentRankIcon} alt={currentRankLabel} width={96} height={96} unoptimized className="profile-avatar profile-avatar-rank" />
+                        ) : (
+                            <div className="profile-avatar" />
+                        )}
+                        {currentRankIcon && cardData?.icon && (
+                            <span className="profile-rank-badge">
+                                <Image src={currentRankIcon} alt={currentRankLabel} width={42} height={42} unoptimized />
+                            </span>
+                        )}
+                        <span className="profile-level-badge">{overview?.account?.level || "--"}</span>
+                    </div>
                     <div>
                         <div className="text-uppercase text-secondary small fw-bold">
                             {selectedPuuid ? "Shared Player Profile" : "Private local profile"}
@@ -1122,13 +1259,46 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                     : activeAccount?.tagLine || ""}
                             </span>
                         </h1>
-                        {titleText && <div className="profile-title-text">{titleText}</div>}
+                        {titleText ? (
+                            <div className="profile-title-text">{titleText}</div>
+                        ) : selectedPuuid ? (
+                            <div className="profile-title-text profile-title-text-muted">
+                                                        Sync this profile to load this player&apos;s card/title
+                            </div>
+                        ) : null}
                         <div className="profile-subline">
-                            <span>{region.toUpperCase()}</span>
+                            <span>{currentRegion.toUpperCase()}</span>
                             <span>Level {overview?.account?.level || "--"}</span>
                             <span>Last sync {fmtDate(syncStatus?.lastSyncedAt || 0)}</span>
                             <span>{syncStatus?.totalMatches ?? total} cached matches</span>
                         </div>
+                        <div className="profile-header-rankline">
+                            <span>Current Rank</span>
+                            <strong>{currentRankLabel}</strong>
+                            <em>{currentTier >= 27 ? "MAX" : `${currentRR} / 100 RR`}</em>
+                        </div>
+                    </div>
+                </div>
+                <div className="profile-showcase" aria-label="Profile card summary">
+                    <div className="profile-showcase-card">
+                        {cardData?.icon ? (
+                            <img src={cardData.icon} alt="Player Card" className="profile-showcase-art" />
+                        ) : currentRankIcon ? (
+                            <Image src={currentRankIcon} alt={currentRankLabel} width={128} height={128} unoptimized className="profile-showcase-art profile-showcase-art--rank" />
+                        ) : (
+                            <div className="profile-showcase-art" />
+                        )}
+                        <span className="profile-showcase-level">{overview?.account?.level || "--"}</span>
+                        {currentRankIcon && (
+                            <span className="profile-showcase-rank">
+                                <Image src={currentRankIcon} alt={currentRankLabel} width={48} height={48} unoptimized />
+                            </span>
+                        )}
+                    </div>
+                    <div className="profile-showcase-meta">
+                        <span>Current Profile</span>
+                        <strong>{currentRankLabel}</strong>
+                        <small>{currentTier >= 27 ? "Radiant max" : `${currentRR} RR`} · {fmtPct(summary?.winrate)} WR · {fmtPct(summary?.avgHsPct)} HS</small>
                     </div>
                 </div>
                 <div className="profile-header-actions">
@@ -1146,7 +1316,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         Refresh
                     </button>
                     <button className="btn btn-danger btn-sm" onClick={() => runSync(true)} disabled={isBusy}>
-                        {isBusy ? "Syncing..." : "Sync"}
+                        {isBusy ? "Syncing..." : selectedPuuid ? "Sync Player" : "Sync"}
                     </button>
                 </div>
             </section>
@@ -1301,11 +1471,17 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                     />
                     <RiotSignalCard
                         label="Friends Presence"
-                        value={socialStatus?.status === "ok" ? `${socialStatus.onlineCount}/${socialStatus.friendCount} online` : "Local only"}
+                        value={socialStatus?.status === "ok"
+                            ? `${socialStatus.onlineCount}/${socialStatus.friendCount} online`
+                            : socialStatus?.remoteStatus === "config"
+                                ? "Chat config found"
+                                : "Unavailable"}
                         detail={socialStatus?.status === "ok"
-                            ? `${socialStatus.inGameCount} friends exposing VALORANT presence right now.`
-                            : socialStatus?.error || "Open VALORANT to allow local chat presence checks."}
-                        tone={socialStatus?.status === "ok" ? "active" : "idle"}
+                            ? `${socialStatus.inGameCount} VALORANT now. ${socialStatus.remoteStatus === "config" ? "Token resolved Riot chat config." : "Using roster fallback."}`
+                            : socialStatus?.remoteChatHost
+                                ? `${socialStatus.remoteChatHost}${socialStatus.remoteChatPort ? `:${socialStatus.remoteChatPort}` : ""}; live roster needs local Riot Client or XMPP.`
+                                : socialStatus?.error || "Token can resolve chat config; live roster still needs local Riot Client or XMPP."}
+                        tone={socialStatus?.status === "ok" || socialStatus?.remoteStatus === "config" ? "active" : "idle"}
                         source={socialStatus?.source}
                     />
                     <RiotSignalCard
@@ -1316,6 +1492,14 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         source={accountHealth?.source}
                     />
                 </div>
+                <FriendPresenceList
+                    socialStatus={socialStatus}
+                    region={currentRegion}
+                    onSelectPlayer={(puid, reg) => {
+                        setSelectedPuuid(puid);
+                        setSelectedRegion(reg);
+                    }}
+                />
             </section>
 
             <div className="profile-layout-grid">
@@ -1327,8 +1511,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 <small>Missions, battlepass, and contracts</small>
                             </div>
                             <div className="missions-header-meta">
-                                <span>{missionCounts.active} active</span>
-                                <span>{missionCounts.complete} complete</span>
+                                <span>{hasMissionRows ? `${missionCounts.active} active` : "No mission rows"}</span>
+                                <span>{hasMissionRows ? `${missionCounts.complete} complete` : `${visibleContracts.length} progress tracks`}</span>
                                 {weeklyRefillLabel && (
                                     <span title={missions?.MissionMetadata?.WeeklyRefillTime || ""}>
                                         Weekly refills in {weeklyRefillLabel}
@@ -1341,13 +1525,16 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 )}
                             </div>
                         </div>
-                        <div className="progress-tab-bar" role="tablist" aria-label="Progress views">
+                        <div className="progress-tab-bar progress-preset-strip" role="tablist" aria-label="Progress views">
+                            <span className="progress-preset-label">Saved views</span>
                             {([
-                                ["daily", `Daily (${missionCounts.daily})`],
-                                ["weekly", `Weekly (${missionCounts.weekly})`],
                                 ["battlepass", `Battlepass (${battlepassContracts.length})`],
+                                ["daily", hasMissionRows ? `Daily (${missionCounts.activeDaily} active - ${missionCounts.daily} total)` : "Daily (not returned)"],
+                                ["weekly", hasMissionRows ? `Weekly (${missionCounts.activeWeekly} active - ${missionCounts.weekly} total)` : "Weekly (not returned)"],
                                 ["events", `Events (${eventContracts.length})`],
-                                ["contracts", `Other (${progressionContracts.length})`],
+                                ["contracts", `Contracts (${progressionContracts.length})`],
+                                ["onboarding", `Onboarding (${missionCounts.activeOnboarding} active / ${missionCounts.onboarding} total)`],
+                                ["other", `Other Missions (${missionCounts.activeOther} active / ${missionCounts.other} total)`],
                             ] as Array<[ProgressTab, string]>).map(([tab, label]) => (
                                 <button
                                     key={tab}
@@ -1360,7 +1547,48 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                             ))}
                         </div>
                         <div className="rank-card-body p-3">
-                            {(progressTab === "daily" || progressTab === "weekly") ? (
+                            <div className="progress-command-grid" aria-label="Progress overview">
+                                <button type="button" className="progress-command-panel progress-command-panel--daily" onClick={() => setProgressTab("daily")}>
+                                    <div className="progress-command-top">
+                                        <span>Daily Checkpoints</span>
+                                        <strong>{hasMissionRows ? `${dailyCheckpointSummary.completed}/${dailyCheckpointSummary.total}` : "--"}</strong>
+                                    </div>
+                                    <div className={`progress-mini-diamonds${hasMissionRows ? "" : " is-unknown"}`} aria-hidden="true">
+                                        {Array.from({ length: Math.min(hasMissionRows ? dailyCheckpointSummary.total : 4, 6) }).map((_, i) => (
+                                            <span key={i} className={i < dailyCheckpointSummary.completed ? "is-complete" : ""} />
+                                        ))}
+                                    </div>
+                                    <small>{hasMissionRows ? (dailyResetLabel ? `Resets in ${dailyResetLabel}` : "Reset time unknown") : "Riot returned no daily rows"}</small>
+                                </button>
+                                <button type="button" className="progress-command-panel progress-command-panel--weekly" onClick={() => setProgressTab("weekly")}>
+                                    <div className="progress-command-top">
+                                        <span>Weekly Missions</span>
+                                        <strong>{hasMissionRows ? `${missionCounts.activeWeekly} active` : "--"}</strong>
+                                    </div>
+                                    <div className="progress-command-meter">
+                                        <span style={{ width: `${missionCounts.weekly ? ((missionCounts.weekly - missionCounts.activeWeekly) / missionCounts.weekly) * 100 : 0}%` }} />
+                                    </div>
+                                    <small>{hasMissionRows ? (weeklyRefillLabel ? `Refills in ${weeklyRefillLabel}` : "Weekly refill not returned") : "Riot returned no weekly rows"}</small>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="progress-command-panel progress-command-panel--battlepass"
+                                    onClick={() => {
+                                        setProgressTab("battlepass");
+                                        if (activeBattlepass?.id) setExpandedBattlepassId(activeBattlepass.id);
+                                    }}
+                                >
+                                    <div className="progress-command-top">
+                                        <span>Battlepass</span>
+                                        <strong>Tier {activeBattlepassLevel}</strong>
+                                    </div>
+                                    <div className="progress-command-meter">
+                                        <span style={{ width: `${activeBattlepassPct}%` }} />
+                                    </div>
+                                    <small>{activeBattlepass ? "View full pass" : "No active pass returned"}</small>
+                                </button>
+                            </div>
+                            {isMissionProgressTab(progressTab) ? (
                                 <>
                                     {/* Daily checkpoint UI - mirrors the in-game
                                         Daily Checkpoints display. Always renders
@@ -1370,7 +1598,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         <div className="daily-checkpoint-strip">
                                             <div className="daily-checkpoint-header">
                                                 <span className="daily-checkpoint-label">CHECKPOINTS</span>
-                                                <span className="daily-checkpoint-xp">+1,000 XP · +150 PER CHECKPOINT</span>
+                                                <span className="daily-checkpoint-xp">
+                                                    {hasMissionRows
+                                                        ? `${dailyCheckpointSummary.completed} / ${dailyCheckpointSummary.total} complete${dailyCheckpointSummary.activeDailyMissions.length > 0 ? ` - ${dailyCheckpointSummary.activeDailyMissions.length} active` : " - all done"}`
+                                                        : "No live daily mission rows returned"}
+                                                </span>
                                             </div>
                                             <div className="daily-checkpoint-diamonds" role="list">
                                                 {Array.from({ length: dailyCheckpointSummary.total }).map((_, i) => {
@@ -1398,22 +1630,41 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                     {currentProgressMissions.length > 0 ? (
                                         <div className="missions-grid progress-rail">
                                             {currentProgressMissions.map(({ mission: m, meta, type, current, target, pct }) => {
-                                                const title = meta?.title || (type === "weekly" ? "Weekly Mission" : "Daily Mission");
+                                                const title = meta?.title || missionBucketLabel(type);
+                                                const description = meta?.description || "";
                                                 const xp = meta?.xp || 0;
+                                                const expiresAtMs = Date.parse(m.ExpirationTime);
+                                                const expiresIn = Number.isFinite(expiresAtMs) ? expiresAtMs - nowMs : 0;
+                                                const expiryLabel = m.Complete
+                                                    ? ""
+                                                    : expiresIn > 0
+                                                        ? formatMissionCountdown(expiresIn)
+                                                        : "Expired";
+                                                const fillColor = type === "weekly"
+                                                    ? "var(--yellow)"
+                                                    : type === "onboarding"
+                                                        ? "var(--accent)"
+                                                        : "var(--green)";
+                                                const typeChipClass = `mission-type-chip mission-type-chip--${type}`;
                                                 return (
                                                     <div key={m.ID} className={`mission-item-container progress-item-card${m.Complete ? " mission-item-container--complete" : ""}`}>
                                                         <div className="progress-item-topline">
-                                                            <span>{type}</span>
-                                                            <strong>{m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}</strong>
+                                                            <span className={typeChipClass}>{missionBucketLabel(type)}</span>
+                                                            <strong className="mission-xp-badge">
+                                                                {m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}
+                                                            </strong>
                                                         </div>
                                                         <div className="progress-item-title">{title}</div>
+                                                        {description && (
+                                                            <p className="mission-description">{description}</p>
+                                                        )}
                                                         <div className="rank-progress-wrap mt-3">
-                                                            <div className="rank-progress" style={{ height: "7px" }}>
-                                                                <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: type === "weekly" ? "var(--yellow)" : "var(--green)" }} />
+                                                            <div className="rank-progress" style={{ height: "8px" }}>
+                                                                <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: fillColor }} />
                                                             </div>
                                                             <div className="progress-foot">
-                                                                <span>{m.Complete ? "Finished" : "Progress"}</span>
-                                                                <span>{current} / {target}</span>
+                                                                <span>{m.Complete ? "Finished" : expiryLabel || "Progress"}</span>
+                                                                <span>{current.toLocaleString()} / {target.toLocaleString()}</span>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1422,8 +1673,16 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         </div>
                                     ) : (
                                         <div className="progress-empty-state">
-                                            <strong>No {progressTab} missions showing right now.</strong>
-                                            <span>Riot sometimes returns only currently active missions. Refresh after a game or when missions rotate.</span>
+                                            <strong>
+                                                {!hasMissionRows
+                                                    ? "Riot did not return mission rows for this account right now."
+                                                    : progressTab === "weekly" && missionCounts.weekly > 0
+                                                    ? "Weekly missions are complete."
+                                                    : progressTab === "onboarding" && missionCounts.onboarding > 0
+                                                        ? "Onboarding missions are complete."
+                                                        : `No ${progressTab} missions showing right now.`}
+                                            </strong>
+                                            <span>{activeBattlepass ? "Battlepass progress is still available above." : "Completed missions still appear here when Riot returns them."}</span>
                                         </div>
                                     )}
                                 </>
@@ -1436,6 +1695,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         const target = Math.max(meta?.totalXp || 0, earned);
                                         const pct = target > 0 ? Math.max(0, Math.min(100, (earned / target) * 100)) : 0;
                                         const totalLevels = meta?.totalLevels || 0;
+                                        const contractComplete = isContractComplete(contract);
 
                                         // XP-driven tier math. We don't trust
                                         // progressionLevelReached here because
@@ -1462,17 +1722,23 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             : 0;
                                         const intoLevel = Math.max(0, earned - currentLevelXp);
                                         const xpForNext = nextLevelXp != null ? Math.max(0, nextLevelXp - earned) : null;
+                                        const claimedLevelCount = levels.length > 0
+                                            ? Math.max(0, Math.min(levels.length, currentTierIndex + 1))
+                                            : Math.max(0, contract.progressionLevelReached || 0);
+                                        const remainingLevelCount = totalLevels > 0 ? Math.max(0, totalLevels - claimedLevelCount) : 0;
+                                        const nextRewardLevel = currentTierIndex + 1 < levels.length ? currentTierIndex + 2 : null;
+                                        const statusLabel = contractComplete
+                                            ? "Completed"
+                                            : isActiveSpecial
+                                                ? "Current"
+                                                : "In progress";
 
-                                        // Build a wider tier strip. We want
-                                        // a few claimed (with checkmarks), the
-                                        // current (highlighted), and several
-                                        // upcoming tiers. Currency tiers are
-                                        // filtered into a separate "rewards"
-                                        // row so they don't share the same
-                                        // visual treatment as cosmetic items.
-                                        const stripStart = Math.max(0, currentTierIndex - 2);
-                                        const stripEnd = Math.min(levels.length, currentTierIndex + 9);
-                                        const stripWindow = levels.slice(stripStart, stripEnd);
+                                        // Battlepass starts compact; clicking opens the full reward track.
+                                        const stripStart = Math.max(0, currentTierIndex - 4);
+                                        const stripEnd = Math.min(levels.length, Math.max(currentTierIndex + 10, 12));
+                                        const isBattlepassView = progressTab === "battlepass";
+                                        const isBattlepassExpanded = isBattlepassView && expandedBattlepassId === contract.id;
+                                        const displayedLevels = isBattlepassExpanded ? levels : levels.slice(stripStart, stripEnd);
                                         const cosmeticTiers: Array<{
                                             tierNumber: number;
                                             xp: number;
@@ -1491,8 +1757,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             isClaimed: boolean;
                                             isFuture: boolean;
                                         }> = [];
-                                        stripWindow.forEach((lvl, idx) => {
-                                            const realIndex = stripStart + idx;
+                                        displayedLevels.forEach((lvl, idx) => {
+                                            const realIndex = isBattlepassExpanded ? idx : stripStart + idx;
                                             const r = (lvl as unknown as { reward?: { type?: string; uuid?: string; amount?: number } })?.reward;
                                             const type = r?.type || "";
                                             const xpVal = Number((lvl as unknown as { xp?: number })?.xp || 0);
@@ -1525,7 +1791,20 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         const endLabel = relativeCountdown(meta?.expirationDate, nowMs);
 
                                         return (
-                                            <div key={contract.id} className={`contract-item-container progress-item-card${isActiveSpecial ? " contract-item-container--active" : ""}`}>
+                                            <div
+                                                key={contract.id}
+                                                className={`contract-item-container progress-item-card${isBattlepassExpanded ? " contract-item-container--full" : ""}${isBattlepassView ? " contract-item-container--clickable" : ""}${isActiveSpecial ? " contract-item-container--active" : ""}${contractComplete ? " contract-item-container--complete" : ""}`}
+                                                role={isBattlepassView ? "button" : undefined}
+                                                tabIndex={isBattlepassView ? 0 : undefined}
+                                                aria-expanded={isBattlepassView ? isBattlepassExpanded : undefined}
+                                                onClick={isBattlepassView ? () => setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id) : undefined}
+                                                onKeyDown={isBattlepassView ? (event) => {
+                                                    if (event.key === "Enter" || event.key === " ") {
+                                                        event.preventDefault();
+                                                        setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id);
+                                                    }
+                                                } : undefined}
+                                            >
                                                 <div className="contract-item-top">
                                                     {meta?.icon ? (
                                                         <img src={meta.icon} alt="" className="contract-item-icon" />
@@ -1536,9 +1815,17 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                         <div className="contract-item-name">{meta?.name || (isActiveSpecial ? "Battlepass" : "Contract")}</div>
                                                         <div className="contract-item-meta">
                                                             {isActiveSpecial ? "Active battlepass" : meta?.relationType || "Progression"}
-                                                            {endLabel && <span className="contract-item-timer"> · {endLabel}</span>}
+                                                            {endLabel && <span className="contract-item-timer"> - {endLabel}</span>}
                                                         </div>
                                                     </div>
+                                                    <span className={`contract-status-chip${contractComplete ? " is-complete" : isActiveSpecial ? " is-current" : ""}`}>
+                                                        {isBattlepassExpanded ? "Full pass" : statusLabel}
+                                                    </span>
+                                                </div>
+                                                <div className="contract-progress-summary" aria-label="Contract progress summary">
+                                                    <span><strong>{claimedLevelCount}</strong> claimed</span>
+                                                    <span><strong>{displayLevel}</strong> current</span>
+                                                    <span><strong>{remainingLevelCount}</strong> next</span>
                                                 </div>
                                                 <div className="contract-item-levels">
                                                     <span className="contract-item-level">
@@ -1555,13 +1842,15 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                 </div>
                                                 <div className="contract-item-foot">
                                                     <span className="contract-item-next">
-                                                        {xpForNext != null && xpForNext > 0
+                                                        {contractComplete
+                                                            ? "All rewards claimed"
+                                                            : xpForNext != null && xpForNext > 0
                                                             ? `${xpForNext.toLocaleString()} XP to next reward`
                                                             : intoLevel > 0
                                                                 ? `${intoLevel.toLocaleString()} XP into this level`
                                                                 : "Maxed out"}
                                                     </span>
-                                                    <span className="contract-item-progress-foot">Progress</span>
+                                                    <span className="contract-item-progress-foot">{nextRewardLevel ? `Next T${nextRewardLevel}` : "Complete"}</span>
                                                 </div>
 
                                                 {cosmeticTiers.length > 0 && (
@@ -1616,14 +1905,18 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 </div>
                             ) : (
                                 <div className="progress-empty-state">
-                                    <strong>No {progressTab === "battlepass" ? "battlepass" : "contract"} progress found.</strong>
-                                    <span>Connect a refreshed Riot session or play a match, then refresh Profile.</span>
+                                    <strong>No active {progressTab === "battlepass" ? "battlepass" : "contract"} progress found.</strong>
+                                    <span>
+                                        {completedContractCount > 0
+                                            ? `${completedContractCount} completed contract${completedContractCount === 1 ? "" : "s"} hidden from the active view.`
+                                            : "Connect a refreshed Riot session or play a match, then refresh Profile."}
+                                    </span>
                                 </div>
                             )}
                         </div>
                     </div>
-                    {/* Daily & Weekly Missions — main column */}
-                    <div className="rank-card clip-tactical mb-4">
+                    {/* Daily & Weekly Missions - main column */}
+                    <div className="rank-card clip-tactical mb-4 profile-rr-module">
                         <div className="rank-card-header">
                             <span>Recent RR</span>
                             <span>{rrHistory?.snapshots?.length ?? 0} ranked games</span>
@@ -1638,27 +1931,24 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         </div>
                         {(() => {
                             // "Next Up" banner: shown when the user
-                            // is in pregame or matchmaking, mirrors the
-                            // agent pick on the live overlay so they know
-                            // what's coming next before the row lands.
-                            const isLivePregame = liveStatus?.phase === "pregame";
-                            const isPartyQueueing = partyStatus?.phase === "matchmaking" || partyStatus?.phase === "pregame";
-                            if (!isLivePregame && !isPartyQueueing) {
-                                return null;
-                            }
+                            // is in pregame or matchmaking. Mirrors the
+                            // queue + map that will load into the
+                            // live-match overlay next, so they can
+                            // confirm what's coming before the row lands.
+                            const inQueue =
+                                liveStatus?.phase === "pregame" ||
+                                partyStatus?.phase === "matchmaking" ||
+                                partyStatus?.phase === "pregame";
+                            if (!inQueue) return null;
                             const nextQueue = liveStatus?.queueId || partyStatus?.queueId || "Queue";
                             const nextMap = maps[liveStatus?.mapId?.toLowerCase?.() || ""]?.name
                                 || liveStatus?.mapId?.slice(0, 12);
-                            const localLivePlayer = [...(liveStatus?.allyTeam ?? []), ...(liveStatus?.enemyTeam ?? [])]
-                                .find((player) => player.isLocal);
-                            const nextAgent = agents[localLivePlayer?.agentId?.toLowerCase?.() || ""]?.name;
                             return (
                                 <div className="match-next-up-banner">
                                     <span className="match-next-up-kicker">NEXT UP</span>
                                     <div className="match-next-up-body">
                                         <strong>{QUEUE_LABEL[nextQueue] || nextQueue}</strong>
                                         {nextMap && <span className="match-next-up-meta">{nextMap}</span>}
-                                        {nextAgent && <span className="match-next-up-meta">Playing as {nextAgent}</span>}
                                     </div>
                                     <span className="match-next-up-pulse" aria-hidden="true" />
                                 </div>
@@ -1672,7 +1962,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                             </div>
                         ) : (
                             <div className="match-history-list">
-                                {history.map((match, idx) => (
+                                {history.map((match) => (
                                     <MatchRow
                                         key={match.matchId}
                                         match={match}
@@ -1688,10 +1978,6 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             setSelectedRegion(reg);
                                         }}
                                         localRegion={currentRegion}
-                                        // Flag the most recent match (the one
-                                        // that would be the user's "last game"
-                                        // for queue-context / wraparound).
-                                        isNext={idx === 0}
                                     />
                                 ))}
                             </div>
@@ -1782,6 +2068,147 @@ function RiotSignalCard({
     );
 }
 
+function FriendPresenceList({
+    socialStatus,
+    region,
+    onSelectPlayer,
+}: {
+    socialStatus: SocialStatusResponse | null;
+    region: string;
+    onSelectPlayer: (puuid: string, region: string) => void;
+}) {
+    const isAvailable = socialStatus?.status === "ok";
+    const allPresences = socialStatus?.presences ?? [];
+    const online = allPresences.filter((p) => p.state && p.state.toLowerCase() !== "offline");
+    const offline = allPresences.filter((p) => p.state && p.state.toLowerCase() === "offline");
+    const [showOffline, setShowOffline] = useState(false);
+    const [collapsed, setCollapsed] = useState(false);
+    const sourceLabel = socialStatus?.source === "local"
+        ? "Local roster"
+        : socialStatus?.remoteStatus === "config"
+            ? "Token config"
+            : "Token";
+    const remoteDetail = socialStatus?.remoteChatHost
+        ? `${socialStatus.remoteChatHost}${socialStatus.remoteChatPort ? `:${socialStatus.remoteChatPort}` : ""}`
+        : "";
+
+    return (
+        <div className="friend-presence-panel" aria-label="Friend presence">
+            <div className="friend-presence-header">
+                <div>
+                    <span>Friend Presence</span>
+                    <small>
+                        {isAvailable
+                            ? `${sourceLabel} · ${socialStatus?.onlineCount ?? 0}/${socialStatus?.friendCount ?? 0} online`
+                            : socialStatus?.remoteStatus === "config"
+                                ? `${sourceLabel} ready`
+                                : `${sourceLabel} unavailable`}
+                    </small>
+                    {remoteDetail && <small className="friend-presence-remote">{remoteDetail}</small>}
+                </div>
+                <div className="friend-presence-header-actions">
+                    {isAvailable && (
+                        <span className="friend-presence-count">{socialStatus?.inGameCount ?? 0} in VALORANT</span>
+                    )}
+                    {isAvailable && allPresences.length > 0 && (
+                        <button
+                            type="button"
+                            className="friend-presence-toggle"
+                            onClick={() => setCollapsed((v) => !v)}
+                            title={collapsed ? "Expand friend list" : "Collapse friend list"}
+                            aria-expanded={!collapsed}
+                        >
+                            {collapsed ? "▾" : "▴"}
+                        </button>
+                    )}
+                </div>
+            </div>
+            {!isAvailable ? (
+                <div className="friend-presence-empty">
+                    {socialStatus?.remoteStatus === "config"
+                        ? "Riot chat host resolved. Live roster still needs local Riot Client or XMPP support."
+                        : socialStatus?.error || "Token can resolve chat config; live roster still needs local Riot Client or XMPP."}
+                </div>
+            ) : collapsed ? (
+                <div className="friend-presence-empty">Friend list collapsed.</div>
+            ) : allPresences.length === 0 ? (
+                <div className="friend-presence-empty">No friends on this account yet.</div>
+            ) : (
+                <>
+                    {online.length > 0 && (
+                        <div className="friend-presence-list">
+                            {online.map((presence, index) => {
+                                const name = presence.name || (presence.puuid ? `Player ${presence.puuid.slice(0, 8)}` : "Unknown friend");
+                                const canOpen = Boolean(presence.puuid);
+                                return (
+                                    <button
+                                        key={presence.puuid || `online-${name}-${index}`}
+                                        type="button"
+                                        className="friend-presence-row"
+                                        onClick={() => {
+                                            if (presence.puuid) onSelectPlayer(presence.puuid, region);
+                                        }}
+                                        disabled={!canOpen}
+                                        title={canOpen ? "Open cached profile for this player" : "No PUUID returned for this presence"}
+                                    >
+                                        <span className={`friend-presence-dot${presence.product?.toLowerCase() === "valorant" ? " is-valorant" : ""}`} aria-hidden="true" />
+                                        <span className="friend-presence-main">
+                                            <strong>{name}</strong>
+                                            <small>
+                                                {presence.product || "Online"}
+                                                {presence.queueId ? ` · ${QUEUE_LABEL[presence.queueId] || presence.queueId}` : ""}
+                                            </small>
+                                        </span>
+                                        <span className="friend-presence-state">{presence.state || "online"}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {offline.length > 0 && (
+                        <div className="friend-presence-offline-section">
+                            <button
+                                type="button"
+                                className="friend-presence-offline-toggle"
+                                onClick={() => setShowOffline((v) => !v)}
+                                aria-expanded={showOffline}
+                            >
+                                {showOffline ? "▾" : "▸"} {offline.length} offline
+                            </button>
+                            {showOffline && (
+                                <div className="friend-presence-list friend-presence-list--offline">
+                                    {offline.map((presence, index) => {
+                                        const name = presence.name || (presence.puuid ? `Player ${presence.puuid.slice(0, 8)}` : "Unknown friend");
+                                        const canOpen = Boolean(presence.puuid);
+                                        return (
+                                            <button
+                                                key={presence.puuid || `offline-${name}-${index}`}
+                                                type="button"
+                                                className="friend-presence-row friend-presence-row--offline"
+                                                onClick={() => {
+                                                    if (presence.puuid) onSelectPlayer(presence.puuid, region);
+                                                }}
+                                                disabled={!canOpen}
+                                                title={canOpen ? "Open cached profile for this player" : "No PUUID returned for this presence"}
+                                            >
+                                                <span className="friend-presence-dot" aria-hidden="true" />
+                                                <span className="friend-presence-main">
+                                                    <strong>{name}</strong>
+                                                    <small>offline</small>
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </>
+            )}
+        </div>
+    );
+}
+
 function MatchRow({
     match,
     detail,
@@ -1793,9 +2220,8 @@ function MatchRow({
     onToggle,
     onSelectPlayer,
     localRegion,
-    isNext,
 }: {
-    match: MatchSummary;
+    match: ProfileMatchSummary;
     detail?: ProfileMatchDetails;
     expanded: boolean;
     loading: boolean;
@@ -1805,7 +2231,6 @@ function MatchRow({
     onToggle: () => void;
     onSelectPlayer?: (puuid: string, region: string) => void;
     localRegion: string;
-    isNext?: boolean;
 }) {
     const agentMeta = agents[match.localPlayer.characterId?.toLowerCase?.() || ""];
     const mapMeta = maps[match.mapID?.toLowerCase?.() || ""];
@@ -1830,7 +2255,7 @@ function MatchRow({
     const kdaText = `${match.localPlayer.kills}/${match.localPlayer.deaths}/${match.localPlayer.assists}`;
 
     return (
-        <div className={`match-card-wrap ${expanded ? "expanded" : ""} ${isNext ? "is-next" : ""}`}>
+        <div className={`match-card-wrap ${expanded ? "expanded" : ""}`}>
             <button
                 type="button"
                 className={`match-history-row clip-tactical-sm ${resultClass}`}
@@ -1887,7 +2312,17 @@ function MatchRow({
                     <div className="match-stat">
                         <span className="match-stat-kicker">HS%</span>
                         <strong className={`match-stat-value ${hsColor(hsPct)}`}>{fmtPct(hsPct)}</strong>
-                        <span className="match-stat-sub">{Math.round((match.localPlayer as any).headshots || 0)} / {(Math.round((match.localPlayer as any).headshots || 0) + Math.round((match.localPlayer as any).bodyshots || 0) + Math.round((match.localPlayer as any).legshots || 0)) || 0} hits</span>
+                        <span className="match-stat-sub">
+                            {(() => {
+                                const lp = detail?.players?.find((p) => p.isLocal) ?? match.localPlayer;
+                                const head = lp.headshots || 0;
+                                const body = lp.bodyshots || 0;
+                                const leg = lp.legshots || 0;
+                                const total = head + body + leg;
+                                if (total === 0) return "no shot data";
+                                return `${head} / ${total} hits`;
+                            })()}
+                        </span>
                     </div>
                     <div className="match-stat">
                         <span className="match-stat-kicker">ADR</span>
@@ -1921,9 +2356,8 @@ function MatchRow({
                     </div>
                 )}
 
-                {/* Trailing "next" pill + expand chevron */}
+                {/* Trailing expand chevron */}
                 <div className="match-row-tail">
-                    {isNext && <span className="match-next-pill">NEXT</span>}
                     <span className="match-expand-btn" aria-hidden="true">
                         {expanded ? "▲" : loading ? "…" : "▼"}
                     </span>

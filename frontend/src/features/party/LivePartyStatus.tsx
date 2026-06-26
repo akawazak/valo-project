@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getPartyStatus, PartyMember, PartyStatusResponse } from "@/services/api";
+import {
+    getPartyStatus,
+    getSocialStatus,
+    PartyMember,
+    PartyStatusResponse,
+    SocialPresence,
+    SocialStatusResponse,
+} from "@/services/api";
 import { useData } from "@/context/DataContext";
 import "./LivePartyStatus.css";
 
@@ -43,6 +50,7 @@ type TierMeta = { name: string; icon: string };
 export default function LivePartyStatus() {
     const { activeAccount, isBackendOnline } = useData();
     const [party, setParty] = useState<PartyStatusResponse | null>(null);
+    const [social, setSocial] = useState<SocialStatusResponse | null>(null);
     const [stale, setStale] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [expanded, setExpanded] = useState(false);
@@ -56,6 +64,7 @@ export default function LivePartyStatus() {
         if (!activeAccount || !isBackendOnline) {
             latestPartyRef.current = null;
             setParty(null);
+            setSocial(null);
             setStale(false);
             setExpanded(false);
             return;
@@ -63,14 +72,17 @@ export default function LivePartyStatus() {
 
         let active = true;
         const poll = async () => {
-            const data = await getPartyStatus();
+            const [data, socialData] = await Promise.all([
+                getPartyStatus().catch((err) => ({ phase: "error" as const, error: err instanceof Error ? err.message : String(err || "") })),
+                getSocialStatus().catch(() => null),
+            ]);
             if (!active) return;
+            setSocial(socialData);
 
             if (data.phase === "none") {
                 latestPartyRef.current = null;
                 setParty(null);
                 setStale(false);
-                setExpanded(false);
                 return;
             }
 
@@ -150,19 +162,33 @@ export default function LivePartyStatus() {
         };
     }, []);
 
-    if (!party || party.phase === "none" || !party.members?.length) {
+    const presences = visiblePresences(social);
+    const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
+    const hasFriends = presences.length > 0;
+
+    if (!hasParty && !hasFriends) {
         return null;
     }
 
-    const members = party.members;
+    const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
 
     // Compact pill — small, bottom-left, click to expand into the detailed view.
     if (!expanded) {
+        if (!hasParty) {
+            return (
+                <FriendsPill
+                    social={social}
+                    presences={presences}
+                    onOpen={() => setExpanded(true)}
+                />
+            );
+        }
         return (
             <PartyPill
                 local={local}
-                party={party}
+                party={party!}
+                friendCount={presences.length}
                 card={cardCache[local.cardId?.toLowerCase()]}
                 tier={tierCache[local.competitiveTier]}
                 onOpen={() => setExpanded(true)}
@@ -175,13 +201,16 @@ export default function LivePartyStatus() {
             <div key={refreshKey} className="live-party-refresh" />
             <div className="live-party-header">
                 <div>
-                    <div className="live-party-kicker">Live Party</div>
-                    <div className="live-party-title">{phaseLabel(party.phase, party.queueId)}</div>
+                    <div className="live-party-kicker">{hasParty ? "Live Party" : "Friend Presence"}</div>
+                    <div className="live-party-title">
+                        {hasParty ? phaseLabel(party!.phase, party!.queueId) : `${social?.onlineCount || presences.length} online`}
+                    </div>
                 </div>
                 <div className="live-party-header-actions">
                     <div className="live-party-meta">
-                        <span>{members.length}/5</span>
-                        {party.source && <span>{party.source}</span>}
+                        {hasParty && <span>{members.length}/5</span>}
+                        {hasFriends && <span>{presences.length} friends</span>}
+                        {(party?.source || social?.source) && <span>{party?.source || social?.source}</span>}
                         {stale && <span>stale</span>}
                     </div>
                     <button
@@ -195,16 +224,19 @@ export default function LivePartyStatus() {
                     </button>
                 </div>
             </div>
-            <div className="live-party-members">
-                {members.map((member) => (
-                    <PartyMemberRow
-                        key={member.puuid}
-                        member={member}
-                        card={cardCache[member.cardId?.toLowerCase()]}
-                        tier={tierCache[member.competitiveTier]}
-                    />
-                ))}
-            </div>
+            {hasParty && (
+                <div className="live-party-members">
+                    {members.map((member) => (
+                        <PartyMemberRow
+                            key={member.puuid}
+                            member={member}
+                            card={cardCache[member.cardId?.toLowerCase()]}
+                            tier={tierCache[member.competitiveTier]}
+                        />
+                    ))}
+                </div>
+            )}
+            <FriendPresenceList social={social} presences={presences} />
         </aside>
     );
 }
@@ -212,12 +244,14 @@ export default function LivePartyStatus() {
 function PartyPill({
     local,
     party,
+    friendCount,
     card,
     tier,
     onOpen,
 }: {
     local: PartyMember;
     party: PartyStatusResponse;
+    friendCount: number;
     card?: CardMeta;
     tier?: TierMeta;
     onOpen: () => void;
@@ -244,12 +278,97 @@ function PartyPill({
                 <span className="live-party-pill-kicker">{phaseShort(party.phase)}</span>
                 <span className="live-party-pill-title">{local.name}</span>
                 <span className="live-party-pill-sub">
-                    {tier?.name ? tier.name : "Unranked"} · {party.members?.length || 0}/5
+                    {tier?.name ? tier.name : "Unranked"} - {party.members?.length || 0}/5
+                    {friendCount > 0 ? ` - ${friendCount} friends` : ""}
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">›</span>
         </button>
     );
+}
+
+function FriendsPill({
+    social,
+    presences,
+    onOpen,
+}: {
+    social: SocialStatusResponse | null;
+    presences: SocialPresence[];
+    onOpen: () => void;
+}) {
+    const first = presences[0];
+    return (
+        <button
+            type="button"
+            className="live-party-pill is-clickable is-friends"
+            onClick={onOpen}
+            aria-label="Open friend presence panel"
+            title="Open friends"
+        >
+            <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
+                <span className="live-party-pill-avatar-letter">{presences.length}</span>
+            </span>
+            <span className="live-party-pill-body">
+                <span className="live-party-pill-kicker">Friends Online</span>
+                <span className="live-party-pill-title">{first?.name || "Riot friends"}</span>
+                <span className="live-party-pill-sub">
+                    {social?.onlineCount || presences.length} online - {social?.inGameCount || 0} in game
+                </span>
+            </span>
+            <span className="live-party-pill-arrow" aria-hidden="true">&gt;</span>
+        </button>
+    );
+}
+
+function FriendPresenceList({
+    social,
+    presences,
+}: {
+    social: SocialStatusResponse | null;
+    presences: SocialPresence[];
+}) {
+    if (!presences.length) {
+        if (social?.status === "unavailable" && social.error) {
+            return (
+                <div className="live-party-friends">
+                    <div className="live-party-section-title">Friends</div>
+                    <div className="live-party-friend-empty">{social.error}</div>
+                </div>
+            );
+        }
+        return null;
+    }
+
+    return (
+        <div className="live-party-friends">
+            <div className="live-party-section-title">Friends</div>
+            <div className="live-party-friend-list">
+                {presences.map((presence, index) => (
+                    <div className="live-party-friend-row" key={presence.puuid || `${presence.name}-${index}`}>
+                        <span className="live-party-friend-dot" aria-hidden="true" />
+                        <span className="live-party-friend-main">
+                            <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
+                            <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
+                        </span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function visiblePresences(social: SocialStatusResponse | null) {
+    return (social?.presences || [])
+        .filter((presence) => !!(presence.name || presence.product || presence.state || presence.queueId))
+        .slice(0, 8);
+}
+
+function presenceLabel(presence: SocialPresence) {
+    const parts = [
+        presence.product || "Online",
+        presence.queueId ? queueName(presence.queueId) : presence.state,
+    ].filter(Boolean);
+    return parts.join(" - ");
 }
 
 function PartyMemberRow({

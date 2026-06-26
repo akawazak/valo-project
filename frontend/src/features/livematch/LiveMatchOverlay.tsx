@@ -34,6 +34,7 @@ export default function LiveMatchOverlay() {
     const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
+    const [selectedPlayer, setSelectedPlayer] = useState<LivePlayer | null>(null);
 
     // ---- Local countdown timer ----
     // The backend only emits timeLeft at each 5s poll. We capture the
@@ -264,6 +265,7 @@ export default function LiveMatchOverlay() {
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
+                                onSelect={setSelectedPlayer}
                             />
                         ))}
                     </div>
@@ -282,11 +284,20 @@ export default function LiveMatchOverlay() {
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
+                                onSelect={setSelectedPlayer}
                             />
                         ))}
                     </div>
                 </div>
             </div>
+            {selectedPlayer && (
+                <LivePlayerModal
+                    player={selectedPlayer}
+                    agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
+                    tier={tierCache[selectedPlayer.competitiveTier]}
+                    onClose={() => setSelectedPlayer(null)}
+                />
+            )}
         </div>
     );
 }
@@ -300,10 +311,12 @@ function PlayerCard({
     player,
     agent,
     tier,
+    onSelect,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
+    onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
     const isSelecting = player.selectionState === "selected";
@@ -311,7 +324,12 @@ function PlayerCard({
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
 
     return (
-        <div className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}>
+        <button
+            type="button"
+            className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}
+            onClick={() => onSelect(player)}
+            aria-label={`Open details for ${player.name || "player"}`}
+        >
             {agent?.full && (
                 <div className="agent-card-full-art" style={{ backgroundImage: `url(${agent.full})` }}></div>
             )}
@@ -362,6 +380,107 @@ function PlayerCard({
                     {isSelecting && <span className="badge-selecting">SELECTING</span>}
                 </div>
             </div>
+        </button>
+    );
+}
+
+function LivePlayerModal({
+    player,
+    agent,
+    tier,
+    onClose,
+}: {
+    player: LivePlayer;
+    agent?: { name: string; icon: string; full: string };
+    tier?: { name: string; icon: string };
+    onClose: () => void;
+}) {
+    const [stats, setStats] = useState<LivePlayerStats | null>(null);
+
+    useEffect(() => {
+        if (!player.puuid || !player.agentId) {
+            setStats(null);
+            return;
+        }
+        let cancelled = false;
+        getLivePlayerStats(player.puuid, player.agentId).then((s) => {
+            if (!cancelled) setStats(s);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [player.agentId, player.puuid]);
+
+    const rankName = tier?.name || (player.competitiveTier > 0 ? `Tier ${player.competitiveTier}` : "Rank unavailable");
+    const selection = player.selectionState === "locked"
+        ? "Locked"
+        : player.selectionState === "selected"
+            ? "Selecting"
+            : "Not selected";
+    const losses = stats?.loaded ? Math.max(0, stats.matches - stats.wins) : 0;
+
+    return (
+        <div className="live-player-modal-backdrop" role="presentation" onMouseDown={onClose}>
+            <section
+                className="live-player-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`${player.name || "Player"} details`}
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                {agent?.full && (
+                    <div className="live-player-modal-art" style={{ backgroundImage: `url(${agent.full})` }} aria-hidden="true" />
+                )}
+                <button type="button" className="live-player-modal-close" onClick={onClose} aria-label="Close player details">
+                    <span aria-hidden="true">×</span>
+                </button>
+                <div className="live-player-modal-main">
+                    <div className="live-player-modal-avatar">
+                        {agent?.icon ? (
+                            <img src={agent.icon} alt={agent.name} />
+                        ) : (
+                            <span>?</span>
+                        )}
+                    </div>
+                    <div className="live-player-modal-title">
+                        <span className="live-player-modal-kicker">{player.isLocal ? "Your player" : "Live player"}</span>
+                        <h2>{player.name || "Hidden player"}</h2>
+                        <p>{agent?.name || "Agent unavailable"} · {selection}</p>
+                    </div>
+                </div>
+
+                <div className="live-player-modal-grid">
+                    <InfoTile label="Rank" value={rankName} detail={player.rankedRating > 0 ? `${player.rankedRating} RR` : "RR unavailable"} icon={tier?.icon} />
+                    <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
+                    <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
+                    <InfoTile label="Identity" value={player.cardId ? "Card available" : "Unavailable"} detail={player.cardId || "Not returned by live endpoint"} />
+                </div>
+
+                <div className="live-player-modal-note">
+                    Only live endpoint fields and cached agent stats are shown here. Missing Riot fields stay hidden instead of being guessed.
+                </div>
+            </section>
+        </div>
+    );
+}
+
+function InfoTile({
+    label,
+    value,
+    detail,
+    icon,
+}: {
+    label: string;
+    value: string;
+    detail: string;
+    icon?: string;
+}) {
+    return (
+        <div className="live-player-info-tile">
+            {icon && <img src={icon} alt="" aria-hidden="true" />}
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <small>{detail}</small>
         </div>
     );
 }

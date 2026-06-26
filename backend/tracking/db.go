@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS match_players (
     teamId          TEXT    NOT NULL,
     gameName        TEXT    NOT NULL DEFAULT '',
     tagLine         TEXT    NOT NULL DEFAULT '',
+    playerCardId    TEXT    NOT NULL DEFAULT '',
+    playerTitleId   TEXT    NOT NULL DEFAULT '',
     characterId     TEXT    NOT NULL,
     accountLevel    INTEGER NOT NULL DEFAULT 0,
     competitiveTier INTEGER NOT NULL DEFAULT 0,
@@ -225,7 +227,13 @@ func ensureMatchPlayerNameColumns(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "match_players", "gameName", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return addColumnIfMissing(db, "match_players", "tagLine", "TEXT NOT NULL DEFAULT ''")
+	if err := addColumnIfMissing(db, "match_players", "tagLine", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "match_players", "playerCardId", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumnIfMissing(db, "match_players", "playerTitleId", "TEXT NOT NULL DEFAULT ''")
 }
 
 func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
@@ -354,10 +362,10 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO match_players
-		    (matchID, subject, teamId, gameName, tagLine, characterId, accountLevel, competitiveTier,
+		    (matchID, subject, teamId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		     kills, deaths, assists, score, headshots, bodyshots, legshots,
 		     damageDealt, roundsPlayed, isLocal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare player insert: %w", err)
@@ -371,6 +379,8 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 			p.TeamID,
 			p.GameName,
 			p.TagLine,
+			p.PlayerCardID,
+			p.PlayerTitleID,
 			strings.ToLower(p.CharacterID),
 			p.AccountLevel,
 			p.CompetitiveTier,
@@ -422,7 +432,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	}
 
 	rows, err := db.Query(`
-		SELECT matchID, subject, teamId, gameName, tagLine, characterId, accountLevel, competitiveTier,
+		SELECT matchID, subject, teamId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		       kills, deaths, assists, score, headshots, bodyshots, legshots,
 		       damageDealt, roundsPlayed, isLocal
 		FROM match_players WHERE matchID = ? ORDER BY teamId, score DESC`, matchID)
@@ -437,6 +447,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 		var isLocal int
 		if err := rows.Scan(
 			&p.MatchID, &p.Subject, &p.TeamID, &p.GameName, &p.TagLine,
+			&p.PlayerCardID, &p.PlayerTitleID,
 			&p.CharacterID, &p.AccountLevel, &p.CompetitiveTier,
 			&p.Kills, &p.Deaths, &p.Assists, &p.Score,
 			&p.Headshots, &p.Bodyshots, &p.Legshots, &p.DamageDealt,
@@ -824,15 +835,23 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	puuid = strings.ToLower(puuid)
 	out := &Overview{Puuid: puuid}
 
-	// Look up the name and tagline from match_players
-	var name, tag string
+	// Look up the latest cached identity fields from match details. Riot's
+	// match-details playerIdentity block is the reliable source for other
+	// players' cards/titles once their match rows have been synced.
+	var name, tag, playerCardID, playerTitleID string
 	_ = db.QueryRow(`
-		SELECT gameName, tagLine FROM match_players
-		WHERE subject = ? AND gameName != ''
+		SELECT mp.gameName, mp.tagLine, mp.playerCardId, mp.playerTitleId
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE mp.subject = ?
+		  AND (mp.gameName != '' OR mp.playerCardId != '' OR mp.playerTitleId != '')
+		ORDER BY m.gameStartMillis DESC
 		LIMIT 1
-	`, puuid).Scan(&name, &tag)
+	`, puuid).Scan(&name, &tag, &playerCardID, &playerTitleID)
 	out.GameName = name
 	out.TagLine = tag
+	out.PlayerCardID = playerCardID
+	out.PlayerTitleID = playerTitleID
 
 	// Latest competitive state derived from match_players (competitiveTier
 	// comes from Riot per player per match; we take the freshest value).
@@ -956,7 +975,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		    COALESCE(SUM(mp.kills), 0),
 		    COALESCE(SUM(mp.deaths), 0),
 		    COALESCE(SUM(mp.assists), 0),
-		    COALESCE(SUM(mp.kills), 0),
+		    COALESCE(SUM(mp.headshots + mp.bodyshots + mp.legshots), 0),
 		    COALESCE(SUM(mp.headshots), 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
@@ -1071,7 +1090,8 @@ func deriveLocalPlayer(p LocalPlayerRow) LocalPlayerRow {
 	}
 	p.ADR = round1(float64(p.DamageDealt) / float64(p.RoundsPlayed))
 	p.ACS = round1(float64(p.Score) / float64(p.RoundsPlayed))
-	p.HSPct = round1(float64(p.Headshots) / float64(maxInt(p.Kills, 1)) * 100.0)
+	totalShots := p.Headshots + p.Bodyshots + p.Legshots
+	p.HSPct = round1(float64(p.Headshots) / float64(maxInt(totalShots, 1)) * 100.0)
 	p.KD = ratio(p.Kills, p.Deaths)
 	p.KDA = ratio(p.Kills+p.Assists, p.Deaths)
 	return p
@@ -1118,6 +1138,8 @@ type parsedPlayer struct {
 	TeamID          string
 	GameName        string
 	TagLine         string
+	PlayerCardID    string
+	PlayerTitleID   string
 	CharacterID     string
 	AccountLevel    int
 	CompetitiveTier int
@@ -1153,6 +1175,8 @@ type rawMatchDetails struct {
 		Subject        string `json:"subject"`
 		GameName       string `json:"gameName"`
 		TagLine        string `json:"tagLine"`
+		PlayerCardID   string `json:"playerCard"`
+		PlayerTitleID  string `json:"playerTitle"`
 		PlayerIdentity struct {
 			GameName         string `json:"gameName"`
 			TagLine          string `json:"tagLine"`
@@ -1286,6 +1310,8 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 		if pl.TagLine == "" {
 			pl.TagLine = p.PlayerIdentity.TagLine
 		}
+		pl.PlayerCardID = p.PlayerCardID
+		pl.PlayerTitleID = p.PlayerTitleID
 		if p.PlayerIdentity.Incognito || p.PlayerIdentity.HideAccountLevel {
 			pl.AccountLevel = 0
 		}

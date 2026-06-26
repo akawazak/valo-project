@@ -74,6 +74,14 @@ func (m *SyncManager) InFlight(puuid string) bool {
 // fetch errors are logged and skipped — they do NOT abort the whole
 // sync (see design doc §4.3).
 func (m *SyncManager) Start(puuid, region string) (started bool, err error) {
+	return m.StartWithOptions(puuid, region, false)
+}
+
+// StartWithOptions is Start plus an explicit refreshCached mode. When
+// refreshCached is true, the recent history window is fetched again even if
+// match rows already exist locally. This is useful after parser/schema fixes
+// because old cached match_details rows may lack newly captured fields.
+func (m *SyncManager) StartWithOptions(puuid, region string, refreshCached bool) (started bool, err error) {
 	if puuid == "" {
 		return false, fmt.Errorf("tracking: SyncManager.Start: puuid is required")
 	}
@@ -100,7 +108,7 @@ func (m *SyncManager) Start(puuid, region string) (started bool, err error) {
 				cb(puuid, runErr)
 			}
 		}()
-		if runErr = m.runOnce(puuid, region); runErr != nil {
+		if runErr = m.runOnce(puuid, region, refreshCached); runErr != nil {
 			slog.Error("tracking: sync run failed", "puuid", puuid, "err", runErr)
 		}
 	}()
@@ -110,7 +118,7 @@ func (m *SyncManager) Start(puuid, region string) (started bool, err error) {
 // runOnce executes a single sync for the given puuid following the
 // 9-step algorithm in the design doc §4.2. Errors are logged at each
 // step; a hard failure (DB read or parse error in the list) aborts.
-func (m *SyncManager) runOnce(puuid, region string) error {
+func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	// Step 1: read sync state.
 	state, err := GetSyncState(m.db, puuid)
 	if err != nil {
@@ -174,7 +182,7 @@ func (m *SyncManager) runOnce(puuid, region string) error {
 			slog.Warn("tracking: IsMatchCached error", "matchID", h.MatchID, "err", err)
 			continue
 		}
-		if !cached {
+		if refreshCached || !cached {
 			newIDs = append(newIDs, h.MatchID)
 		}
 	}

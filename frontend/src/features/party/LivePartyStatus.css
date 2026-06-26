@@ -93,6 +93,13 @@
   font-weight: 900;
 }
 
+.live-party-pill-avatar--friends {
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.16), transparent 42%),
+    rgba(245, 197, 66, 0.14);
+  border-color: rgba(245, 197, 66, 0.34);
+}
+
 .live-party-pill-body {
   flex: 1;
   min-width: 0;
@@ -283,6 +290,82 @@
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.78rem;
+}
+
+.live-party-friends {
+  padding: 0 0.78rem 0.78rem;
+}
+
+.live-party-members + .live-party-friends {
+  padding-top: 0;
+}
+
+.live-party-section-title {
+  margin: 0.1rem 0 0.45rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.live-party-friend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+}
+
+.live-party-friend-row,
+.live-party-friend-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.52rem;
+  min-width: 0;
+  padding: 0.5rem 0.56rem;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+}
+
+.live-party-friend-empty {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.live-party-friend-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(34, 211, 163, 0.11);
+}
+
+.live-party-friend-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-party-friend-name,
+.live-party-friend-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-party-friend-name {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.live-party-friend-sub {
+  margin-top: 0.1rem;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
 }
 
 .live-party-member {

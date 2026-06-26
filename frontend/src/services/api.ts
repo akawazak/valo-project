@@ -736,6 +736,8 @@ export interface ProfileOverview {
     region: string;
     gameName?: string;
     tagLine?: string;
+    playerCardId?: string;
+    playerTitleId?: string;
     currentSeasonId: string;
     currentRank: ProfileCurrentRank;
     peakRank: ProfilePeakRank;
@@ -793,6 +795,8 @@ export interface ProfilePlayerStats {
     teamId: string;
     gameName: string;
     tagLine: string;
+    playerCardId?: string;
+    playerTitleId?: string;
     characterId: string;
     kills: number;
     deaths: number;
@@ -1103,7 +1107,7 @@ export interface RiotMissionsResponse {
 
 export interface RiotContractProgress {
     ContractDefinitionID: string;
-    ContractProgression: Record<string, any>;
+    ContractProgression: Record<string, unknown>;
     ProgressionLevelReached: number;
     ProgressionTowardsNextLevel: number;
 }
@@ -1230,23 +1234,28 @@ export async function getAccountHealth(): Promise<AccountHealthResponse> {
 
 export interface SocialStatusResponse {
     status: "ok" | "unavailable";
-    source?: "local";
+    source?: "local" | "remote";
+    remoteStatus?: "missing" | "config" | "error";
+    remoteChatHost?: string;
+    remoteChatPort?: number;
     friendCount: number;
     onlineCount: number;
     inGameCount: number;
-    presences?: {
-        puuid?: string;
-        name?: string;
-        product?: string;
-        state?: string;
-        queueId?: string;
-    }[];
+    presences?: SocialPresence[];
     error?: string;
+}
+
+export interface SocialPresence {
+    puuid?: string;
+    name?: string;
+    product?: string;
+    state?: string;
+    queueId?: string;
 }
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/social');
+        const response = await fetchWithAuth(LOCAL_URL + '/social', undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };

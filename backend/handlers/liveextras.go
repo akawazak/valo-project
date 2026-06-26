@@ -44,13 +44,16 @@ type PenaltiesProbe struct {
 }
 
 type SocialStatusResponse struct {
-	Status      string           `json:"status"`
-	Source      string           `json:"source,omitempty"`
-	FriendCount int              `json:"friendCount"`
-	OnlineCount int              `json:"onlineCount"`
-	InGameCount int              `json:"inGameCount"`
-	Presences   []SocialPresence `json:"presences,omitempty"`
-	Error       string           `json:"error,omitempty"`
+	Status         string           `json:"status"`
+	Source         string           `json:"source,omitempty"`
+	RemoteStatus   string           `json:"remoteStatus,omitempty"`
+	RemoteChatHost string           `json:"remoteChatHost,omitempty"`
+	RemoteChatPort int              `json:"remoteChatPort,omitempty"`
+	FriendCount    int              `json:"friendCount"`
+	OnlineCount    int              `json:"onlineCount"`
+	InGameCount    int              `json:"inGameCount"`
+	Presences      []SocialPresence `json:"presences,omitempty"`
+	Error          string           `json:"error,omitempty"`
 }
 
 type SocialPresence struct {
@@ -193,48 +196,6 @@ func (h *Handler) fetchPenalties(val *valclient.ValClient) PenaltiesProbe {
 		return PenaltiesProbe{Status: "clear", Detail: "No active penalties"}
 	}
 	return PenaltiesProbe{Status: "warn", Count: count, Detail: fmt.Sprintf("%d active penalty records", count)}
-}
-
-func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
-	h.mu.RLock()
-	val := h.Val
-	h.mu.RUnlock()
-	if val == nil || val.Local == nil {
-		h.returnAny(w, SocialStatusResponse{Status: "unavailable", Error: "Local Riot client is not connected"})
-		return
-	}
-
-	var friends map[string]any
-	if err := val.RunLocalRequest(http.MethodGet, "/chat/v4/friends", nil, &friends); err != nil {
-		h.returnAny(w, SocialStatusResponse{Status: "unavailable", Source: "local", Error: err.Error()})
-		return
-	}
-	var presences map[string]any
-	if err := val.RunLocalRequest(http.MethodGet, "/chat/v4/presences", nil, &presences); err != nil {
-		h.returnAny(w, SocialStatusResponse{Status: "unavailable", Source: "local", FriendCount: countArrayFields(friends, "friends", "Friends"), Error: err.Error()})
-		return
-	}
-
-	presenceList := normalizePresences(presences)
-	online := 0
-	inGame := 0
-	for _, p := range presenceList {
-		if p.Product != "" {
-			online++
-		}
-		state := strings.ToLower(p.State)
-		if strings.Contains(state, "ingame") || strings.Contains(state, "pregame") || strings.Contains(state, "menus") {
-			inGame++
-		}
-	}
-	h.returnAny(w, SocialStatusResponse{
-		Status:      "ok",
-		Source:      "local",
-		FriendCount: countArrayFields(friends, "friends", "Friends"),
-		OnlineCount: online,
-		InGameCount: inGame,
-		Presences:   presenceList,
-	})
 }
 
 func normalizePresences(raw map[string]any) []SocialPresence {

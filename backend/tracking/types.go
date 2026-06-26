@@ -17,17 +17,19 @@ package tracking
 // Derived fields (KD, KDA, ADR, ACS, HSPct) are precomputed on the
 // backend at row-serialization time (see design doc §3).
 type PlayerStats struct {
-	Subject      string  `json:"subject"`
-	TeamID       string  `json:"teamId"`
-	GameName     string  `json:"gameName"`
-	TagLine      string  `json:"tagLine"`
-	CharacterID  string  `json:"characterId"`
-	Kills        int     `json:"kills"`
-	Deaths       int     `json:"deaths"`
-	Assists      int     `json:"assists"`
-	Score        int     `json:"score"`
-	Headshots    int     `json:"headshots"`
-	Bodyshots    int     `json:"bodyshots"`
+	Subject         string  `json:"subject"`
+	TeamID          string  `json:"teamId"`
+	GameName        string  `json:"gameName"`
+	TagLine         string  `json:"tagLine"`
+	PlayerCardID    string  `json:"playerCardId,omitempty"`
+	PlayerTitleID   string  `json:"playerTitleId,omitempty"`
+	CharacterID     string  `json:"characterId"`
+	Kills           int     `json:"kills"`
+	Deaths          int     `json:"deaths"`
+	Assists         int     `json:"assists"`
+	Score           int     `json:"score"`
+	Headshots       int     `json:"headshots"`
+	Bodyshots       int     `json:"bodyshots"`
 	Legshots        int     `json:"legshots"`
 	DamageDealt     int     `json:"damageDealt"`
 	RoundsPlayed    int     `json:"roundsPlayed"`
@@ -35,9 +37,9 @@ type PlayerStats struct {
 	CompetitiveTier int     `json:"competitiveTier"`
 	KD              float64 `json:"kd"`
 	KDA             float64 `json:"kda"`
-	ADR          float64 `json:"adr"`
-	ACS          float64 `json:"acs"`
-	HSPct        float64 `json:"hsPct"`
+	ADR             float64 `json:"adr"`
+	ACS             float64 `json:"acs"`
+	HSPct           float64 `json:"hsPct"`
 }
 
 // MatchSummary is the per-row payload of `GET /v1/profile/match-history`.
@@ -175,6 +177,8 @@ type Overview struct {
 	RankActs                []RankActSummary `json:"rankActs"`
 	GameName                string           `json:"gameName,omitempty"`
 	TagLine                 string           `json:"tagLine,omitempty"`
+	PlayerCardID            string           `json:"playerCardId,omitempty"`
+	PlayerTitleID           string           `json:"playerTitleId,omitempty"`
 	LastCacheSyncedAt       int64            `json:"lastCacheSyncedAt"`
 	LastLiveRankRefreshedAt int64            `json:"lastLiveRankRefreshedAt"`
 	SeasonSummary           *SeasonSummary   `json:"seasonSummary"`
@@ -232,6 +236,8 @@ type PlayerRow struct {
 	TeamID          string
 	GameName        string
 	TagLine         string
+	PlayerCardID    string
+	PlayerTitleID   string
 	CharacterID     string
 	AccountLevel    int
 	CompetitiveTier int

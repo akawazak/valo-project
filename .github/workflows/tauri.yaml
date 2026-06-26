@@ -130,7 +130,7 @@ jobs:
           fi
           echo "App exe: $appExe"
 
-          sidecar=$(ls "$releaseDir"/valovault-backend-*.exe 2>/dev/null | head -n 1 || true)
+          sidecar=$(ls "$releaseDir"/valovault-backend*.exe 2>/dev/null | head -n 1 || true)
           if [[ -z "$sidecar" ]]; then
             echo "ERROR: sidecar not found in $releaseDir"
             exit 1
