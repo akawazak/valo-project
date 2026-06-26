@@ -145,20 +145,7 @@ jobs:
           cp "$sidecar" "$work/"
           echo "Staged files:"
           ls -la "$work/"
-
-          # Use Python for zipping — bulletproof, no shell quirks.
-          python -c "
-import os, sys, zipfile
-src = os.path.abspath('portable-build')
-dst = os.path.abspath('VantaVault-portable.zip')
-with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
-    for name in os.listdir(src):
-        full = os.path.join(src, name)
-        if os.path.isfile(full):
-            z.write(full, arcname=name)
-            print(f'  added: {name} ({os.path.getsize(full)} bytes)')
-print(f'wrote {dst} ({os.path.getsize(dst)} bytes)')
-"
+          pwsh -NoProfile -Command "Compress-Archive -Path 'portable-build/*' -DestinationPath 'VantaVault-portable.zip' -Force"
 
           if [[ ! -f VantaVault-portable.zip ]]; then
             echo "ERROR: zip not created"
