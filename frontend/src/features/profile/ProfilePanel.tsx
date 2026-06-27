@@ -938,6 +938,27 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const isBusy = loading || syncing || !!syncStatus?.inFlight;
     const topAgentMeta = summary?.topAgentCharacterId ? agents[summary.topAgentCharacterId.toLowerCase()] : undefined;
 
+    // Latest RR delta from the most recent ranked match snapshot.
+    // Used to show ▲/▼ XX RR next to the current rating.
+    const lastRRDelta = (() => {
+        const d = overview?.lastDeltas?.[0];
+        if (!d) return null;
+        const earned = Number(d.rrEarned) || 0;
+        if (earned === 0) return null;
+        return earned;
+    })();
+
+    // Parse the current season id (e.g. "e7a3") into a human label like
+    // "EPISODE 7 // ACT 3". Falls back to a shortened id if it doesn't
+    // match the expected shape.
+    const episodeActLabel = (() => {
+        const id = overview?.currentSeasonId;
+        if (!id) return "";
+        const m = /^e(\d+)a(\d+)$/i.exec(id);
+        if (m) return `EPISODE ${m[1]} // ACT ${m[2]}`;
+        return `SEASON ${id.toUpperCase()}`;
+    })();
+
     const agentLookup = useMemo(() => {
         const out: Record<string, Agent> = {};
         for (const [id, meta] of Object.entries(agents)) {
@@ -1548,17 +1569,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                 </div>
                             )}
                         </div>
-                        <div>
-                            {currentRankIcon && (
-                                <Image
-                                    src={currentRankIcon}
-                                    alt={currentRankLabel}
-                                    width={132}
-                                    height={132}
-                                    className="profile-banner-rank-hero"
-                                    unoptimized
-                                />
-                            )}
+                        <div className="profile-banner-v2-name-block">
                             <div className="profile-banner-v2-name">
                                 {selectedPuuid && overview?.gameName
                                     ? `${overview.gameName}`
@@ -1568,36 +1579,63 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         ? overview.tagLine
                                         : activeAccount?.tagLine || ""}
                                 </span>
-                                <span className="profile-banner-v2-online">ONLINE</span>
+                                <span className="profile-banner-v2-online">
+                                    <span className="profile-banner-v2-online-dot" />
+                                    Online
+                                </span>
                             </div>
-                            <div className="profile-title-text" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '2px' }}>
+                            <div className="profile-title-text" style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '2px' }}>
                                 {titleText || "Riot ID"}
                             </div>
-                            <div className="profile-banner-v2-stats-row">
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">Rank</span>
-                                    <span className="profile-banner-v2-stat-val active-rank">{currentRankLabel}</span>
+                        </div>
+                        {currentRankIcon && (
+                            <div className="profile-banner-rank-block">
+                                <Image
+                                    src={currentRankIcon}
+                                    alt={currentRankLabel}
+                                    width={96}
+                                    height={96}
+                                    className="profile-banner-rank-hero"
+                                    unoptimized
+                                />
+                                <div className="profile-banner-rank-name active-rank">{currentRankLabel}</div>
+                                <div className="profile-banner-rank-rr">
+                                    {currentTier >= 27 ? "MAX" : `${currentRR} RR`}
+                                    {lastRRDelta != null && currentTier < 27 && (
+                                        <span className={`profile-banner-rank-delta ${lastRRDelta > 0 ? "is-up" : "is-down"}`}>
+                                            {lastRRDelta > 0 ? "▲" : "▼"} {Math.abs(lastRRDelta)} RR
+                                        </span>
+                                    )}
                                 </div>
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">Rating (RR)</span>
-                                    <span className="profile-banner-v2-stat-val">{currentTier >= 27 ? "MAX" : `${currentRR} RR`}</span>
-                                </div>
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">Peak Rank</span>
-                                    <span className="profile-banner-v2-stat-val">{peakRankLabel}</span>
-                                </div>
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">Win %</span>
-                                    <span className="profile-banner-v2-stat-val">{fmtPct(summary?.winrate)}</span>
-                                </div>
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">K/D</span>
-                                    <span className="profile-banner-v2-stat-val">{fmtRatio(summary?.avgKda)}</span>
-                                </div>
-                                <div className="profile-banner-v2-stat">
-                                    <span className="profile-banner-v2-stat-label">Matches</span>
-                                    <span className="profile-banner-v2-stat-val">{summary?.matches ?? 0}</span>
-                                </div>
+                                {episodeActLabel && (
+                                    <div className="profile-banner-rank-episode">{episodeActLabel}</div>
+                                )}
+                            </div>
+                        )}
+                        <div className="profile-banner-v2-stats-row">
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">Rank</span>
+                                <span className="profile-banner-v2-stat-val active-rank">{currentRankLabel}</span>
+                            </div>
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">Rating (RR)</span>
+                                <span className="profile-banner-v2-stat-val">{currentTier >= 27 ? "MAX" : `${currentRR} RR`}</span>
+                            </div>
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">Peak RR</span>
+                                <span className="profile-banner-v2-stat-val">{peakRankLabel}</span>
+                            </div>
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">Win %</span>
+                                <span className="profile-banner-v2-stat-val">{fmtPct(summary?.winrate)}</span>
+                            </div>
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">K/D</span>
+                                <span className="profile-banner-v2-stat-val">{fmtRatio(summary?.avgKda)}</span>
+                            </div>
+                            <div className="profile-banner-v2-stat">
+                                <span className="profile-banner-v2-stat-label">Matches</span>
+                                <span className="profile-banner-v2-stat-val">{summary?.matches ?? 0}</span>
                             </div>
                         </div>
                     </div>
@@ -1606,24 +1644,36 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         <div className="profile-banner-v2-health-item">
                             <span className="profile-banner-v2-health-label">Account Health</span>
                             <span className="profile-banner-v2-health-val good">HEALTHY</span>
+                            <span className="profile-banner-v2-health-sub">No Penalties</span>
                         </div>
                         <div className="profile-banner-v2-health-item">
                             <span className="profile-banner-v2-health-label">Riot Services</span>
                             <span className="profile-banner-v2-health-val good">OPERATIONAL</span>
+                            <span className="profile-banner-v2-health-sub">All Systems Normal</span>
                         </div>
                         <div className="profile-banner-v2-health-item">
                             <span className="profile-banner-v2-health-label">Party Status</span>
                             <span className="profile-banner-v2-health-val">
-                                {partyStatus?.members?.length ? `In Party (${partyStatus.members.length}/5)` : "Solo"}
+                                {partyStatus?.members?.length ? "In Party" : "Solo"}
+                            </span>
+                            <span className="profile-banner-v2-health-sub">
+                                {partyStatus?.members?.length ? `${partyStatus.members.length} / 5` : "No active party"}
                             </span>
                         </div>
                         <div className="profile-banner-v2-health-item">
                             <span className="profile-banner-v2-health-label">Session</span>
                             <span className={`profile-banner-v2-health-val${liveStatus?.phase && liveStatus.phase !== "none" ? " live" : ""}`}>
-                                {liveStatus?.phase === "coregame" ? "LIVE (In Match)" : liveStatus?.phase === "pregame" ? "LIVE (Agent Select)" : "ONLINE"}
+                                {liveStatus?.phase === "coregame" ? "LIVE" : liveStatus?.phase === "pregame" ? "LIVE" : "ONLINE"}
+                            </span>
+                            <span className="profile-banner-v2-health-sub">
+                                {liveStatus?.phase === "coregame"
+                                    ? "In Match"
+                                    : liveStatus?.phase === "pregame"
+                                        ? "Agent Select"
+                                        : "Idle"}
                             </span>
                         </div>
-                        <div className="profile-banner-v2-health-item" style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "4px", marginTop: "4px", fontSize: "0.6rem" }}>
+                        <div className="profile-banner-v2-health-item profile-banner-v2-health-foot">
                             <span className="profile-banner-v2-health-label">Last Sync</span>
                             <span className="profile-banner-v2-health-val" style={{ color: 'var(--text-dim)' }}>{fmtDate(syncStatus?.lastSyncedAt || 0)}</span>
                         </div>

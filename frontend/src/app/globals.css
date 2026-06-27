@@ -16337,25 +16337,28 @@ input:focus,
 
 .profile-banner-v2-content {
   min-height: calc(min(760px, calc(100vh - 160px)) - 44px);
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
-  justify-content: flex-end;
-  gap: 18px;
+  justify-content: space-between;
+  gap: 24px;
 }
 
 .profile-banner-v2-identity {
-  flex-direction: column;
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12px;
-  text-align: center;
+  gap: 18px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .profile-banner-v2-avatar-cell {
   width: 70px;
   height: 70px;
-  margin-bottom: 4px;
+  margin-bottom: 0;
   border-color: var(--profile-cyan);
   box-shadow: 0 0 24px rgba(70, 215, 255, 0.18);
+  flex: 0 0 auto;
 }
 
 .profile-banner-v2-name {
@@ -16363,12 +16366,75 @@ input:focus,
   letter-spacing: 0;
 }
 
+.profile-banner-v2-name-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.profile-banner-rank-block {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .profile-banner-rank-hero {
-  width: 118px;
-  height: 118px;
-  margin: 0 auto 12px;
+  width: 84px;
+  height: 84px;
+  margin: 0;
   object-fit: contain;
   filter: drop-shadow(0 14px 24px rgba(0, 0, 0, 0.62)) drop-shadow(0 0 18px rgba(199, 141, 255, 0.2));
+}
+
+.profile-banner-rank-name {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #c78dff;
+  line-height: 1.1;
+}
+
+.profile-banner-rank-rr {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+.profile-banner-rank-delta {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.profile-banner-rank-delta.is-up {
+  color: #42e6af;
+  background: rgba(66, 230, 175, 0.12);
+}
+
+.profile-banner-rank-delta.is-down {
+  color: #ff4655;
+  background: rgba(255, 70, 85, 0.12);
+}
+
+.profile-banner-rank-episode {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
 }
 
 .profile-banner-v2-tag {
@@ -16379,27 +16445,59 @@ input:focus,
 }
 
 .profile-banner-v2-online {
-  display: inline-block;
-  margin: 8px 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: #42e6af;
-  border: 0;
-  background: transparent;
+}
+
+.profile-banner-v2-online-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #42e6af;
+  box-shadow: 0 0 8px rgba(66, 230, 175, 0.55);
 }
 
 .profile-banner-v2-stats-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 1px;
-  margin-top: 16px;
+  margin-top: 0;
+  margin-left: auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.08);
+  flex: 1 1 auto;
+  max-width: 480px;
 }
 
 .profile-banner-v2-stat {
-  min-height: 58px;
-  padding: 10px;
+  min-height: 56px;
+  padding: 8px 10px;
   justify-content: center;
   background: rgba(2, 11, 18, 0.88);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-banner-v2-stat-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.profile-banner-v2-stat-val {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: 0.02em;
 }
 
 .profile-banner-v2-stat-val.active-rank {
@@ -16407,12 +16505,50 @@ input:focus,
 }
 
 .profile-banner-v2-health {
-  min-width: 0;
-  padding: 12px 0 0;
-  border: 0;
-  border-top: 1px solid var(--profile-line);
-  background: transparent;
+  flex: 0 0 240px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.08);
 }
+
+.profile-banner-v2-health-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: rgba(2, 11, 18, 0.88);
+}
+
+.profile-banner-v2-health-foot {
+  grid-column: 1 / -1;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.6rem;
+}
+
+.profile-banner-v2-health-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.profile-banner-v2-health-val {
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+}
+
+.profile-banner-v2-health-sub {
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+}
+
+.profile-banner-v2-health-val.good { color: var(--green); }
+.profile-banner-v2-health-val.live { color: var(--accent); animation: pulse-blink 1.5s infinite; }
 
 .profile-command-bar-v4 {
   min-height: 48px;
