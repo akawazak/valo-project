@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useData } from "@/context/DataContext";
-import type { Agent } from "@/lib/types";
+import type { Agent, LoadoutItemV1 } from "@/lib/types";
 import {
     getAgentStats,
     getMapStats,
@@ -40,6 +40,7 @@ import {
 import AgentStatsTable from "./AgentStatsTable";
 import MapStatsTable from "./MapStatsTable";
 import RRHistoryChart from "./RRHistoryChart";
+import TacticalPanel from "@/components/TacticalPanel";
 
 interface Props {
     onConnectAccount?: () => void;
@@ -47,6 +48,7 @@ interface Props {
 interface AgentMeta {
     name: string;
     icon: string;
+    full?: string;
 }
 
 interface MapMeta {
@@ -424,27 +426,6 @@ function classifyMissionType(rawType: string | undefined, expirationIso: string 
     return "other";
 }
 
-function missionBucketLabel(type: MissionBucket): string {
-    switch (type) {
-        case "daily": return "Daily";
-        case "weekly": return "Weekly";
-        case "onboarding": return "Onboarding";
-        default: return "Other";
-    }
-}
-
-function formatMissionCountdown(msRemaining: number): string {
-    if (msRemaining <= 0) return "Expired";
-    const totalSeconds = Math.floor(msRemaining / 1000);
-    const days = Math.floor(totalSeconds / 86400);
-    const hours = Math.floor((totalSeconds % 86400) / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    if (days >= 2) return `${days}d left`;
-    if (days === 1) return "1d left";
-    if (hours >= 1) return `${hours}h ${minutes}m left`;
-    return `${Math.max(minutes, 1)}m left`;
-}
-
 async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
     if (agentCache) return agentCache;
     if (agentPromise) return agentPromise;
@@ -537,7 +518,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
 }
 
 export default function ProfilePanel({ onConnectAccount }: Props) {
-    const { activeAccount, isBackendOnline, isClientHealthy } = useData();
+    const { activeAccount, isBackendOnline, weapons = [], contentTiers = [] } = useData();
     const puuid = activeAccount?.puuid ?? "";
     const region = activeAccount?.region ?? "na";
     const nowMs = useMinuteTick();
@@ -582,13 +563,15 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [playerCards, setPlayerCards] = useState<Record<string, { wide: string; icon: string; name: string }>>({});
     const [playerTitles, setPlayerTitles] = useState<Record<string, string>>({});
     const [progressTab, setProgressTab] = useState<ProgressTab>("battlepass");
+    const [activeLayoutView, setActiveLayoutView] = useState<string>("OVERVIEW");
     const [expandedBattlepassId, setExpandedBattlepassId] = useState("");
     const [liveStatus, setLiveStatus] = useState<LiveMatchResponse | null>(null);
     const [partyStatus, setPartyStatus] = useState<PartyStatusResponse | null>(null);
-    const [loadoutStatus, setLoadoutStatus] = useState<LiveLoadoutsResponse | null>(null);
-    const [accountHealth, setAccountHealth] = useState<AccountHealthResponse | null>(null);
+    const [, setLoadoutStatus] = useState<LiveLoadoutsResponse | null>(null);
+    const [, setAccountHealth] = useState<AccountHealthResponse | null>(null);
     const [socialStatus, setSocialStatus] = useState<SocialStatusResponse | null>(null);
-    const [liveUpdatedAt, setLiveUpdatedAt] = useState(0);
+    const [, setLiveUpdatedAt] = useState(0);
+    const [playerLoadout, setPlayerLoadout] = useState<Record<string, LoadoutItemV1>>({});
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
@@ -743,6 +726,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             setSyncStatus(null);
             setMissions(null);
             setContracts(null);
+            setPlayerLoadout({});
             return;
         }
         setLoading(true);
@@ -773,6 +757,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             } else {
                 setIdentity(null);
             }
+            if (ld && ld.loadout) {
+                setPlayerLoadout(ld.loadout);
+            } else {
+                setPlayerLoadout({});
+            }
             if (st?.lastError) setError(cleanError(st.lastError));
         } catch (err) {
             setError(cleanError(err));
@@ -795,6 +784,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         setAgentStats(null);
         setMapStats(null);
         setSyncStatus(null);
+        setPlayerLoadout({});
         setDetails({});
         setExpanded(new Set());
         setLoadingDetails(new Set());
@@ -944,12 +934,9 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const currentRankLabel = tierLabel(currentTier, overview?.currentRank?.tierName);
     const peakRankLabel = tierLabel(peakTier, overview?.peakRank?.tierName);
     const currentRankIcon = rankIconUrl(currentTier, tierAssets);
-    const peakRankIcon = rankIconUrl(peakTier, tierAssets);
     const summary = overview?.seasonSummary;
     const isBusy = loading || syncing || !!syncStatus?.inFlight;
     const topAgentMeta = summary?.topAgentCharacterId ? agents[summary.topAgentCharacterId.toLowerCase()] : undefined;
-    const lastDelta = overview?.lastDeltas?.[0];
-    const rrMovement = lastDelta ? `${lastDelta.rrEarned >= 0 ? "+" : ""}${lastDelta.rrEarned} RR` : "--";
 
     const agentLookup = useMemo(() => {
         const out: Record<string, Agent> = {};
@@ -1184,12 +1171,318 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             setProgressTab("daily");
         }
     }, [activeBattlepass?.id, contracts, hasMissionRows, missions, progressTab]);
-    const liveLoadoutPlayers = loadoutStatus?.players?.length ?? 0;
-    const liveLoadoutSkins = loadoutStatus?.players?.reduce((sum, player) => sum + (player.skinIds?.length ?? 0), 0) ?? 0;
-    const serviceList = Object.values(accountHealth?.services ?? {});
-    const serviceWarnCount = serviceList.filter((service) => !["ok", "unknown"].includes((service.status || "").toLowerCase())).length;
-    const serviceOkCount = serviceList.filter((service) => (service.status || "").toLowerCase() === "ok").length;
-    const ticker = accountHealth?.services?.ticker;
+    const premiumSkins = useMemo(() => {
+        if (!playerLoadout || !weapons || weapons.length === 0) return [];
+
+        const list: Array<{
+            weaponName: string;
+            skinName: string;
+            skinIcon: string;
+            tierRank: number;
+        }> = [];
+
+        const tierMap = new Map<string, { displayName: string; rank: number }>();
+        if (contentTiers) {
+            contentTiers.forEach((tier) => {
+                tierMap.set(tier.uuid.toLowerCase(), {
+                    displayName: tier.displayName,
+                    rank: tier.rank || 0,
+                });
+            });
+        }
+
+        for (const [wUuid, loadoutItem] of Object.entries(playerLoadout)) {
+            const weapon = weapons.find((w) => w.uuid.toLowerCase() === wUuid.toLowerCase());
+            if (!weapon) continue;
+
+            const skin = weapon.skins.find((s) => s.uuid.toLowerCase() === loadoutItem.skinId?.toLowerCase());
+            if (!skin) continue;
+
+            const isDefault = skin.uuid.toLowerCase() === weapon.defaultSkinUuid?.toLowerCase() ||
+                              skin.displayName.toLowerCase() === weapon.displayName.toLowerCase();
+
+            if (!isDefault) {
+                const tierMeta = skin.contentTierUuid ? tierMap.get(skin.contentTierUuid.toLowerCase()) : null;
+                
+                let displayIcon = skin.displayIcon;
+                const level = skin.levels?.find(l => l.uuid.toLowerCase() === loadoutItem.skinLevelId?.toLowerCase());
+                if (level?.displayIcon) displayIcon = level.displayIcon;
+                const chroma = skin.chromas?.find(c => c.uuid.toLowerCase() === loadoutItem.chromaId?.toLowerCase());
+                if (chroma?.displayIcon) displayIcon = chroma.displayIcon;
+
+                list.push({
+                    weaponName: weapon.displayName,
+                    skinName: skin.displayName,
+                    skinIcon: displayIcon || skin.displayIcon || "",
+                    tierRank: tierMeta?.rank ?? 0,
+                });
+            }
+        }
+
+        list.sort((a, b) => b.tierRank - a.tierRank);
+        const result = list.slice(0, 3);
+
+        const fallbackWeapons = ["Melee", "Vandal", "Phantom", "Operator"];
+        for (const wName of fallbackWeapons) {
+            if (result.length >= 3) break;
+            if (result.some((r) => r.weaponName.toLowerCase() === wName.toLowerCase())) continue;
+
+            const weapon = weapons.find((w) => w.displayName.toLowerCase() === wName.toLowerCase());
+            if (!weapon) continue;
+
+            const defaultSkin = weapon.skins[0];
+            if (!defaultSkin) continue;
+
+            result.push({
+                weaponName: weapon.displayName,
+                skinName: defaultSkin.displayName,
+                skinIcon: defaultSkin.displayIcon || weapon.displayIcon || "",
+                tierRank: -1,
+            });
+        }
+
+        return result.slice(0, 3);
+    }, [playerLoadout, weapons, contentTiers]);
+
+    const renderActiveLoadoutCard = () => {
+        if (!isOwnProfile || premiumSkins.length === 0) return null;
+
+        return (
+            <TacticalPanel 
+                title="Active Arsenal" 
+                subtitle="Premium Equipped Skins"
+                accent="red"
+                className="mb-4"
+            >
+                <div className="d-flex flex-column gap-3">
+                    {premiumSkins.map((skin, idx) => (
+                        <div 
+                            key={idx} 
+                            className="d-flex align-items-center justify-content-between p-2" 
+                            style={{ 
+                                background: "rgba(255,255,255,0.02)", 
+                                border: "1px solid rgba(255,255,255,0.04)"
+                            }}
+                        >
+                            <div className="d-flex align-items-center gap-2" style={{ minWidth: 0, flex: 1 }}>
+                                <div 
+                                    style={{ 
+                                        width: "54px", 
+                                        height: "36px", 
+                                        display: "flex", 
+                                        alignItems: "center", 
+                                        justifyContent: "center",
+                                        background: "rgba(0,0,0,0.3)",
+                                        border: "1px solid rgba(255,255,255,0.05)",
+                                        padding: "2px",
+                                        flexShrink: 0
+                                    }}
+                                >
+                                    {skin.skinIcon ? (
+                                        <img 
+                                            src={skin.skinIcon} 
+                                            alt="" 
+                                            style={{ 
+                                                maxWidth: "100%", 
+                                                maxHeight: "100%", 
+                                                objectFit: "contain" 
+                                            }} 
+                                        />
+                                    ) : (
+                                        <div style={{ width: "100%", height: "100%", background: "#111" }} />
+                                    )}
+                                </div>
+                                <div className="d-flex flex-column" style={{ minWidth: 0, flex: 1 }}>
+                                    <span 
+                                        style={{ 
+                                            fontSize: "0.75rem", 
+                                            fontWeight: 700, 
+                                            color: "var(--text-primary)",
+                                            whiteSpace: "nowrap",
+                                            overflow: "hidden",
+                                            textOverflow: "ellipsis"
+                                        }}
+                                    >
+                                        {skin.skinName}
+                                    </span>
+                                    <span style={{ fontSize: "0.6rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                                        {skin.weaponName.toUpperCase()}
+                                    </span>
+                                </div>
+                            </div>
+                            {skin.tierRank >= 0 && (
+                                <span 
+                                    className="badge" 
+                                    style={{ 
+                                        fontSize: "0.55rem", 
+                                        background: "rgba(255, 70, 85, 0.1)", 
+                                        color: "var(--accent)",
+                                        border: "1px solid rgba(255, 70, 85, 0.2)",
+                                        fontFamily: "var(--font-mono)",
+                                        flexShrink: 0
+                                    }}
+                                >
+                                    SKIN
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </TacticalPanel>
+        );
+    };
+
+    const renderPartyCard = () => {
+        const members = partyStatus?.members || [];
+        const hasParty = partyStatus?.phase && partyStatus.phase !== "none" && partyStatus.phase !== "error";
+        const maxSlots = 5;
+        
+        const displayMembers = hasParty ? members : [
+            {
+                puuid: puuid,
+                name: activeAccount?.gameName || "You",
+                isLocal: true,
+                isOwner: true,
+                isReady: true,
+                accountLevel: overview?.account?.level || 1,
+                cardId: effectiveCardId || "",
+                competitiveTier: currentTier
+            }
+        ];
+        
+        const emptySlotsCount = Math.max(0, maxSlots - displayMembers.length);
+
+        return (
+            <TacticalPanel 
+                title="Party Status" 
+                subtitle={hasParty ? `Phase: ${partyStatus?.phase?.toUpperCase()}` : "Solo Play (Mock Party)"} 
+                className="mb-4"
+                headerAction={
+                    hasParty && (
+                        <span className="badge bg-danger" style={{ fontSize: "0.6rem" }}>
+                            {partyStatus?.source === "remote" ? "Riot server" : "Local Client"}
+                        </span>
+                    )
+                }
+            >
+                <div className="d-flex flex-column gap-2 mb-3">
+                    {displayMembers.map((member, index) => {
+                        const mRankIcon = rankIconUrl(member.competitiveTier, tierAssets);
+                        const mRankLabel = tierLabel(member.competitiveTier);
+                        const cardMeta = member.cardId ? playerCards[member.cardId.toLowerCase()] : null;
+                        return (
+                            <div key={member.puuid || index} className="d-flex align-items-center justify-content-between p-2" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                                <div className="d-flex align-items-center gap-2">
+                                    <div style={{ position: "relative", width: "32px", height: "32px", border: "1px solid var(--border)" }}>
+                                        {cardMeta?.icon ? (
+                                            <img src={cardMeta.icon} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                        ) : (
+                                            <div style={{ width: "100%", height: "100%", background: "#111" }} />
+                                        )}
+                                        {member.isOwner && (
+                                            <span style={{ position: "absolute", top: "-6px", right: "-6px", color: "var(--yellow)", fontSize: "0.6rem" }} title="Party Leader">👑</span>
+                                        )}
+                                    </div>
+                                    <div className="d-flex flex-column">
+                                        <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                                            {member.name}
+                                        </span>
+                                        <span style={{ fontSize: "0.65rem", color: "var(--text-dim)" }}>
+                                            Level {member.accountLevel} · {mRankLabel}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="d-flex align-items-center gap-2">
+                                    {mRankIcon && (
+                                        <img src={mRankIcon} alt="" style={{ width: "20px", height: "20px" }} />
+                                    )}
+                                    <span style={{ 
+                                        width: "6px", 
+                                        height: "6px", 
+                                        borderRadius: "50%", 
+                                        backgroundColor: member.isReady ? "var(--green)" : "var(--accent)",
+                                        boxShadow: member.isReady ? "0 0 6px var(--green)" : "0 0 6px var(--accent)"
+                                    }} title={member.isReady ? "Ready" : "Not Ready"} />
+                                </div>
+                            </div>
+                        );
+                    })}
+                    
+                    {Array.from({ length: emptySlotsCount }).map((_, index) => (
+                        <div key={`empty-${index}`} className="d-flex align-items-center justify-content-center p-2" style={{ border: "1px dashed rgba(255,255,255,0.08)", height: "48px" }}>
+                            <span style={{ fontSize: "0.65rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)", letterSpacing: "0.05em" }}>
+                                [ OPEN SLOT ]
+                            </span>
+                        </div>
+                    ))}
+                </div>
+                <button 
+                    type="button" 
+                    className="btn btn-outline-danger btn-sm w-100" 
+                    style={{ fontSize: "0.75rem", fontFamily: "var(--font-mono)" }}
+                    onClick={() => {
+                        if (hasParty) {
+                            showToast("Riot restrictions prevent party controls. Leave via Valorant Client.");
+                        } else {
+                            showToast("You are not currently in a live Riot party.");
+                        }
+                    }}
+                >
+                    LEAVE PARTY
+                </button>
+            </TacticalPanel>
+        );
+    };
+
+    const renderPresetsNavigation = () => {
+        return (
+            <div className="tac-bottom-nav mt-4 clip-tactical-sm">
+                <span className="tac-bottom-nav-label">Profile</span>
+                <button
+                    type="button"
+                    className={`tac-bottom-nav-btn ${activeLayoutView === "OVERVIEW" ? "active" : ""}`}
+                    onClick={() => setActiveLayoutView("OVERVIEW")}
+                >
+                    Overview
+                </button>
+                <button
+                    type="button"
+                    className={`tac-bottom-nav-btn ${activeLayoutView === "MATCHES" ? "active" : ""}`}
+                    onClick={() => {
+                        setActiveLayoutView("MATCHES");
+                    }}
+                >
+                    Matches
+                </button>
+                <button
+                    type="button"
+                    className={`tac-bottom-nav-btn ${activeLayoutView === "PROGRESSION" ? "active" : ""}`}
+                    onClick={() => {
+                        setActiveLayoutView("PROGRESSION");
+                        setProgressTab("battlepass");
+                    }}
+                >
+                    Progression
+                </button>
+                <button
+                    type="button"
+                    className={`tac-bottom-nav-btn ${activeLayoutView === "CAREER" ? "active" : ""}`}
+                    onClick={() => {
+                        setActiveLayoutView("CAREER");
+                    }}
+                >
+                    Career
+                </button>
+                <button
+                    type="button"
+                    className={`tac-bottom-nav-btn ${activeLayoutView === "SOCIAL" ? "active" : ""}`}
+                    onClick={() => setActiveLayoutView("SOCIAL")}
+                >
+                    Social
+                </button>
+            </div>
+        );
+    };
 
     if (!activeAccount) {
         return (
@@ -1208,6 +1501,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     return (
         <div className="profile-container container-fluid py-4">
             {toast && <div className="tac-toast clip-tactical-sm show">{toast}</div>}
+            
+            <div className="tac-section-header">
+                <div className="tac-section-header-title">Current Profile</div>
+            </div>
+
             {error && (
                 <div className="alert alert-danger mb-4 clip-tactical-sm" role="alert">
                     {error}
@@ -1225,93 +1523,128 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 </div>
             )}
 
+            <div className="profile-shell-v4">
+            {renderPresetsNavigation()}
+
             <section
-                className="profile-header clip-tactical mb-4"
-                style={cardData?.wide ? { backgroundImage: `url(${cardData.wide})` } : undefined}
+                className="profile-banner-v2 clip-tactical mb-4"
+                style={(cardData?.wide || topAgentMeta?.full) ? { backgroundImage: `url(${cardData?.wide || topAgentMeta?.full})` } : undefined}
             >
-                <div className="profile-header-identity">
-                    <div className="profile-card-frame">
-                        {cardData?.icon ? (
-                            <img src={cardData.icon} alt="Player Card" className="profile-avatar" />
-                        ) : currentRankIcon ? (
-                            <Image src={currentRankIcon} alt={currentRankLabel} width={96} height={96} unoptimized className="profile-avatar profile-avatar-rank" />
-                        ) : (
-                            <div className="profile-avatar" />
-                        )}
-                        {currentRankIcon && cardData?.icon && (
-                            <span className="profile-rank-badge">
-                                <Image src={currentRankIcon} alt={currentRankLabel} width={42} height={42} unoptimized />
-                            </span>
-                        )}
-                        <span className="profile-level-badge">{overview?.account?.level || "--"}</span>
-                    </div>
-                    <div>
-                        <div className="text-uppercase text-secondary small fw-bold">
-                            {selectedPuuid ? "Shared Player Profile" : "Private local profile"}
+                <div className="profile-banner-v2-scrim" />
+                <div className="profile-banner-v2-content">
+                    <div className="profile-banner-v2-identity">
+                        <div className="profile-banner-v2-avatar-cell">
+                            {topAgentMeta?.icon ? (
+                                <img src={topAgentMeta.icon} alt={topAgentMeta.name} className="profile-banner-v2-avatar-img" />
+                            ) : cardData?.icon ? (
+                                <img src={cardData.icon} alt="Player Card" className="profile-banner-v2-avatar-img" />
+                            ) : (
+                                <div className="profile-banner-v2-avatar-img" />
+                            )}
+                            <div className="profile-banner-v2-level">{overview?.account?.level || "--"}</div>
+                            {currentRankIcon && (
+                                <div className="profile-banner-v2-avatar-rank">
+                                    <Image src={currentRankIcon} alt={currentRankLabel} width={24} height={24} unoptimized />
+                                </div>
+                            )}
                         </div>
-                        <h1 className="profile-title mb-1">
-                            {selectedPuuid && overview?.gameName
-                                ? `${overview.gameName}`
-                                : activeAccount?.gameName || "Unknown"}
-                            <span>
-                                #{selectedPuuid && overview?.tagLine
-                                    ? overview.tagLine
-                                    : activeAccount?.tagLine || ""}
-                            </span>
-                        </h1>
-                        {titleText ? (
-                            <div className="profile-title-text">{titleText}</div>
-                        ) : selectedPuuid ? (
-                            <div className="profile-title-text profile-title-text-muted">
-                                                        Sync this profile to load this player&apos;s card/title
+                        <div>
+                            {currentRankIcon && (
+                                <Image
+                                    src={currentRankIcon}
+                                    alt={currentRankLabel}
+                                    width={132}
+                                    height={132}
+                                    className="profile-banner-rank-hero"
+                                    unoptimized
+                                />
+                            )}
+                            <div className="profile-banner-v2-name">
+                                {selectedPuuid && overview?.gameName
+                                    ? `${overview.gameName}`
+                                    : activeAccount?.gameName || "Unknown"}
+                                <span className="profile-banner-v2-tag">
+                                    #{selectedPuuid && overview?.tagLine
+                                        ? overview.tagLine
+                                        : activeAccount?.tagLine || ""}
+                                </span>
+                                <span className="profile-banner-v2-online">ONLINE</span>
                             </div>
-                        ) : null}
-                        <div className="profile-subline">
-                            <span>{currentRegion.toUpperCase()}</span>
-                            <span>Level {overview?.account?.level || "--"}</span>
-                            <span>Last sync {fmtDate(syncStatus?.lastSyncedAt || 0)}</span>
-                            <span>{syncStatus?.totalMatches ?? total} cached matches</span>
-                        </div>
-                        <div className="profile-header-rankline">
-                            <span>Current Rank</span>
-                            <strong>{currentRankLabel}</strong>
-                            <em>{currentTier >= 27 ? "MAX" : `${currentRR} / 100 RR`}</em>
+                            <div className="profile-title-text" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: '2px' }}>
+                                {titleText || "Riot ID"}
+                            </div>
+                            <div className="profile-banner-v2-stats-row">
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">Rank</span>
+                                    <span className="profile-banner-v2-stat-val active-rank">{currentRankLabel}</span>
+                                </div>
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">Rating (RR)</span>
+                                    <span className="profile-banner-v2-stat-val">{currentTier >= 27 ? "MAX" : `${currentRR} RR`}</span>
+                                </div>
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">Peak Rank</span>
+                                    <span className="profile-banner-v2-stat-val">{peakRankLabel}</span>
+                                </div>
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">Win %</span>
+                                    <span className="profile-banner-v2-stat-val">{fmtPct(summary?.winrate)}</span>
+                                </div>
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">K/D</span>
+                                    <span className="profile-banner-v2-stat-val">{fmtRatio(summary?.avgKda)}</span>
+                                </div>
+                                <div className="profile-banner-v2-stat">
+                                    <span className="profile-banner-v2-stat-label">Matches</span>
+                                    <span className="profile-banner-v2-stat-val">{summary?.matches ?? 0}</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div className="profile-showcase" aria-label="Profile card summary">
-                    <div className="profile-showcase-card">
-                        {cardData?.icon ? (
-                            <img src={cardData.icon} alt="Player Card" className="profile-showcase-art" />
-                        ) : currentRankIcon ? (
-                            <Image src={currentRankIcon} alt={currentRankLabel} width={128} height={128} unoptimized className="profile-showcase-art profile-showcase-art--rank" />
-                        ) : (
-                            <div className="profile-showcase-art" />
-                        )}
-                        <span className="profile-showcase-level">{overview?.account?.level || "--"}</span>
-                        {currentRankIcon && (
-                            <span className="profile-showcase-rank">
-                                <Image src={currentRankIcon} alt={currentRankLabel} width={48} height={48} unoptimized />
+
+                    <div className="profile-banner-v2-health">
+                        <div className="profile-banner-v2-health-item">
+                            <span className="profile-banner-v2-health-label">Account Health</span>
+                            <span className="profile-banner-v2-health-val good">HEALTHY</span>
+                        </div>
+                        <div className="profile-banner-v2-health-item">
+                            <span className="profile-banner-v2-health-label">Riot Services</span>
+                            <span className="profile-banner-v2-health-val good">OPERATIONAL</span>
+                        </div>
+                        <div className="profile-banner-v2-health-item">
+                            <span className="profile-banner-v2-health-label">Party Status</span>
+                            <span className="profile-banner-v2-health-val">
+                                {partyStatus?.members?.length ? `In Party (${partyStatus.members.length}/5)` : "Solo"}
                             </span>
-                        )}
-                    </div>
-                    <div className="profile-showcase-meta">
-                        <span>Current Profile</span>
-                        <strong>{currentRankLabel}</strong>
-                        <small>{currentTier >= 27 ? "Radiant max" : `${currentRR} RR`} · {fmtPct(summary?.winrate)} WR · {fmtPct(summary?.avgHsPct)} HS</small>
+                        </div>
+                        <div className="profile-banner-v2-health-item">
+                            <span className="profile-banner-v2-health-label">Session</span>
+                            <span className={`profile-banner-v2-health-val${liveStatus?.phase && liveStatus.phase !== "none" ? " live" : ""}`}>
+                                {liveStatus?.phase === "coregame" ? "LIVE (In Match)" : liveStatus?.phase === "pregame" ? "LIVE (Agent Select)" : "ONLINE"}
+                            </span>
+                        </div>
+                        <div className="profile-banner-v2-health-item" style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "4px", marginTop: "4px", fontSize: "0.6rem" }}>
+                            <span className="profile-banner-v2-health-label">Last Sync</span>
+                            <span className="profile-banner-v2-health-val" style={{ color: 'var(--text-dim)' }}>{fmtDate(syncStatus?.lastSyncedAt || 0)}</span>
+                        </div>
                     </div>
                 </div>
-                <div className="profile-header-actions">
-                    <select className="form-select form-select-sm bg-dark text-white border-secondary" value={queue} onChange={(e) => setQueue(e.target.value)}>
+            </section>
+
+            <div className="profile-command-bar-v4 d-flex justify-content-between align-items-center mb-4 p-2">
+                <div className="d-flex gap-2">
+                    <select className="form-select form-select-sm bg-dark text-white border-secondary" style={{ width: "150px" }} value={queue} onChange={(e) => setQueue(e.target.value)}>
                         {QUEUE_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                     </select>
-                    <select className="form-select form-select-sm bg-dark text-white border-secondary" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                    <select className="form-select form-select-sm bg-dark text-white border-secondary" style={{ width: "120px" }} value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
                         {PAGE_SIZES.map((size) => (
                             <option key={size} value={size}>{size} matches</option>
                         ))}
                     </select>
+                </div>
+                <div className="d-flex gap-2">
                     <button className="btn btn-outline-light btn-sm" onClick={refresh} disabled={isBusy}>
                         Refresh
                     </button>
@@ -1319,751 +1652,634 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                         {isBusy ? "Syncing..." : selectedPuuid ? "Sync Player" : "Sync"}
                     </button>
                 </div>
-            </section>
+            </div>
 
             {(syncStatus?.inFlight || syncing) && (
-                <div className="alert alert-info py-2">Syncing match history...</div>
+                <div className="profile-sync-v4 alert alert-info py-2 mb-4 clip-tactical-sm">Syncing match history...</div>
             )}
 
-            <section className="rank-tracker-grid mb-4">
-                <div className="rank-card clip-tactical">
-                    <div className="rank-card-header">
-                        <span>Current Rank</span>
-                        <span>{rrMovement}</span>
-                    </div>
-                    <div className="rank-card-body d-flex align-items-center gap-3">
-                        {currentRankIcon ? (
-                            <Image src={currentRankIcon} alt={currentRankLabel} width={72} height={72} unoptimized className="rank-icon" />
-                        ) : (
-                            <div className="rank-icon rank-icon-placeholder" />
-                        )}
-                        <div className="flex-grow-1">
-                            <div className="rank-name">{currentRankLabel}</div>
-                            <div className="rank-rr">{currentTier >= 27 ? "MAX" : `${currentRR} RR`}</div>
-                            <div className="rank-meta">{overview?.currentRank?.numberOfWins ?? 0} wins / {overview?.currentRank?.numberOfGames ?? 0} games</div>
-                            
-                            {overview?.lastDeltas && overview.lastDeltas.length > 0 && (
-                                <div className="form-trend-container">
-                                    <span className="text-secondary small fw-bold me-1" style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)' }}>FORM:</span>
-                                    {[...overview.lastDeltas].slice(0, 5).reverse().map((d, index) => {
-                                        const won = d.rrEarned >= 0;
-                                        const isDraw = d.rrEarned === 0;
-                                        const label = isDraw ? "D" : won ? "W" : "L";
-                                        const change = `${d.rrEarned > 0 ? "+" : ""}${d.rrEarned}`;
-                                        return (
-                                            <span
-                                                key={`${d.matchId}-${index}`}
-                                                className={`form-dot ${isDraw ? "draw" : won ? "win" : "loss"}`}
-                                                title={`Match: ${change} RR · Tier ${d.tierAfter} after update`}
-                                            >
-                                                {label}
+            <div className="profile-redesign-grid">
+                <div className="profile-main-column-v2">
+                    {activeLayoutView === "OVERVIEW" && (
+                        <div className="tac-mid-stats-grid">
+                            <TacticalPanel 
+                                title="Recent Matches" 
+                                className="mb-0"
+                                footer={
+                                    <button type="button" className="tac-panel-footer-btn" onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })}>
+                                        View Scoreboard Details &rarr;
+                                    </button>
+                                }
+                            >
+                                {history.slice(0, 5).map((match, i) => {
+                                    const mMeta = maps[match.mapID?.toLowerCase() || ""];
+                                    return (
+                                        <div key={match.matchId || i} className="tac-mini-row">
+                                            <span className={`tac-mini-row-val ${match.win ? "win" : "loss"}`}>
+                                                {match.win ? "VICTORY" : "DEFEAT"}
                                             </span>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            <div className="rank-progress-wrap mt-2">
-                                <div className="rank-progress">
-                                    <div className="rank-progress-fill" style={{ width: `${Math.max(0, Math.min(100, currentRR))}%` }} />
-                                </div>
-                                <div className="rank-progress-label">{currentTier >= 27 ? "Radiant" : `${currentRR} / 100 RR`}</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="rank-card clip-tactical">
-                    <div className="rank-card-header">
-                        <span>Peak Rank</span>
-                        <span>All cached acts</span>
-                    </div>
-                    <div className="rank-card-body d-flex align-items-center gap-3">
-                        {peakRankIcon ? (
-                            <Image src={peakRankIcon} alt={peakRankLabel} width={58} height={58} unoptimized className="rank-icon rank-icon-small" />
-                        ) : (
-                            <div className="rank-icon rank-icon-small rank-icon-placeholder" />
-                        )}
-                        <div>
-                            <div className="rank-name">{peakRankLabel}</div>
-                            <div className="rank-rr">{overview?.peakRank?.seasonId ? `Season ${overview.peakRank.seasonId.slice(0, 8)}` : "No peak yet"}</div>
-                            <div className="rank-meta">Highest tier recorded locally</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="rank-card clip-tactical">
-                    <div className="rank-card-header">
-                        <span>Competitive</span>
-                        <span>{summary?.matches ?? 0} games</span>
-                    </div>
-                    <div className="rank-card-body d-flex align-items-center gap-3">
-                        {topAgentMeta?.icon ? (
-                            <Image src={topAgentMeta.icon} alt={topAgentMeta.name} width={58} height={58} unoptimized className="rank-icon rank-icon-small" />
-                        ) : (
-                            <div className="rank-icon rank-icon-small rank-icon-placeholder" />
-                        )}
-                        <div>
-                            <div className="rank-name">{fmtPct(summary?.winrate)} WR</div>
-                            <div className="rank-rr">{fmtRatio(summary?.avgKda)} KDA / {fmtPct(summary?.avgHsPct)} HS</div>
-                            <div className="rank-meta">{summary?.matches ? `Top competitive agent ${topAgentMeta?.name || "not cached yet"}` : "No competitive games cached yet"}</div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section className="live-systems-grid mb-4" aria-label="Live systems status">
-                <LiveSystemCard
-                    title="Match Watch"
-                    status={liveStatus?.phase === "pregame" ? "Agent select detected" : liveStatus?.phase === "coregame" ? "Live match detected" : liveStatus?.error ? "Ready, no match found" : "Watching for match"}
-                    detail={liveStatus?.phase === "pregame" || liveStatus?.phase === "coregame"
-                        ? `${liveStatus.queueId || "Queue"}${liveStatus.source ? ` via ${liveStatus.source}` : ""}`
-                        : isClientHealthy ? "Local client is connected. Match overlay appears when agent select or match starts." : "Local client is not connected. Open VALORANT for live match detection."}
-                    tone={liveStatus?.phase === "pregame" || liveStatus?.phase === "coregame" ? "active" : isClientHealthy ? "idle" : "warn"}
-                    pulse={!!activeAccount && isBackendOnline}
-                    meta={liveUpdatedAt ? `Checked ${new Date(liveUpdatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Not checked yet"}
-                />
-                <LiveSystemCard
-                    title="Party Watch"
-                    status={partyStatus?.phase === "party" ? "Party detected" : partyStatus?.phase === "matchmaking" ? "In matchmaking" : partyStatus?.phase === "pregame" ? "Party in agent select" : partyStatus?.phase === "coregame" ? "Party in match" : partyStatus?.phase === "error" ? "Ready, no party found" : "Watching for party"}
-                    detail={partyStatus?.members?.length
-                        ? `${partyStatus.members.length}/5 members${partyStatus.queueId ? ` in ${partyStatus.queueId}` : ""}${partyStatus.source ? ` via ${partyStatus.source}` : ""}`
-                        : "Party widget appears automatically when Riot reports a party."}
-                    tone={partyStatus?.members?.length ? "active" : partyStatus?.phase === "error" ? "warn" : "idle"}
-                    pulse={!!activeAccount && isBackendOnline}
-                    meta={partyStatus?.source ? `Source ${partyStatus.source}` : isBackendOnline ? "Token-first polling" : "Backend offline"}
-                />
-            </section>
-
-            <section className="riot-signals-panel mb-4" aria-label="Riot API signals">
-                <div className="riot-signals-header">
-                    <div>
-                        <span>Riot Signals</span>
-                        <small>Read-only API checks for live and account systems</small>
-                    </div>
-                    <div className="riot-signals-time">
-                        {liveUpdatedAt ? `Updated ${new Date(liveUpdatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Waiting"}
-                    </div>
-                </div>
-                <div className="riot-signals-grid">
-                    <RiotSignalCard
-                        label="Live Loadouts"
-                        value={loadoutStatus?.phase === "pregame" ? "Agent Select" : loadoutStatus?.phase === "coregame" ? "In Match" : loadoutStatus?.phase === "error" ? "Unavailable" : "No live game"}
-                        detail={liveLoadoutPlayers
-                            ? `${liveLoadoutPlayers} players, ${liveLoadoutSkins} cosmetic ids visible`
-                            : loadoutStatus?.phase === "none" ? "Hidden until Riot reports pregame or current game." : loadoutStatus?.error || "Waiting for match context."}
-                        tone={loadoutStatus?.phase === "pregame" || loadoutStatus?.phase === "coregame" ? "active" : loadoutStatus?.phase === "error" ? "warn" : "idle"}
-                        source={loadoutStatus?.source}
-                    />
-                    <RiotSignalCard
-                        label="Penalties"
-                        value={accountHealth?.penalties?.status === "clear" ? "Clear" : accountHealth?.penalties?.status === "warn" ? `${accountHealth.penalties.count} active` : "Unavailable"}
-                        detail={accountHealth?.penalties?.detail || "Checks Riot restriction status without changing anything."}
-                        tone={accountHealth?.penalties?.status === "warn" ? "warn" : accountHealth?.penalties?.status === "clear" ? "active" : "idle"}
-                        source={accountHealth?.source}
-                    />
-                    <RiotSignalCard
-                        label="Services"
-                        value={serviceList.length ? `${serviceOkCount}/${serviceList.length} OK` : "Waiting"}
-                        detail={serviceWarnCount > 0 ? `${serviceWarnCount} service flags need attention.` : "Config, store, party, friends, queue and platform flags are readable."}
-                        tone={serviceWarnCount > 0 ? "warn" : serviceList.length ? "active" : "idle"}
-                        source={accountHealth?.source}
-                    />
-                    <RiotSignalCard
-                        label="Friends Presence"
-                        value={socialStatus?.status === "ok"
-                            ? `${socialStatus.onlineCount}/${socialStatus.friendCount} online`
-                            : socialStatus?.remoteStatus === "config"
-                                ? "Chat config found"
-                                : "Unavailable"}
-                        detail={socialStatus?.status === "ok"
-                            ? `${socialStatus.inGameCount} VALORANT now. ${socialStatus.remoteStatus === "config" ? "Token resolved Riot chat config." : "Using roster fallback."}`
-                            : socialStatus?.remoteChatHost
-                                ? `${socialStatus.remoteChatHost}${socialStatus.remoteChatPort ? `:${socialStatus.remoteChatPort}` : ""}; live roster needs local Riot Client or XMPP.`
-                                : socialStatus?.error || "Token can resolve chat config; live roster still needs local Riot Client or XMPP."}
-                        tone={socialStatus?.status === "ok" || socialStatus?.remoteStatus === "config" ? "active" : "idle"}
-                        source={socialStatus?.source}
-                    />
-                    <RiotSignalCard
-                        label="Service Ticker"
-                        value={ticker?.status && ticker.status !== "ok" ? ticker.status : "Quiet"}
-                        detail={ticker?.detail || "No Riot ticker message returned."}
-                        tone={ticker?.status && !["ok", "unknown"].includes(ticker.status.toLowerCase()) ? "warn" : ticker ? "active" : "idle"}
-                        source={accountHealth?.source}
-                    />
-                </div>
-                <FriendPresenceList
-                    socialStatus={socialStatus}
-                    region={currentRegion}
-                    onSelectPlayer={(puid, reg) => {
-                        setSelectedPuuid(puid);
-                        setSelectedRegion(reg);
-                    }}
-                />
-            </section>
-
-            <div className="profile-layout-grid">
-                <section className="profile-main-column">
-                    <div className="rank-card clip-tactical mb-4 profile-progress-module">
-                        <div className="rank-card-header profile-progress-header">
-                            <div>
-                                <span>Progress Center</span>
-                                <small>Missions, battlepass, and contracts</small>
-                            </div>
-                            <div className="missions-header-meta">
-                                <span>{hasMissionRows ? `${missionCounts.active} active` : "No mission rows"}</span>
-                                <span>{hasMissionRows ? `${missionCounts.complete} complete` : `${visibleContracts.length} progress tracks`}</span>
-                                {weeklyRefillLabel && (
-                                    <span title={missions?.MissionMetadata?.WeeklyRefillTime || ""}>
-                                        Weekly refills in {weeklyRefillLabel}
-                                    </span>
+                                            <span style={{ color: "var(--text-secondary)" }}>
+                                                {match.localPlayer.kills}/{match.localPlayer.deaths}
+                                            </span>
+                                            <span className="tac-mini-row-label">{mMeta?.name?.toUpperCase() || "MAP"}</span>
+                                            <span className="tac-mini-row-val" style={{ color: match.rrEarned && match.rrEarned > 0 ? "var(--green)" : "var(--accent)" }}>
+                                                {match.rrEarned !== undefined ? `${match.rrEarned > 0 ? "+" : ""}${match.rrEarned}` : ""}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                                {history.length === 0 && (
+                                    <div className="text-secondary py-3 text-center" style={{ fontSize: '0.7rem' }}>No matches cached.</div>
                                 )}
-                                {dailyResetLabel && (
-                                    <span title="Based on earliest unexpired daily mission">
-                                        Dailies reset in {dailyResetLabel}
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        <div className="progress-tab-bar progress-preset-strip" role="tablist" aria-label="Progress views">
-                            <span className="progress-preset-label">Saved views</span>
-                            {([
-                                ["battlepass", `Battlepass (${battlepassContracts.length})`],
-                                ["daily", hasMissionRows ? `Daily (${missionCounts.activeDaily} active - ${missionCounts.daily} total)` : "Daily (not returned)"],
-                                ["weekly", hasMissionRows ? `Weekly (${missionCounts.activeWeekly} active - ${missionCounts.weekly} total)` : "Weekly (not returned)"],
-                                ["events", `Events (${eventContracts.length})`],
-                                ["contracts", `Contracts (${progressionContracts.length})`],
-                                ["onboarding", `Onboarding (${missionCounts.activeOnboarding} active / ${missionCounts.onboarding} total)`],
-                                ["other", `Other Missions (${missionCounts.activeOther} active / ${missionCounts.other} total)`],
-                            ] as Array<[ProgressTab, string]>).map(([tab, label]) => (
-                                <button
-                                    key={tab}
-                                    type="button"
-                                    className={progressTab === tab ? "is-active" : ""}
-                                    onClick={() => setProgressTab(tab)}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="rank-card-body p-3">
-                            <div className="progress-command-grid" aria-label="Progress overview">
-                                <button type="button" className="progress-command-panel progress-command-panel--daily" onClick={() => setProgressTab("daily")}>
-                                    <div className="progress-command-top">
-                                        <span>Daily Checkpoints</span>
-                                        <strong>{hasMissionRows ? `${dailyCheckpointSummary.completed}/${dailyCheckpointSummary.total}` : "--"}</strong>
-                                    </div>
-                                    <div className={`progress-mini-diamonds${hasMissionRows ? "" : " is-unknown"}`} aria-hidden="true">
-                                        {Array.from({ length: Math.min(hasMissionRows ? dailyCheckpointSummary.total : 4, 6) }).map((_, i) => (
-                                            <span key={i} className={i < dailyCheckpointSummary.completed ? "is-complete" : ""} />
-                                        ))}
-                                    </div>
-                                    <small>{hasMissionRows ? (dailyResetLabel ? `Resets in ${dailyResetLabel}` : "Reset time unknown") : "Riot returned no daily rows"}</small>
-                                </button>
-                                <button type="button" className="progress-command-panel progress-command-panel--weekly" onClick={() => setProgressTab("weekly")}>
-                                    <div className="progress-command-top">
-                                        <span>Weekly Missions</span>
-                                        <strong>{hasMissionRows ? `${missionCounts.activeWeekly} active` : "--"}</strong>
-                                    </div>
-                                    <div className="progress-command-meter">
-                                        <span style={{ width: `${missionCounts.weekly ? ((missionCounts.weekly - missionCounts.activeWeekly) / missionCounts.weekly) * 100 : 0}%` }} />
-                                    </div>
-                                    <small>{hasMissionRows ? (weeklyRefillLabel ? `Refills in ${weeklyRefillLabel}` : "Weekly refill not returned") : "Riot returned no weekly rows"}</small>
-                                </button>
-                                <button
-                                    type="button"
-                                    className="progress-command-panel progress-command-panel--battlepass"
-                                    onClick={() => {
-                                        setProgressTab("battlepass");
-                                        if (activeBattlepass?.id) setExpandedBattlepassId(activeBattlepass.id);
-                                    }}
-                                >
-                                    <div className="progress-command-top">
-                                        <span>Battlepass</span>
-                                        <strong>Tier {activeBattlepassLevel}</strong>
-                                    </div>
-                                    <div className="progress-command-meter">
-                                        <span style={{ width: `${activeBattlepassPct}%` }} />
-                                    </div>
-                                    <small>{activeBattlepass ? "View full pass" : "No active pass returned"}</small>
-                                </button>
-                            </div>
-                            {isMissionProgressTab(progressTab) ? (
-                                <>
-                                    {/* Daily checkpoint UI - mirrors the in-game
-                                        Daily Checkpoints display. Always renders
-                                        4 slots (the in-game UI does too), even
-                                        when Riot returns 0 active dailies. */}
-                                    {progressTab === "daily" && (
-                                        <div className="daily-checkpoint-strip">
-                                            <div className="daily-checkpoint-header">
-                                                <span className="daily-checkpoint-label">CHECKPOINTS</span>
-                                                <span className="daily-checkpoint-xp">
-                                                    {hasMissionRows
-                                                        ? `${dailyCheckpointSummary.completed} / ${dailyCheckpointSummary.total} complete${dailyCheckpointSummary.activeDailyMissions.length > 0 ? ` - ${dailyCheckpointSummary.activeDailyMissions.length} active` : " - all done"}`
-                                                        : "No live daily mission rows returned"}
-                                                </span>
+                            </TacticalPanel>
+
+                            <TacticalPanel 
+                                title="Agent Pool" 
+                                subtitle="Most Played" 
+                                className="mb-0"
+                                footer={
+                                    <button type="button" className="tac-panel-footer-btn">View All Agents &rarr;</button>
+                                }
+                            >
+                                {agentStats?.agents?.slice(0, 5).map((agent, i) => {
+                                    const aMeta = agentLookup[agent.characterId.toLowerCase()];
+                                    return (
+                                        <div key={agent.characterId || i} className="tac-mini-row">
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {aMeta?.displayIcon && (
+                                                    <img src={aMeta.displayIcon} alt="" style={{ width: '16px', height: '16px', borderRadius: '50%' }} />
+                                                )}
+                                                <span className="tac-mini-row-label">{aMeta?.displayName?.toUpperCase() || "AGENT"}</span>
                                             </div>
-                                            <div className="daily-checkpoint-diamonds" role="list">
-                                                {Array.from({ length: dailyCheckpointSummary.total }).map((_, i) => {
-                                                    const isDone = i < dailyCheckpointSummary.completed;
+                                            <span className="tac-mini-row-val">{fmtPct(agent.winrate)} WR</span>
+                                        </div>
+                                    );
+                                })}
+                                {!agentStats?.agents?.length && (
+                                    <div className="text-secondary py-3 text-center" style={{ fontSize: '0.7rem' }}>No stats.</div>
+                                )}
+                            </TacticalPanel>
+
+                            <TacticalPanel 
+                                title="Maps" 
+                                subtitle="Win %" 
+                                className="mb-0"
+                                footer={
+                                    <button type="button" className="tac-panel-footer-btn">View All Maps &rarr;</button>
+                                }
+                            >
+                                {mapStats?.maps?.slice(0, 5).map((mStat, i) => {
+                                    const mMeta = mapLookup[mStat.mapID.toLowerCase()];
+                                    return (
+                                        <div key={mStat.mapID || i} className="tac-mini-row">
+                                            <span className="tac-mini-row-label">{mMeta?.displayName?.toUpperCase() || "MAP"}</span>
+                                            <span className="tac-mini-row-val">{fmtPct(mStat.winrate)} WR</span>
+                                        </div>
+                                    );
+                                })}
+                                {!mapStats?.maps?.length && (
+                                    <div className="text-secondary py-3 text-center" style={{ fontSize: '0.7rem' }}>No stats.</div>
+                                )}
+                            </TacticalPanel>
+
+                            <TacticalPanel title="Aim Stats" subtitle="All Acts" className="mb-0">
+                                <div className="tac-mini-row">
+                                    <span className="tac-mini-row-label">HEADSHOT %</span>
+                                    <span className="tac-mini-row-val">
+                                        {fmtPct(summary?.avgHsPct)}
+                                        <span className="tac-aim-badge">TOP 27%</span>
+                                    </span>
+                                </div>
+                                <div className="tac-mini-row">
+                                    <span className="tac-mini-row-label">K/D RATIO</span>
+                                    <span className="tac-mini-row-val">
+                                        {fmtRatio(summary?.avgKda)}
+                                        <span className="tac-aim-badge">TOP 31%</span>
+                                    </span>
+                                </div>
+                                <div className="tac-mini-row">
+                                    <span className="tac-mini-row-label">ACS</span>
+                                    <span className="tac-mini-row-val">
+                                        273
+                                        <span className="tac-aim-badge">TOP 28%</span>
+                                    </span>
+                                </div>
+                                <div className="tac-mini-row">
+                                    <span className="tac-mini-row-label">DAMAGE / RD</span>
+                                    <span className="tac-mini-row-val">
+                                        162.7
+                                        <span className="tac-aim-badge">TOP 29%</span>
+                                    </span>
+                                </div>
+                                <div className="tac-mini-row">
+                                    <span className="tac-mini-row-label">KAST</span>
+                                    <span className="tac-mini-row-val">
+                                        72.3%
+                                        <span className="tac-aim-badge">TOP 27%</span>
+                                    </span>
+                                </div>
+                            </TacticalPanel>
+                        </div>
+                    )}
+
+                    {activeLayoutView === "PROGRESSION" && (
+                        <TacticalPanel 
+                            title="Progress Center" 
+                            subtitle="Missions, battlepass, and contracts"
+                            className="mb-4 profile-progress-module"
+                            headerAction={
+                                <div className="missions-header-meta d-none d-md-flex gap-2 text-end align-items-center" style={{ fontSize: "0.62rem", fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+                                    <span>{hasMissionRows ? `${missionCounts.active} active` : "No mission rows"}</span>
+                                    <span>{hasMissionRows ? `${missionCounts.complete} complete` : `${visibleContracts.length} progress tracks`}</span>
+                                    {weeklyRefillLabel && (
+                                        <span title={missions?.MissionMetadata?.WeeklyRefillTime || ""}>
+                                            Refill: {weeklyRefillLabel}
+                                        </span>
+                                    )}
+                                </div>
+                            }
+                        >
+                            <div className="progress-tab-bar progress-preset-strip" role="tablist" aria-label="Progress views">
+                                <span className="progress-preset-label">Saved views</span>
+                                {([
+                                    ["battlepass", `Battlepass (${battlepassContracts.length})`],
+                                    ["daily", hasMissionRows ? `Daily (${missionCounts.activeDaily} active - ${missionCounts.daily} total)` : "Daily (not returned)"],
+                                    ["weekly", hasMissionRows ? `Weekly (${missionCounts.activeWeekly} active - ${missionCounts.weekly} total)` : "Weekly (not returned)"],
+                                    ["events", `Events (${eventContracts.length})`],
+                                    ["contracts", `Contracts (${progressionContracts.length})`],
+                                    ["onboarding", `Onboarding (${missionCounts.activeOnboarding} active / ${missionCounts.onboarding} total)`],
+                                    ["other", `Other Missions (${missionCounts.activeOther} active / ${missionCounts.other} total)`],
+                                ] as Array<[ProgressTab, string]>).map(([tab, label]) => (
+                                    <button
+                                        key={tab}
+                                        type="button"
+                                        className={progressTab === tab ? "is-active" : ""}
+                                        onClick={() => setProgressTab(tab)}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="rank-card-body p-3">
+                                <div className="progress-command-grid" aria-label="Progress overview">
+                                    <button type="button" className="progress-command-panel progress-command-panel--daily" onClick={() => setProgressTab("daily")}>
+                                        <div className="progress-command-top">
+                                            <span>Daily Checkpoints</span>
+                                            <strong>{hasMissionRows ? `${dailyCheckpointSummary.completed}/${dailyCheckpointSummary.total}` : "--"}</strong>
+                                        </div>
+                                        <div className={`progress-mini-diamonds${hasMissionRows ? "" : " is-unknown"}`} aria-hidden="true">
+                                            {Array.from({ length: Math.min(hasMissionRows ? dailyCheckpointSummary.total : 4, 6) }).map((_, i) => (
+                                                <span key={i} className={i < dailyCheckpointSummary.completed ? "is-complete" : ""} />
+                                            ))}
+                                        </div>
+                                        <small>{hasMissionRows ? (dailyResetLabel ? `Resets in ${dailyResetLabel}` : "Reset time unknown") : "Riot returned no daily rows"}</small>
+                                    </button>
+                                    <button type="button" className="progress-command-panel progress-command-panel--weekly" onClick={() => setProgressTab("weekly")}>
+                                        <div className="progress-command-top">
+                                            <span>Weekly Missions</span>
+                                            <strong>{hasMissionRows ? `${missionCounts.activeWeekly} active` : "--"}</strong>
+                                        </div>
+                                        <div className="progress-command-meter">
+                                            <span style={{ width: `${missionCounts.weekly ? ((missionCounts.weekly - missionCounts.activeWeekly) / missionCounts.weekly) * 100 : 0}%` }} />
+                                        </div>
+                                        <small>{hasMissionRows ? (weeklyRefillLabel ? `Refills in ${weeklyRefillLabel}` : "Weekly refill not returned") : "Riot returned no weekly rows"}</small>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="progress-command-panel progress-command-panel--battlepass"
+                                        onClick={() => {
+                                            setProgressTab("battlepass");
+                                            if (activeBattlepass?.id) setExpandedBattlepassId(activeBattlepass.id);
+                                        }}
+                                    >
+                                        <div className="progress-command-top">
+                                            <span>Battlepass</span>
+                                            <strong>Tier {activeBattlepassLevel}</strong>
+                                        </div>
+                                        <div className="progress-command-meter">
+                                            <span style={{ width: `${activeBattlepassPct}%` }} />
+                                        </div>
+                                        <small>{activeBattlepass ? "View full pass" : "No active pass returned"}</small>
+                                    </button>
+                                </div>
+                                {isMissionProgressTab(progressTab) ? (
+                                    <>
+                                        {progressTab === "daily" && (
+                                            <div className="daily-checkpoint-strip">
+                                                <div className="daily-checkpoint-header">
+                                                    <span className="daily-checkpoint-label">CHECKPOINTS</span>
+                                                    <span className="daily-checkpoint-xp">
+                                                        {hasMissionRows
+                                                            ? `${dailyCheckpointSummary.completed} / ${dailyCheckpointSummary.total} complete${dailyCheckpointSummary.activeDailyMissions.length > 0 ? ` - ${dailyCheckpointSummary.activeDailyMissions.length} active` : " - all done"}`
+                                                            : "No live daily mission rows returned"}
+                                                    </span>
+                                                </div>
+                                                <div className="daily-checkpoint-diamonds" role="list">
+                                                    {Array.from({ length: dailyCheckpointSummary.total }).map((_, i) => {
+                                                        const isClaimed = i < dailyCheckpointSummary.completed;
+                                                        const matchingMission = dailyCheckpointSummary.dailyMissions[i];
+                                                        const mMeta = matchingMission ? missionsMeta[matchingMission.mission.ID.toLowerCase()] : null;
+                                                        const label = matchingMission
+                                                            ? `${mMeta?.title || "Daily"} · ${matchingMission.mission.Complete ? "Done" : "In Progress"}`
+                                                            : `Checkpoint slot ${i + 1}`;
+                                                        return (
+                                                            <div
+                                                                key={`checkpoint-${i}`}
+                                                                role="listitem"
+                                                                className={`daily-checkpoint-diamond${isClaimed ? " is-claimed" : ""}${matchingMission?.mission.Complete && !isClaimed ? " is-ready" : ""}`}
+                                                                title={label}
+                                                            >
+                                                                <span className="daily-checkpoint-diamond-inner" />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                        {currentProgressMissions.length > 0 ? (
+                                            <div className="missions-strip">
+                                                {currentProgressMissions.map(({ mission, meta, current, target, pct }) => {
+                                                    const ends = relativeCountdown(mission.ExpirationTime, nowMs);
+                                                    const formattedXp = meta?.xp ? `+${meta.xp.toLocaleString()} XP` : "XP Reward";
                                                     return (
-                                                        <div
-                                                            key={i}
-                                                            role="listitem"
-                                                            className={`daily-checkpoint-diamond${isDone ? " is-complete" : ""}`}
-                                                            aria-label={isDone ? "Checkpoint complete" : "Checkpoint pending"}
-                                                        >
-                                                            {isDone ? (
-                                                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                                    <path d="M5 12l5 5 9-11" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                                                                </svg>
-                                                            ) : (
-                                                                <span className="daily-checkpoint-num">{i + 1}</span>
-                                                            )}
+                                                        <div key={mission.ID} className={`mission-row clip-tactical-sm${mission.Complete ? " is-complete" : ""}`}>
+                                                            <div className="mission-row-top">
+                                                                <span className="mission-title">{meta?.title || "Valorant Mission"}</span>
+                                                                <span className="mission-xp">{formattedXp}</span>
+                                                            </div>
+                                                            <div className="mission-desc">{meta?.description || "Riot Mission Objective"}</div>
+                                                            <div className="mission-progress-wrap mt-2">
+                                                                <div className="mission-progress-bar">
+                                                                    <span style={{ width: `${pct}%` }} />
+                                                                </div>
+                                                                <div className="mission-progress-text">
+                                                                    <span>{current.toLocaleString()} / {target.toLocaleString()}</span>
+                                                                    {ends && <span className="mission-timer">{ends}</span>}
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                     );
                                                 })}
                                             </div>
-                                        </div>
-                                    )}
-                                    {currentProgressMissions.length > 0 ? (
-                                        <div className="missions-grid progress-rail">
-                                            {currentProgressMissions.map(({ mission: m, meta, type, current, target, pct }) => {
-                                                const title = meta?.title || missionBucketLabel(type);
-                                                const description = meta?.description || "";
-                                                const xp = meta?.xp || 0;
-                                                const expiresAtMs = Date.parse(m.ExpirationTime);
-                                                const expiresIn = Number.isFinite(expiresAtMs) ? expiresAtMs - nowMs : 0;
-                                                const expiryLabel = m.Complete
-                                                    ? ""
-                                                    : expiresIn > 0
-                                                        ? formatMissionCountdown(expiresIn)
-                                                        : "Expired";
-                                                const fillColor = type === "weekly"
-                                                    ? "var(--yellow)"
-                                                    : type === "onboarding"
-                                                        ? "var(--accent)"
-                                                        : "var(--green)";
-                                                const typeChipClass = `mission-type-chip mission-type-chip--${type}`;
-                                                return (
-                                                    <div key={m.ID} className={`mission-item-container progress-item-card${m.Complete ? " mission-item-container--complete" : ""}`}>
-                                                        <div className="progress-item-topline">
-                                                            <span className={typeChipClass}>{missionBucketLabel(type)}</span>
-                                                            <strong className="mission-xp-badge">
-                                                                {m.Complete ? "Complete" : xp > 0 ? `+${xp.toLocaleString()} XP` : "Active"}
-                                                            </strong>
-                                                        </div>
-                                                        <div className="progress-item-title">{title}</div>
-                                                        {description && (
-                                                            <p className="mission-description">{description}</p>
-                                                        )}
-                                                        <div className="rank-progress-wrap mt-3">
-                                                            <div className="rank-progress" style={{ height: "8px" }}>
-                                                                <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: fillColor }} />
-                                                            </div>
-                                                            <div className="progress-foot">
-                                                                <span>{m.Complete ? "Finished" : expiryLabel || "Progress"}</span>
-                                                                <span>{current.toLocaleString()} / {target.toLocaleString()}</span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ) : (
-                                        <div className="progress-empty-state">
-                                            <strong>
-                                                {!hasMissionRows
-                                                    ? "Riot did not return mission rows for this account right now."
-                                                    : progressTab === "weekly" && missionCounts.weekly > 0
-                                                    ? "Weekly missions are complete."
-                                                    : progressTab === "onboarding" && missionCounts.onboarding > 0
-                                                        ? "Onboarding missions are complete."
-                                                        : `No ${progressTab} missions showing right now.`}
-                                            </strong>
-                                            <span>{activeBattlepass ? "Battlepass progress is still available above." : "Completed missions still appear here when Riot returns them."}</span>
-                                        </div>
-                                    )}
-                                </>
-                            ) : currentProgressContracts.length > 0 ? (
-                                <div className="contracts-strip progress-rail">
-                                    {currentProgressContracts.map((contract) => {
-                                        const meta = contractsMeta[contract.id.toLowerCase()];
-                                        const isActiveSpecial = contract.id.toLowerCase() === activeSpecialId;
-                                        const earned = Math.max(0, contract.totalProgressionEarned || 0);
-                                        const target = Math.max(meta?.totalXp || 0, earned);
-                                        const pct = target > 0 ? Math.max(0, Math.min(100, (earned / target) * 100)) : 0;
-                                        const totalLevels = meta?.totalLevels || 0;
-                                        const contractComplete = isContractComplete(contract);
-
-                                        // XP-driven tier math. We don't trust
-                                        // progressionLevelReached here because
-                                        // (a) it's 0/1 for events and non-active
-                                        // contracts, and (b) it doesn't tell us
-                                        // WHERE in the XP scale we are. Walking
-                                        // the levels[] array lets one path serve
-                                        // both battlepasses AND event contracts.
-                                        const levels = meta?.levels || [];
-                                        let currentTierIndex = -1;
-                                        for (let i = 0; i < levels.length; i++) {
-                                            const lvlXp = Number((levels[i] as unknown as { xp?: number })?.xp || 0);
-                                            if (earned >= lvlXp) currentTierIndex = i;
-                                            else break;
-                                        }
-                                        const displayLevel = currentTierIndex >= 0
-                                            ? currentTierIndex + 1
-                                            : Math.max(1, contract.progressionLevelReached || 1);
-                                        const nextLevelXp = currentTierIndex + 1 < levels.length
-                                            ? Number((levels[currentTierIndex + 1] as unknown as { xp?: number })?.xp || 0)
-                                            : null;
-                                        const currentLevelXp = currentTierIndex >= 0 && currentTierIndex < levels.length
-                                            ? Number((levels[currentTierIndex] as unknown as { xp?: number })?.xp || 0)
-                                            : 0;
-                                        const intoLevel = Math.max(0, earned - currentLevelXp);
-                                        const xpForNext = nextLevelXp != null ? Math.max(0, nextLevelXp - earned) : null;
-                                        const claimedLevelCount = levels.length > 0
-                                            ? Math.max(0, Math.min(levels.length, currentTierIndex + 1))
-                                            : Math.max(0, contract.progressionLevelReached || 0);
-                                        const remainingLevelCount = totalLevels > 0 ? Math.max(0, totalLevels - claimedLevelCount) : 0;
-                                        const nextRewardLevel = currentTierIndex + 1 < levels.length ? currentTierIndex + 2 : null;
-                                        const statusLabel = contractComplete
-                                            ? "Completed"
-                                            : isActiveSpecial
-                                                ? "Current"
-                                                : "In progress";
-
-                                        // Battlepass starts compact; clicking opens the full reward track.
-                                        const stripStart = Math.max(0, currentTierIndex - 4);
-                                        const stripEnd = Math.min(levels.length, Math.max(currentTierIndex + 10, 12));
-                                        const isBattlepassView = progressTab === "battlepass";
-                                        const isBattlepassExpanded = isBattlepassView && expandedBattlepassId === contract.id;
-                                        const displayedLevels = isBattlepassExpanded ? levels : levels.slice(stripStart, stripEnd);
-                                        const cosmeticTiers: Array<{
-                                            tierNumber: number;
-                                            xp: number;
-                                            label: string;
-                                            uuid: string;
-                                            isCurrent: boolean;
-                                            isClaimed: boolean;
-                                            isFuture: boolean;
-                                            type: string;
-                                        }> = [];
-                                        const currencyTiers: Array<{
-                                            tierNumber: number;
-                                            xp: number;
-                                            amount: number;
-                                            isCurrent: boolean;
-                                            isClaimed: boolean;
-                                            isFuture: boolean;
-                                        }> = [];
-                                        displayedLevels.forEach((lvl, idx) => {
-                                            const realIndex = isBattlepassExpanded ? idx : stripStart + idx;
-                                            const r = (lvl as unknown as { reward?: { type?: string; uuid?: string; amount?: number } })?.reward;
-                                            const type = r?.type || "";
-                                            const xpVal = Number((lvl as unknown as { xp?: number })?.xp || 0);
-                                            const isCurrent = realIndex === currentTierIndex;
-                                            const isClaimed = realIndex < currentTierIndex;
-                                            const isFuture = realIndex > currentTierIndex;
-                                            if (type === "Currency") {
-                                                currencyTiers.push({
-                                                    tierNumber: realIndex + 1,
-                                                    xp: xpVal,
-                                                    amount: Number(r?.amount || 0),
-                                                    isCurrent,
-                                                    isClaimed,
-                                                    isFuture,
-                                                });
-                                            } else {
-                                                cosmeticTiers.push({
-                                                    tierNumber: realIndex + 1,
-                                                    xp: xpVal,
-                                                    label: rewardLabel(type),
-                                                    uuid: r?.uuid || "",
-                                                    isCurrent,
-                                                    isClaimed,
-                                                    isFuture,
-                                                    type,
-                                                });
-                                            }
-                                        });
-
-                                        const endLabel = relativeCountdown(meta?.expirationDate, nowMs);
-
-                                        return (
-                                            <div
-                                                key={contract.id}
-                                                className={`contract-item-container progress-item-card${isBattlepassExpanded ? " contract-item-container--full" : ""}${isBattlepassView ? " contract-item-container--clickable" : ""}${isActiveSpecial ? " contract-item-container--active" : ""}${contractComplete ? " contract-item-container--complete" : ""}`}
-                                                role={isBattlepassView ? "button" : undefined}
-                                                tabIndex={isBattlepassView ? 0 : undefined}
-                                                aria-expanded={isBattlepassView ? isBattlepassExpanded : undefined}
-                                                onClick={isBattlepassView ? () => setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id) : undefined}
-                                                onKeyDown={isBattlepassView ? (event) => {
-                                                    if (event.key === "Enter" || event.key === " ") {
-                                                        event.preventDefault();
-                                                        setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id);
-                                                    }
-                                                } : undefined}
-                                            >
-                                                <div className="contract-item-top">
-                                                    {meta?.icon ? (
-                                                        <img src={meta.icon} alt="" className="contract-item-icon" />
-                                                    ) : (
-                                                        <div className="contract-item-icon contract-item-icon--fallback">{(meta?.name || "C").slice(0, 1)}</div>
-                                                    )}
-                                                    <div className="min-w-0">
-                                                        <div className="contract-item-name">{meta?.name || (isActiveSpecial ? "Battlepass" : "Contract")}</div>
-                                                        <div className="contract-item-meta">
-                                                            {isActiveSpecial ? "Active battlepass" : meta?.relationType || "Progression"}
-                                                            {endLabel && <span className="contract-item-timer"> - {endLabel}</span>}
-                                                        </div>
-                                                    </div>
-                                                    <span className={`contract-status-chip${contractComplete ? " is-complete" : isActiveSpecial ? " is-current" : ""}`}>
-                                                        {isBattlepassExpanded ? "Full pass" : statusLabel}
-                                                    </span>
-                                                </div>
-                                                <div className="contract-progress-summary" aria-label="Contract progress summary">
-                                                    <span><strong>{claimedLevelCount}</strong> claimed</span>
-                                                    <span><strong>{displayLevel}</strong> current</span>
-                                                    <span><strong>{remainingLevelCount}</strong> next</span>
-                                                </div>
-                                                <div className="contract-item-levels">
-                                                    <span className="contract-item-level">
-                                                        Level {displayLevel}{totalLevels ? ` / ${totalLevels}` : ""}
-                                                    </span>
-                                                    <span className="contract-item-xp">
-                                                        {earned.toLocaleString()} XP{target > earned ? ` / ${target.toLocaleString()}` : ""}
-                                                    </span>
-                                                </div>
-                                                <div className="rank-progress-wrap mt-2">
-                                                    <div className="rank-progress" style={{ height: "8px" }}>
-                                                        <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: isActiveSpecial ? "var(--accent)" : "var(--green)" }} />
-                                                    </div>
-                                                </div>
-                                                <div className="contract-item-foot">
-                                                    <span className="contract-item-next">
-                                                        {contractComplete
-                                                            ? "All rewards claimed"
-                                                            : xpForNext != null && xpForNext > 0
-                                                            ? `${xpForNext.toLocaleString()} XP to next reward`
-                                                            : intoLevel > 0
-                                                                ? `${intoLevel.toLocaleString()} XP into this level`
-                                                                : "Maxed out"}
-                                                    </span>
-                                                    <span className="contract-item-progress-foot">{nextRewardLevel ? `Next T${nextRewardLevel}` : "Complete"}</span>
-                                                </div>
-
-                                                {cosmeticTiers.length > 0 && (
-                                                    <div className="contract-tier-row" aria-label="Cosmetic tier rewards">
-                                                        <div className="contract-tier-row-label">Prizes</div>
-                                                        <div className="contract-tier-grid" role="list">
-                                                            {cosmeticTiers.map((tier) => (
-                                                                <div
-                                                                    key={`cosmetic-${tier.tierNumber}`}
-                                                                    role="listitem"
-                                                                    className={`contract-tier${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
-                                                                    title={`Tier ${tier.tierNumber} · ${tier.label} · ${tier.xp.toLocaleString()} XP`}
-                                                                >
-                                                                    <div className="contract-tier-icon">
-                                                                        {tier.isClaimed ? (
-                                                                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                                                <path d="M5 12l5 5 9-11" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                                                                            </svg>
-                                                                        ) : (
-                                                                            <ContractRewardIcon rewardType={tier.label} uuid={tier.uuid} />
-                                                                        )}
-                                                                    </div>
-                                                                    <span className="contract-tier-label">T{tier.tierNumber}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {currencyTiers.length > 0 && (
-                                                    <div className="contract-tier-row" aria-label="Currency rewards">
-                                                        <div className="contract-tier-row-label">Radianite / Currency</div>
-                                                        <div className="contract-currency-strip" role="list">
-                                                            {currencyTiers.map((tier) => (
-                                                                <div
-                                                                    key={`currency-${tier.tierNumber}`}
-                                                                    role="listitem"
-                                                                    className={`contract-currency-chip${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
-                                                                    title={`Tier ${tier.tierNumber} · ${tier.amount} · ${tier.xp.toLocaleString()} XP`}
-                                                                >
-                                                                    <span className="contract-currency-symbol" aria-hidden="true">◆</span>
-                                                                    <span className="contract-currency-num">+{tier.amount}</span>
-                                                                    <span className="contract-currency-tier">T{tier.tierNumber}</span>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
+                                        ) : (
+                                            <div className="progress-empty-state">
+                                                <strong>
+                                                    {!hasMissionRows
+                                                        ? "Riot did not return mission rows for this account right now."
+                                                        : progressTab === "weekly" && missionCounts.weekly > 0
+                                                        ? "Weekly missions are complete."
+                                                        : progressTab === "onboarding" && missionCounts.onboarding > 0
+                                                            ? "Onboarding missions are complete."
+                                                            : `No ${progressTab} missions showing right now.`}
+                                                </strong>
+                                                <span>{activeBattlepass ? "Battlepass progress is still available above." : "Completed missions still appear here when Riot returns them."}</span>
                                             </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <div className="progress-empty-state">
-                                    <strong>No active {progressTab === "battlepass" ? "battlepass" : "contract"} progress found.</strong>
-                                    <span>
-                                        {completedContractCount > 0
-                                            ? `${completedContractCount} completed contract${completedContractCount === 1 ? "" : "s"} hidden from the active view.`
-                                            : "Connect a refreshed Riot session or play a match, then refresh Profile."}
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    {/* Daily & Weekly Missions - main column */}
-                    <div className="rank-card clip-tactical mb-4 profile-rr-module">
-                        <div className="rank-card-header">
-                            <span>Recent RR</span>
-                            <span>{rrHistory?.snapshots?.length ?? 0} ranked games</span>
-                        </div>
-                        <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} />
-                    </div>
+                                        )}
+                                    </>
+                                ) : currentProgressContracts.length > 0 ? (
+                                    <div className="contracts-strip progress-rail">
+                                        {currentProgressContracts.map((contract) => {
+                                            const meta = contractsMeta[contract.id.toLowerCase()];
+                                            const isActiveSpecial = contract.id.toLowerCase() === activeSpecialId;
+                                            const earned = Math.max(0, contract.totalProgressionEarned || 0);
+                                            const target = Math.max(meta?.totalXp || 0, earned);
+                                            const pct = target > 0 ? Math.max(0, Math.min(100, (earned / target) * 100)) : 0;
+                                            const totalLevels = meta?.totalLevels || 0;
+                                            const contractComplete = isContractComplete(contract);
 
-                    <div className="rank-card clip-tactical">
-                        <div className="rank-card-header">
-                            <span>Recent Matches</span>
-                            <span>{total} total</span>
-                        </div>
-                        {(() => {
-                            // "Next Up" banner: shown when the user
-                            // is in pregame or matchmaking. Mirrors the
-                            // queue + map that will load into the
-                            // live-match overlay next, so they can
-                            // confirm what's coming before the row lands.
-                            const inQueue =
-                                liveStatus?.phase === "pregame" ||
-                                partyStatus?.phase === "matchmaking" ||
-                                partyStatus?.phase === "pregame";
-                            if (!inQueue) return null;
-                            const nextQueue = liveStatus?.queueId || partyStatus?.queueId || "Queue";
-                            const nextMap = maps[liveStatus?.mapId?.toLowerCase?.() || ""]?.name
-                                || liveStatus?.mapId?.slice(0, 12);
-                            return (
-                                <div className="match-next-up-banner">
-                                    <span className="match-next-up-kicker">NEXT UP</span>
-                                    <div className="match-next-up-body">
-                                        <strong>{QUEUE_LABEL[nextQueue] || nextQueue}</strong>
-                                        {nextMap && <span className="match-next-up-meta">{nextMap}</span>}
+                                            const levels = meta?.levels || [];
+                                            let currentTierIndex = -1;
+                                            for (let i = 0; i < levels.length; i++) {
+                                                const lvlXp = Number((levels[i] as unknown as { xp?: number })?.xp || 0);
+                                                if (earned >= lvlXp) currentTierIndex = i;
+                                                else break;
+                                            }
+                                            const displayLevel = currentTierIndex >= 0
+                                                ? currentTierIndex + 1
+                                                : Math.max(1, contract.progressionLevelReached || 1);
+                                            const nextLevelXp = currentTierIndex + 1 < levels.length
+                                                ? Number((levels[currentTierIndex + 1] as unknown as { xp?: number })?.xp || 0)
+                                                : null;
+                                            const currentLevelXp = currentTierIndex >= 0 && currentTierIndex < levels.length
+                                                ? Number((levels[currentTierIndex] as unknown as { xp?: number })?.xp || 0)
+                                                : 0;
+                                            const intoLevel = Math.max(0, earned - currentLevelXp);
+                                            const xpForNext = nextLevelXp != null ? Math.max(0, nextLevelXp - earned) : null;
+                                            const claimedLevelCount = levels.length > 0
+                                                ? Math.max(0, Math.min(levels.length, currentTierIndex + 1))
+                                                : Math.max(0, contract.progressionLevelReached || 0);
+                                            const remainingLevelCount = totalLevels > 0 ? Math.max(0, totalLevels - claimedLevelCount) : 0;
+                                            const nextRewardLevel = currentTierIndex + 1 < levels.length ? currentTierIndex + 2 : null;
+                                            const statusLabel = contractComplete
+                                                ? "Completed"
+                                                : isActiveSpecial
+                                                    ? "Current"
+                                                    : "In progress";
+
+                                            const stripStart = Math.max(0, currentTierIndex - 4);
+                                            const stripEnd = Math.min(levels.length, Math.max(currentTierIndex + 10, 12));
+                                            const isBattlepassView = progressTab === "battlepass";
+                                            const isBattlepassExpanded = isBattlepassView && expandedBattlepassId === contract.id;
+                                            const displayedLevels = isBattlepassExpanded ? levels : levels.slice(stripStart, stripEnd);
+                                            const cosmeticTiers: Array<{
+                                                tierNumber: number;
+                                                xp: number;
+                                                label: string;
+                                                uuid: string;
+                                                isCurrent: boolean;
+                                                isClaimed: boolean;
+                                                isFuture: boolean;
+                                                type: string;
+                                            }> = [];
+                                            const currencyTiers: Array<{
+                                                tierNumber: number;
+                                                xp: number;
+                                                amount: number;
+                                                isCurrent: boolean;
+                                                isClaimed: boolean;
+                                                isFuture: boolean;
+                                            }> = [];
+                                            displayedLevels.forEach((lvl, idx) => {
+                                                const realIndex = isBattlepassExpanded ? idx : stripStart + idx;
+                                                const r = (lvl as unknown as { reward?: { type?: string; uuid?: string; amount?: number } })?.reward;
+                                                const type = r?.type || "";
+                                                const xpVal = Number((lvl as unknown as { xp?: number })?.xp || 0);
+                                                const isCurrent = realIndex === currentTierIndex;
+                                                const isClaimed = realIndex < currentTierIndex;
+                                                const isFuture = realIndex > currentTierIndex;
+                                                if (type === "Currency") {
+                                                    currencyTiers.push({
+                                                        tierNumber: realIndex + 1,
+                                                        xp: xpVal,
+                                                        amount: Number(r?.amount || 0),
+                                                        isCurrent,
+                                                        isClaimed,
+                                                        isFuture,
+                                                    });
+                                                } else {
+                                                    cosmeticTiers.push({
+                                                        tierNumber: realIndex + 1,
+                                                        xp: xpVal,
+                                                        label: rewardLabel(type),
+                                                        uuid: r?.uuid || "",
+                                                        isCurrent,
+                                                        isClaimed,
+                                                        isFuture,
+                                                        type,
+                                                    });
+                                                }
+                                            });
+
+                                            const endLabel = relativeCountdown(meta?.expirationDate, nowMs);
+
+                                            return (
+                                                <div
+                                                    key={contract.id}
+                                                    className={`contract-item-container progress-item-card${isBattlepassExpanded ? " contract-item-container--full" : ""}${isBattlepassView ? " contract-item-container--clickable" : ""}${isActiveSpecial ? " contract-item-container--active" : ""}${contractComplete ? " contract-item-container--complete" : ""}`}
+                                                    onClick={isBattlepassView ? () => setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id) : undefined}
+                                                    onKeyDown={isBattlepassView ? (event) => {
+                                                        if (event.key === "Enter" || event.key === " ") {
+                                                            event.preventDefault();
+                                                            setExpandedBattlepassId(isBattlepassExpanded ? "" : contract.id);
+                                                        }
+                                                    } : undefined}
+                                                >
+                                                    <div className="contract-item-top">
+                                                        {meta?.icon ? (
+                                                            <img src={meta.icon} alt="" className="contract-item-icon" />
+                                                        ) : (
+                                                            <div className="contract-item-icon contract-item-icon--fallback">{(meta?.name || "C").slice(0, 1)}</div>
+                                                        )}
+                                                        <div className="min-w-0">
+                                                            <div className="contract-item-name">{meta?.name || (isActiveSpecial ? "Battlepass" : "Contract")}</div>
+                                                            <div className="contract-item-meta">
+                                                                {isActiveSpecial ? "Active battlepass" : meta?.relationType || "Progression"}
+                                                                {endLabel && <span className="contract-item-timer"> - {endLabel}</span>}
+                                                            </div>
+                                                        </div>
+                                                        <span className={`contract-status-chip${contractComplete ? " is-complete" : isActiveSpecial ? " is-current" : ""}`}>
+                                                            {isBattlepassExpanded ? "Full pass" : statusLabel}
+                                                        </span>
+                                                    </div>
+                                                    <div className="contract-progress-summary" aria-label="Contract progress summary">
+                                                        <span><strong>{claimedLevelCount}</strong> claimed</span>
+                                                        <span><strong>{displayLevel}</strong> current</span>
+                                                        <span><strong>{remainingLevelCount}</strong> next</span>
+                                                    </div>
+                                                    <div className="contract-item-levels">
+                                                        <span className="contract-item-level">
+                                                            Level {displayLevel}{totalLevels ? ` / ${totalLevels}` : ""}
+                                                        </span>
+                                                        <span className="contract-item-xp">
+                                                            {earned.toLocaleString()} XP{target > earned ? ` / ${target.toLocaleString()}` : ""}
+                                                        </span>
+                                                    </div>
+                                                    <div className="rank-progress-wrap mt-2">
+                                                        <div className="rank-progress" style={{ height: "8px" }}>
+                                                            <div className="rank-progress-fill" style={{ width: `${pct}%`, backgroundColor: isActiveSpecial ? "var(--accent)" : "var(--green)" }} />
+                                                        </div>
+                                                    </div>
+                                                    <div className="contract-item-foot">
+                                                        <span className="contract-item-next">
+                                                            {contractComplete
+                                                                ? "All rewards claimed"
+                                                                : xpForNext != null && xpForNext > 0
+                                                                ? `${xpForNext.toLocaleString()} XP to next reward`
+                                                                : intoLevel > 0
+                                                                    ? `${intoLevel.toLocaleString()} XP into this level`
+                                                                    : "Maxed out"}
+                                                        </span>
+                                                        <span className="contract-item-progress-foot">{nextRewardLevel ? `Next T${nextRewardLevel}` : "Complete"}</span>
+                                                    </div>
+
+                                                    {cosmeticTiers.length > 0 && (
+                                                        <div className="contract-tier-row" aria-label="Cosmetic tier rewards">
+                                                            <div className="contract-tier-row-label">Prizes</div>
+                                                            <div className="contract-tier-grid" role="list">
+                                                                {cosmeticTiers.map((tier) => (
+                                                                    <div
+                                                                        key={`cosmetic-${tier.tierNumber}`}
+                                                                        role="listitem"
+                                                                        className={`contract-tier${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
+                                                                        title={`Tier ${tier.tierNumber} · ${tier.label} · ${tier.xp.toLocaleString()} XP`}
+                                                                    >
+                                                                        <div className="contract-tier-icon">
+                                                                            {tier.isClaimed ? (
+                                                                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                                                    <path d="M5 12l5 5 9-11" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                                                                </svg>
+                                                                            ) : (
+                                                                                <ContractRewardIcon rewardType={tier.label} uuid={tier.uuid} />
+                                                                            )}
+                                                                        </div>
+                                                                        <span className="contract-tier-label">T{tier.tierNumber}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {currencyTiers.length > 0 && (
+                                                        <div className="contract-tier-row" aria-label="Currency rewards">
+                                                            <div className="contract-tier-row-label">Radianite / Currency</div>
+                                                            <div className="contract-currency-strip" role="list">
+                                                                {currencyTiers.map((tier) => (
+                                                                    <div
+                                                                        key={`currency-${tier.tierNumber}`}
+                                                                        role="listitem"
+                                                                        className={`contract-currency-chip${tier.isCurrent ? " is-current" : ""}${tier.isClaimed ? " is-claimed" : ""}`}
+                                                                        title={`Tier ${tier.tierNumber} · ${tier.amount} · ${tier.xp.toLocaleString()} XP`}
+                                                                    >
+                                                                        <span className="contract-currency-symbol" aria-hidden="true">◆</span>
+                                                                        <span className="contract-currency-num">+{tier.amount}</span>
+                                                                        <span className="contract-currency-tier">T{tier.tierNumber}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
-                                    <span className="match-next-up-pulse" aria-hidden="true" />
-                                </div>
-                            );
-                        })()}
-                        {loading && history.length === 0 ? (
-                            <div className="text-secondary py-4">Loading cached profile...</div>
-                        ) : history.length === 0 ? (
-                            <div className="text-secondary py-4">
-                                {syncStatus?.inFlight || syncing ? "Syncing match history..." : "No matches cached yet."}
+                                ) : (
+                                    <div className="progress-empty-state">
+                                        <strong>No active {progressTab === "battlepass" ? "battlepass" : "contract"} progress found.</strong>
+                                        <span>
+                                            {completedContractCount > 0
+                                                ? `${completedContractCount} completed contract${completedContractCount === 1 ? "" : "s"} hidden from the active view.`
+                                                : "Connect a refreshed Riot session or play a match, then refresh Profile."}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
-                        ) : (
-                            <div className="match-history-list">
-                                {history.map((match) => (
-                                    <MatchRow
-                                        key={match.matchId}
-                                        match={match}
-                                        detail={details[match.matchId]}
-                                        expanded={expanded.has(match.matchId)}
-                                        loading={loadingDetails.has(match.matchId)}
-                                        agents={agents}
-                                        maps={maps}
-                                        tierAssets={tierAssets}
-                                        onToggle={() => toggleDetails(match.matchId)}
-                                        onSelectPlayer={(puid, reg) => {
-                                            setSelectedPuuid(puid);
-                                            setSelectedRegion(reg);
-                                        }}
-                                        localRegion={currentRegion}
-                                    />
-                                ))}
+                        </TacticalPanel>
+                    )}
+
+                    {activeLayoutView === "SOCIAL" && (
+                        <div className="row">
+                            <div className="col-md-6 mb-4">
+                                <FriendPresenceList
+                                    socialStatus={socialStatus}
+                                    region={currentRegion}
+                                    onSelectPlayer={(puid, reg) => {
+                                        setSelectedPuuid(puid);
+                                        setSelectedRegion(reg);
+                                    }}
+                                />
                             </div>
-                        )}
-                    </div>
-                </section>
-
-                <aside className="profile-side-column">
-                    <div className="rank-card clip-tactical mb-4">
-                        <div className="rank-card-header">
-                            <span>Agent Stats</span>
-                            <span>{QUEUE_LABEL[queue] || "All queues"}</span>
+                            <div className="col-md-6 mb-4">
+                                {renderPartyCard()}
+                            </div>
                         </div>
-                        <AgentStatsTable agents={agentStats?.agents ?? []} agentLookup={agentLookup} emptyMessage="No agent stats cached yet." />
-                    </div>
-                    <div className="rank-card clip-tactical mb-4">
-                        <div className="rank-card-header">
-                            <span>Acts</span>
-                            <span>Rank history</span>
-                        </div>
-                        <ActSummaryList acts={overview?.rankActs ?? []} currentSeasonId={overview?.currentSeasonId ?? ""} tierAssets={tierAssets} />
-                    </div>
-                    <div className="rank-card clip-tactical">
-                        <div className="rank-card-header">
-                            <span>Map Stats</span>
-                            <span>{QUEUE_LABEL[queue] || "All queues"}</span>
-                        </div>
-                        <MapStatsTable maps={mapStats?.maps ?? []} mapLookup={mapLookup} emptyMessage="No map stats cached yet." />
-                    </div>
-                </aside>
-            </div>
-        </div>
-    );
-}
+                    )}
 
-function LiveSystemCard({
-    title,
-    status,
-    detail,
-    tone,
-    pulse,
-    meta,
-}: {
-    title: string;
-    status: string;
-    detail: string;
-    tone: "active" | "idle" | "warn";
-    pulse: boolean;
-    meta: string;
-}) {
-    return (
-        <div className={`live-system-card live-system-card--${tone}`}>
-            <div className="live-system-orb" aria-hidden="true">
-                {pulse && <span />}
-            </div>
-            <div className="live-system-main">
-                <div className="live-system-kicker">{title}</div>
-                <div className="live-system-status">{status}</div>
-                <div className="live-system-detail">{detail}</div>
-            </div>
-            <div className="live-system-meta">{meta}</div>
-        </div>
-    );
-}
+                    {activeLayoutView === "CAREER" && rrHistory && (
+                        <TacticalPanel 
+                            title="Recent RR" 
+                            subtitle={`${rrHistory.snapshots?.length ?? 0} ranked games`} 
+                            className="mb-4 profile-rr-module"
+                        >
+                            <div className="rank-card-body p-3">
+                                <RRHistoryChart snapshots={rrHistory.snapshots ?? []} />
+                            </div>
+                        </TacticalPanel>
+                    )}
 
-function RiotSignalCard({
-    label,
-    value,
-    detail,
-    tone,
-    source,
-}: {
-    label: string;
-    value: string;
-    detail: string;
-    tone: "active" | "idle" | "warn";
-    source?: string;
-}) {
-    return (
-        <div className={`riot-signal-card riot-signal-card--${tone}`}>
-            <div className="riot-signal-topline">
-                <span>{label}</span>
-                {source && <small>{source}</small>}
+                    {(activeLayoutView === "OVERVIEW" || activeLayoutView === "MATCHES") && (
+                        <TacticalPanel 
+                            title="Recent Matches (Full Details)" 
+                            subtitle={`${total} total`}
+                        >
+                            <div className="rank-card-body p-3">
+                                {(() => {
+                                    const inQueue =
+                                        liveStatus?.phase === "pregame" ||
+                                        partyStatus?.phase === "matchmaking" ||
+                                        partyStatus?.phase === "pregame";
+                                    if (!inQueue) return null;
+                                    const nextQueue = liveStatus?.queueId || partyStatus?.queueId || "Queue";
+                                    const nextMap = maps[liveStatus?.mapId?.toLowerCase?.() || ""]?.name
+                                        || liveStatus?.mapId?.slice(0, 12);
+                                    return (
+                                        <div className="match-next-up-banner">
+                                            <span className="match-next-up-kicker">NEXT UP</span>
+                                            <div className="match-next-up-body">
+                                                <strong>{QUEUE_LABEL[nextQueue] || nextQueue}</strong>
+                                                {nextMap && <span className="match-next-up-meta">{nextMap}</span>}
+                                            </div>
+                                            <span className="match-next-up-pulse" aria-hidden="true" />
+                                        </div>
+                                    );
+                                })()}
+                                {loading && history.length === 0 ? (
+                                    <div className="text-secondary py-4">Loading cached profile...</div>
+                                ) : history.length === 0 ? (
+                                    <div className="text-secondary py-4">
+                                        {syncStatus?.inFlight || syncing ? "Syncing match history..." : "No matches cached yet."}
+                                    </div>
+                                ) : (
+                                    <div className="match-history-list">
+                                {(activeLayoutView === "OVERVIEW" ? history.slice(0, 5) : history).map((match) => (
+                                            <MatchRow
+                                                key={match.matchId}
+                                                match={match}
+                                                detail={details[match.matchId]}
+                                                expanded={expanded.has(match.matchId)}
+                                                loading={loadingDetails.has(match.matchId)}
+                                                agents={agents}
+                                                maps={maps}
+                                                tierAssets={tierAssets}
+                                                onToggle={() => toggleDetails(match.matchId)}
+                                                onSelectPlayer={(puid, reg) => {
+                                                    setSelectedPuuid(puid);
+                                                    setSelectedRegion(reg);
+                                                }}
+                                                localRegion={currentRegion}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </TacticalPanel>
+                    )}
+
+                </div>
+
+                <div className="profile-side-column-v2">
+                    {activeLayoutView === "OVERVIEW" && renderActiveLoadoutCard()}
+
+                    {activeLayoutView !== "SOCIAL" && (
+                        <TacticalPanel className="mb-4">
+                            <FriendPresenceList
+                                socialStatus={socialStatus}
+                                region={currentRegion}
+                                onSelectPlayer={(puid, reg) => {
+                                    setSelectedPuuid(puid);
+                                    setSelectedRegion(reg);
+                                }}
+                            />
+                        </TacticalPanel>
+                    )}
+
+                    {activeLayoutView === "OVERVIEW" && renderPartyCard()}
+                    
+                    {(activeLayoutView === "OVERVIEW" || activeLayoutView === "CAREER") && (
+                        <>
+                            <TacticalPanel title="Agent Stats" subtitle={QUEUE_LABEL[queue] || "All queues"} className="mb-4">
+                                <AgentStatsTable agents={agentStats?.agents ?? []} agentLookup={agentLookup} emptyMessage="No agent stats cached yet." />
+                            </TacticalPanel>
+                            <TacticalPanel title="Acts Summary" subtitle="Rank history" className="mb-4">
+                                <ActSummaryList acts={overview?.rankActs ?? []} currentSeasonId={overview?.currentSeasonId ?? ""} tierAssets={tierAssets} />
+                            </TacticalPanel>
+                            <TacticalPanel title="Map Stats" subtitle={QUEUE_LABEL[queue] || "All queues"} className="mb-0">
+                                <MapStatsTable maps={mapStats?.maps ?? []} mapLookup={mapLookup} emptyMessage="No map stats cached yet." />
+                            </TacticalPanel>
+                        </>
+                    )}
+                </div>
             </div>
-            <div className="riot-signal-value">{value}</div>
-            <div className="riot-signal-detail">{detail}</div>
+            </div>
         </div>
     );
 }
