@@ -152,7 +152,7 @@ func logMiddleware(next http.Handler) http.Handler {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "tauri://localhost" ||
+		if origin == "tauri://localhost" || origin == "http://tauri.localhost" || origin == "https://tauri.localhost" ||
 			strings.HasPrefix(origin, "http://localhost:") ||
 			strings.HasPrefix(origin, "http://127.0.0.1:") {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
