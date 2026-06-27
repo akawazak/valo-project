@@ -120,6 +120,7 @@ jobs:
           New-Item portable-build -ItemType Directory -Force | Out-Null
           Copy-Item $appExe.FullName portable-build/VantaVault.exe
           Copy-Item $sidecar.FullName portable-build/
+          'start "" /wait VantaVault.exe' | Set-Content portable-build/launch.cmd -Encoding ascii
           $files = Get-ChildItem portable-build -File
           $fileEntries = (0..($files.Count - 1) | ForEach-Object { "%FILE$_%=" }) -join "`n"
           $strings = (0..($files.Count - 1) | ForEach-Object { "FILE$_=`"$($files[$_].Name)`"" }) -join "`n"
@@ -153,7 +154,7 @@ jobs:
           [Strings]
           TargetName="$PWD\VantaVault-portable.exe"
           FriendlyName="VantaVault Portable"
-          AppLaunched="VantaVault.exe"
+          AppLaunched="cmd.exe /c launch.cmd"
           SourceFiles0="$PWD\portable-build\"
           $strings
           "@ | Set-Content portable.sed -Encoding ascii
