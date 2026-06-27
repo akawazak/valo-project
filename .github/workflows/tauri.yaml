@@ -139,20 +139,25 @@ jobs:
           InstallPrompt=
           DisplayLicense=
           FinishMessage=
-          TargetName=$PWD\VantaVault-portable.exe
-          FriendlyName=VantaVault Portable
-          AppLaunched=VantaVault.exe
+          TargetName=%TargetName%
+          FriendlyName=%FriendlyName%
+          AppLaunched=%AppLaunched%
           PostInstallCmd=<None>
           AdminQuietInstCmd=
           UserQuietInstCmd=
           SourceFiles=SourceFiles
           [SourceFiles]
-          SourceFiles0=$PWD\portable-build\
+          SourceFiles0=%SourceFiles0%
           [SourceFiles0]
           $fileEntries
           [Strings]
+          TargetName="$PWD\VantaVault-portable.exe"
+          FriendlyName="VantaVault Portable"
+          AppLaunched="VantaVault.exe"
+          SourceFiles0="$PWD\portable-build\"
           $strings
-          "@ | Set-Content portable.sed
-          & "$env:WINDIR\System32\iexpress.exe" /N portable.sed
+          "@ | Set-Content portable.sed -Encoding ascii
+          $process = Start-Process "$env:WINDIR\System32\iexpress.exe" -ArgumentList '/N', '/Q', 'portable.sed' -Wait -PassThru
+          if ($process.ExitCode) { throw "IExpress failed with exit code $($process.ExitCode)." }
           if (!(Test-Path VantaVault-portable.exe)) { throw "Portable exe not created." }
           gh release upload "v$version" VantaVault-portable.exe --repo akawazak/valo-project --clobber
