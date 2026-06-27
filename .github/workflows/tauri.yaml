@@ -94,7 +94,7 @@ jobs:
             ## VantaVault v__VERSION__
 
             ### Download
-            - **Windows Portable (recommended):** `VantaVault-portable.zip` — extract anywhere, run `VantaVault.exe` (no install)
+            - **Windows Portable (recommended):** `VantaVault-portable.exe` - run directly (no install)
             - **Windows Installer:** `VantaVault_*_x64-setup.exe` — per-user install, no admin required, includes auto-update
             - **Linux AppImage:** `VantaVault_*_amd64.AppImage` — portable Linux execution
             - **Linux Debian Package:** `VantaVault_*_amd64.deb` — standard Linux install
@@ -104,54 +104,55 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-      - name: Package portable zip (Windows)
+      - name: Package portable exe (Windows)
         if: matrix.settings.platform == 'windows-latest'
-        shell: bash
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          version="${{ steps.tauri.outputs.appVersion }}"
-          if [[ -z "$version" ]]; then
-            echo "No app version output, skipping portable upload."
-            exit 0
-          fi
-          tag="v$version"
-          releaseDir="frontend/src-tauri/target/release"
+          $version = "${{ steps.tauri.outputs.appVersion }}"
+          if (!$version) { Write-Host "No app version output, skipping portable upload."; exit 0 }
+          $releaseDir = "frontend/src-tauri/target/release"
+          $appExe = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
+          $sidecar = Get-ChildItem "$releaseDir/valovault-backend*.exe" | Select-Object -First 1
+          if (!$appExe -or !$sidecar) { throw "Portable app or sidecar executable not found." }
 
-          echo "Release dir: $releaseDir"
-          echo "Contents of release dir:"
-          ls -la "$releaseDir" 2>&1 | head -40
-
-          appExe=$(ls "$releaseDir"/*.exe 2>/dev/null | grep -vE 'backend|wix|light|candle|nsis' | head -n 1 || true)
-          if [[ -z "$appExe" ]]; then
-            echo "ERROR: app exe not found in $releaseDir"
-            exit 1
-          fi
-          echo "App exe: $appExe"
-
-          sidecar=$(ls "$releaseDir"/valovault-backend*.exe 2>/dev/null | head -n 1 || true)
-          if [[ -z "$sidecar" ]]; then
-            echo "ERROR: sidecar not found in $releaseDir"
-            exit 1
-          fi
-          echo "Sidecar: $sidecar"
-
-          # Stage into a clean directory with the canonical exe name.
-          work="portable-build"
-          rm -rf "$work" VantaVault-portable.zip
-          mkdir -p "$work"
-          cp "$appExe" "$work/VantaVault.exe"
-          cp "$sidecar" "$work/"
-          echo "Staged files:"
-          ls -la "$work/"
-          pwsh -NoProfile -Command "Compress-Archive -Path 'portable-build/*' -DestinationPath 'VantaVault-portable.zip' -Force"
-
-          if [[ ! -f VantaVault-portable.zip ]]; then
-            echo "ERROR: zip not created"
-            exit 1
-          fi
-          ls -la VantaVault-portable.zip
-
-          gh release upload "$tag" VantaVault-portable.zip --repo akawazak/valo-project --clobber
-          echo "Uploaded portable zip to $tag"
+          New-Item portable-build -ItemType Directory -Force | Out-Null
+          Copy-Item $appExe.FullName portable-build/VantaVault.exe
+          Copy-Item $sidecar.FullName portable-build/
+          $files = Get-ChildItem portable-build -File
+          $fileEntries = (0..($files.Count - 1) | ForEach-Object { "%FILE$_%=" }) -join "`n"
+          $strings = (0..($files.Count - 1) | ForEach-Object { "FILE$_=`"$($files[$_].Name)`"" }) -join "`n"
+          @"
+          [Version]
+          Class=IEXPRESS
+          SEDVersion=3
+          [Options]
+          PackagePurpose=InstallApp
+          ShowInstallProgramWindow=0
+          HideExtractAnimation=1
+          UseLongFileName=1
+          InsideCompressed=0
+          CAB_FixedSize=0
+          CAB_ResvCodeSigning=0
+          RebootMode=N
+          InstallPrompt=
+          DisplayLicense=
+          FinishMessage=
+          TargetName=$PWD\VantaVault-portable.exe
+          FriendlyName=VantaVault Portable
+          AppLaunched=VantaVault.exe
+          PostInstallCmd=<None>
+          AdminQuietInstCmd=
+          UserQuietInstCmd=
+          SourceFiles=SourceFiles
+          [SourceFiles]
+          SourceFiles0=$PWD\portable-build\
+          [SourceFiles0]
+          $fileEntries
+          [Strings]
+          $strings
+          "@ | Set-Content portable.sed
+          & "$env:WINDIR\System32\iexpress.exe" /N portable.sed
+          if (!(Test-Path VantaVault-portable.exe)) { throw "Portable exe not created." }
+          gh release upload "v$version" VantaVault-portable.exe --repo akawazak/valo-project --clobber

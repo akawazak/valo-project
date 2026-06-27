@@ -100,10 +100,10 @@ The Tauri updater endpoint is configured for:
 https://github.com/akawazak/valo-project/releases/latest/download/latest.json
 ```
 
-GitHub Actions builds the Tauri app and uploads release artifacts. Portable packaging is generated as:
+GitHub Actions builds the Tauri app and uploads release artifacts. Portable packaging is a self-extracting executable because the app includes a separate backend sidecar:
 
 ```text
-VantaVault.exe
+VantaVault-portable.exe
 ```
 
 For updater signing, add this repository secret before creating production releases:
