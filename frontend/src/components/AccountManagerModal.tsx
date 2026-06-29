@@ -29,6 +29,7 @@ export default function AccountManagerModal({
     onToggleFavorite,
 }: AccountManagerModalProps) {
     const [refreshingPuuids, setRefreshingPuuids] = useState<Record<string, boolean>>({});
+    const [refreshResults, setRefreshResults] = useState<Record<string, "success" | "failed">>({});
     const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
     const [bulkProgressCurrent, setBulkProgressCurrent] = useState(0);
     const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
@@ -43,14 +44,21 @@ export default function AccountManagerModal({
 
     const handleRefreshAccount = async (e: React.MouseEvent, acc: RiotAccount) => {
         e.stopPropagation();
+        setRefreshResults((prev) => {
+            const next = { ...prev };
+            delete next[acc.puuid];
+            return next;
+        });
         setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
         try {
-            await Promise.race([
+            const refreshed = await Promise.race([
                 onRefreshAccount(acc, false),
                 new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
             ]);
+            setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
         } catch (err) {
             console.error("Refresh account error:", err);
+            setRefreshResults((prev) => ({ ...prev, [acc.puuid]: "failed" }));
         } finally {
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
         }
@@ -69,12 +77,14 @@ export default function AccountManagerModal({
             setBulkProgressCurrent(i + 1);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
-                await Promise.race([
+                const refreshed = await Promise.race([
                     onRefreshAccount(acc, false),
                     new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
                 ]);
+                setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
             } catch (err) {
                 console.error(`Failed to refresh token for ${acc.gameName}:`, err);
+                setRefreshResults((prev) => ({ ...prev, [acc.puuid]: "failed" }));
             } finally {
                 setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
             }
@@ -181,6 +191,12 @@ export default function AccountManagerModal({
                                             <div className="settings-account-pills">
                                                 {isActive && <span className="status-pill active-pill">Active</span>}
                                                 {isExpired && <span className="status-pill expired-pill">Expired</span>}
+                                                {refreshResults[acc.puuid] === "success" && (
+                                                    <span className="status-pill active-pill">Refreshed</span>
+                                                )}
+                                                {refreshResults[acc.puuid] === "failed" && (
+                                                    <span className="status-pill expired-pill">Refresh failed</span>
+                                                )}
                                             </div>
                                         </div>
 

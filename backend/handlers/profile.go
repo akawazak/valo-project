@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"backend/tracking"
+
+	"github.com/truearken/valclient/valclient"
 )
 
 // profilePuuid extracts the puuid from the request, preferring the
@@ -90,7 +92,7 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	if len(overview.RankActs) > 0 || len(overview.LastDeltas) > 0 {
 		overview.RankSource = "cache"
 	}
-	if err := h.applyLiveMMRToOverview(r, overview, puuid); err != nil {
+	if err := h.applyLiveMMRToOverview(r, db, overview, puuid); err != nil {
 		overview.RankError = err.Error()
 	} else {
 		overview.RankSource = "live"
@@ -101,7 +103,7 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	h.returnAny(w, overview)
 }
 
-func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Overview, puuid string) error {
+func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *tracking.Overview, puuid string) error {
 	val, err := h.getClient(r)
 	if err != nil || val == nil || val.Player == nil {
 		if err != nil {
@@ -113,7 +115,10 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Ove
 	var live playerMMRResponse
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
 		if strings.Contains(err.Error(), "status 404") {
-			return fmt.Errorf("rank refresh failed: the selected account or region does not match this Riot session; refresh the selected account")
+			if fallbackErr := hydrateCompetitiveUpdates(db, val, overview, puuid); fallbackErr == nil {
+				return nil
+			}
+			return fmt.Errorf("rank history is unavailable from Riot for this account")
 		}
 		return fmt.Errorf("rank refresh failed: %w", err)
 	}
@@ -121,6 +126,86 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Ove
 		return fmt.Errorf("rank refresh failed: Riot returned no competitive MMR data")
 	}
 	mergeLiveMMR(overview, live)
+	return nil
+}
+
+type competitiveUpdatesResponse struct {
+	Matches []struct {
+		MatchID                  string `json:"MatchID"`
+		SeasonID                 string `json:"SeasonID"`
+		MatchStartTime           int64  `json:"MatchStartTime"`
+		TierAfterUpdate          int    `json:"TierAfterUpdate"`
+		TierBeforeUpdate         int    `json:"TierBeforeUpdate"`
+		RankedRatingAfterUpdate  int    `json:"RankedRatingAfterUpdate"`
+		RankedRatingBeforeUpdate int    `json:"RankedRatingBeforeUpdate"`
+		RankedRatingEarned       int    `json:"RankedRatingEarned"`
+		AFKPenalty               int    `json:"AFKPenalty"`
+	} `json:"Matches"`
+}
+
+func (response competitiveUpdatesResponse) snapshots(puuid string) []tracking.RRSnapshot {
+	snapshots := make([]tracking.RRSnapshot, 0, len(response.Matches))
+	for _, match := range response.Matches {
+		if match.MatchID == "" || match.SeasonID == "" {
+			continue
+		}
+		snapshots = append(snapshots, tracking.RRSnapshot{
+			Puuid:          puuid,
+			MatchID:        match.MatchID,
+			SeasonID:       match.SeasonID,
+			TierBefore:     match.TierBeforeUpdate,
+			TierAfter:      match.TierAfterUpdate,
+			RRBefore:       match.RankedRatingBeforeUpdate,
+			RRAfter:        match.RankedRatingAfterUpdate,
+			RREarned:       match.RankedRatingEarned,
+			AFKPenalty:     match.AFKPenalty,
+			MatchStartTime: match.MatchStartTime,
+		})
+	}
+	return snapshots
+}
+
+func hydrateCompetitiveUpdates(db *sql.DB, val *valclient.ValClient, overview *tracking.Overview, puuid string) error {
+	apiURL := fmt.Sprintf(
+		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=200&queue=competitive",
+		val.Shard,
+		puuid,
+	)
+	var response competitiveUpdatesResponse
+	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &response); err != nil {
+		return err
+	}
+	snapshots := response.snapshots(puuid)
+	if len(snapshots) == 0 {
+		return fmt.Errorf("Riot returned no competitive updates")
+	}
+	for _, snapshot := range snapshots {
+		if err := tracking.InsertRRSnapshotIfAbsent(db, snapshot); err != nil {
+			return err
+		}
+	}
+
+	allSnapshots, err := tracking.GetRRSnapshots(db, puuid, "")
+	if err != nil {
+		return err
+	}
+	overview.RankActs = tracking.RankActsFromSnapshots(allSnapshots)
+	overview.LastDeltas = overview.LastDeltas[:0]
+	for i := len(allSnapshots) - 1; i >= 0 && len(overview.LastDeltas) < 5; i-- {
+		overview.LastDeltas = append(overview.LastDeltas, allSnapshots[i])
+	}
+	for _, act := range overview.RankActs {
+		if act.PeakRank > overview.PeakRank.CompetitiveTier {
+			overview.PeakRank.CompetitiveTier = act.PeakRank
+			overview.PeakRank.SeasonID = act.SeasonID
+		}
+		if act.SeasonID == overview.CurrentSeasonID {
+			overview.CurrentRank.CompetitiveTier = act.FinalRank
+			overview.CurrentRank.RankedRating = act.RankedRating
+			overview.CurrentRank.NumberOfGames = act.Games
+			overview.CurrentRank.NumberOfWins = act.Wins
+		}
+	}
 	return nil
 }
 

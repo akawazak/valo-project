@@ -17,6 +17,7 @@ import (
 )
 
 const clientPlatform = "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9"
+const riotClientAuthURL = "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
 
 var clientVersionCached string
 var versionOnce sync.Once
@@ -278,8 +279,7 @@ func extractAllTokens(redirectURL string) (*extractedTokens, error) {
 func (h *Handler) GetAuthUrl(w http.ResponseWriter, r *http.Request) {
 	// Standard implicit flow — works for all unofficial/community apps.
 	// offline_access is restricted to officially registered Riot partner apps only.
-	authURL := "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
-	h.returnAny(w, map[string]string{"auth_url": authURL})
+	h.returnAny(w, map[string]string{"auth_url": riotClientAuthURL})
 }
 
 func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
@@ -346,16 +346,9 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Confirmed endpoint from techchrism community docs.
-	// Using play-valorant-web-prod client so the redirect goes to playvalorant.com.
-	const reauthURL = "https://auth.riotgames.com/authorize" +
-		"?redirect_uri=https%3A%2F%2Fplayvalorant.com%2Fopt_in" +
-		"&client_id=play-valorant-web-prod" +
-		"&response_type=token%20id_token" +
-		"&nonce=1" +
-		"&scope=account%20openid"
-
-	req, err := http.NewRequest(http.MethodGet, reauthURL, nil)
+	// Keep the refreshed token on the Riot Client audience. The web-only
+	// audience can identify the player but is rejected by PVP endpoints.
+	req, err := http.NewRequest(http.MethodGet, riotClientAuthURL, nil)
 	if err != nil {
 		h.returnError(w, err)
 		return

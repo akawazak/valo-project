@@ -57,3 +57,31 @@ func TestMergeLiveMMRUsesDocumentedSeasonFields(t *testing.T) {
 		t.Fatalf("rank acts were not populated correctly: %+v", overview.RankActs)
 	}
 }
+
+func TestCompetitiveUpdatesBecomeRRSnapshots(t *testing.T) {
+	var response competitiveUpdatesResponse
+	if err := json.Unmarshal([]byte(`{
+		"Matches": [{
+			"MatchID": "match-1",
+			"SeasonID": "act-1",
+			"MatchStartTime": 1234,
+			"TierBeforeUpdate": 14,
+			"TierAfterUpdate": 15,
+			"RankedRatingBeforeUpdate": 92,
+			"RankedRatingAfterUpdate": 12,
+			"RankedRatingEarned": 20,
+			"AFKPenalty": 0
+		}]
+	}`), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshots := response.snapshots("player-1")
+	if len(snapshots) != 1 {
+		t.Fatalf("snapshots = %#v", snapshots)
+	}
+	got := snapshots[0]
+	if got.Puuid != "player-1" || got.SeasonID != "act-1" || got.TierAfter != 15 || got.RRAfter != 12 || got.RREarned != 20 {
+		t.Fatalf("unexpected snapshot: %#v", got)
+	}
+}

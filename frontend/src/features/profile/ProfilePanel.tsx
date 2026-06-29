@@ -390,8 +390,9 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         setLoading(true);
         setError("");
         try {
-            const [ov, rr, mh, ag, mp, st] = await Promise.all([
-                getProfileOverview(opts),
+            // Overview hydrates ranked history from Riot before the RR query reads the cache.
+            const ov = await getProfileOverview(opts);
+            const [rr, mh, ag, mp, st] = await Promise.all([
                 getRRHistory(undefined, opts),
                 getProfileMatchHistory(0, pageSize, queue || undefined, opts),
                 getAgentStats(queue || undefined, opts),

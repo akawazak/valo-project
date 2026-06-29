@@ -3,7 +3,7 @@ package tracking
 import "testing"
 
 func TestRankActsFromSnapshotsBuildsNewestActFirst(t *testing.T) {
-	acts := rankActsFromSnapshots([]RRSnapshot{
+	acts := RankActsFromSnapshots([]RRSnapshot{
 		{SeasonID: "old", TierAfter: 15, RRAfter: 40, RREarned: 18, MatchStartTime: 10},
 		{SeasonID: "old", TierBefore: 15, TierAfter: 16, RRAfter: 12, RREarned: 22, MatchStartTime: 20},
 		{SeasonID: "new", TierAfter: 17, RRAfter: 55, RREarned: -17, MatchStartTime: 30},

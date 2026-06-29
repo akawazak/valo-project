@@ -310,6 +310,36 @@
   text-transform: uppercase;
 }
 
+.live-party-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.1rem 0 0.5rem;
+}
+
+.live-party-section-heading .live-party-section-title {
+  margin: 0;
+}
+
+.live-party-section-counts {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.live-party-section-counts span,
+.live-party-friend-state {
+  padding: 0.14rem 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.035);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.56rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .live-party-friend-list {
   display: flex;
   flex-direction: column;
@@ -328,6 +358,32 @@
   border-radius: 6px;
 }
 
+.live-party-friend-row {
+  position: relative;
+  overflow: hidden;
+}
+
+.live-party-friend-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--green);
+}
+
+.live-party-friend-row.is-game {
+  background: linear-gradient(90deg, rgba(34, 211, 163, 0.1), rgba(255, 255, 255, 0.025));
+  border-color: rgba(34, 211, 163, 0.2);
+}
+
+.live-party-friend-row.is-offline {
+  opacity: 0.62;
+}
+
+.live-party-friend-row.is-offline::before {
+  background: var(--text-dim);
+}
+
 .live-party-friend-empty {
   color: var(--text-secondary);
   font-size: 0.72rem;
@@ -343,10 +399,31 @@
   box-shadow: 0 0 0 3px rgba(34, 211, 163, 0.11);
 }
 
+.live-party-friend-row.is-game .live-party-friend-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(34, 211, 163, 0.12), 0 0 12px rgba(34, 211, 163, 0.45);
+}
+
+.live-party-friend-row.is-offline .live-party-friend-dot {
+  background: var(--text-dim);
+  box-shadow: none;
+}
+
 .live-party-friend-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  flex: 1;
+}
+
+.live-party-friend-state {
+  flex: 0 0 auto;
+}
+
+.live-party-friend-row.is-game .live-party-friend-state {
+  color: var(--green);
+  border-color: rgba(34, 211, 163, 0.24);
+  background: rgba(34, 211, 163, 0.08);
 }
 
 .live-party-friend-name,

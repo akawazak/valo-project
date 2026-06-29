@@ -781,7 +781,7 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	return out, nil
 }
 
-func rankActsFromSnapshots(snapshots []RRSnapshot) []RankActSummary {
+func RankActsFromSnapshots(snapshots []RRSnapshot) []RankActSummary {
 	type actState struct {
 		summary RankActSummary
 		lastAt  int64
@@ -1036,7 +1036,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview act history: %w", err)
 	}
-	out.RankActs = rankActsFromSnapshots(allSnapshots)
+	out.RankActs = RankActsFromSnapshots(allSnapshots)
 	for _, act := range out.RankActs {
 		if act.PeakRank > out.PeakRank.CompetitiveTier {
 			out.PeakRank.CompetitiveTier = act.PeakRank

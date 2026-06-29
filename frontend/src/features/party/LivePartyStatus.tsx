@@ -296,7 +296,6 @@ function FriendsPill({
     presences: SocialPresence[];
     onOpen: () => void;
 }) {
-    const first = presences[0];
     return (
         <button
             type="button"
@@ -310,9 +309,9 @@ function FriendsPill({
             </span>
             <span className="live-party-pill-body">
                 <span className="live-party-pill-kicker">Friends Online</span>
-                <span className="live-party-pill-title">{first?.name || "Riot friends"}</span>
+                <span className="live-party-pill-title">{social?.onlineCount || presences.length} online</span>
                 <span className="live-party-pill-sub">
-                    {social?.onlineCount || presences.length} online - {social?.inGameCount || 0} in game
+                    {social?.inGameCount || 0} in match - {social?.friendCount || presences.length} total
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">&gt;</span>
@@ -341,17 +340,29 @@ function FriendPresenceList({
 
     return (
         <div className="live-party-friends">
-            <div className="live-party-section-title">Friends</div>
+            <div className="live-party-section-heading">
+                <div className="live-party-section-title">Friends</div>
+                <div className="live-party-section-counts">
+                    <span>{social?.inGameCount || 0} in match</span>
+                    <span>{social?.onlineCount || presences.length} online</span>
+                </div>
+            </div>
             <div className="live-party-friend-list">
-                {presences.map((presence, index) => (
-                    <div className="live-party-friend-row" key={presence.puuid || `${presence.name}-${index}`}>
+                {presences.map((presence, index) => {
+                    const state = presenceState(presence);
+                    return (
+                    <div className={`live-party-friend-row is-${state}`} key={presence.puuid || `${presence.name}-${index}`}>
                         <span className="live-party-friend-dot" aria-hidden="true" />
                         <span className="live-party-friend-main">
                             <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
                             <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
                         </span>
+                        <span className="live-party-friend-state">
+                            {state === "game" ? "In match" : state === "online" ? "Online" : "Offline"}
+                        </span>
                     </div>
-                ))}
+                    );
+                })}
             </div>
         </div>
     );
@@ -360,12 +371,24 @@ function FriendPresenceList({
 function visiblePresences(social: SocialStatusResponse | null) {
     return (social?.presences || [])
         .filter((presence) => !!(presence.name || presence.product || presence.state || presence.queueId))
+        .sort((a, b) => presencePriority(a) - presencePriority(b) || (a.name || "").localeCompare(b.name || ""))
         .slice(0, 8);
+}
+
+function presenceState(presence: SocialPresence): "game" | "online" | "offline" {
+    if (presence.queueId || /in.?game|pregame|match/i.test(presence.state || "")) return "game";
+    if ((presence.state || "").toLowerCase() === "offline") return "offline";
+    return "online";
+}
+
+function presencePriority(presence: SocialPresence) {
+    const state = presenceState(presence);
+    return state === "game" ? 0 : state === "online" ? 1 : 2;
 }
 
 function presenceLabel(presence: SocialPresence) {
     const parts = [
-        presence.product || "Online",
+        presence.product?.toLowerCase() === "valorant" ? "VALORANT" : presence.product || "Riot",
         presence.queueId ? queueName(presence.queueId) : presence.state,
     ].filter(Boolean);
     return parts.join(" - ");
