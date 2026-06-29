@@ -75,9 +75,8 @@ type remoteSocialProbe struct {
 	Error  string
 }
 
-// GetSocialStatus returns friend presence. Token auth can resolve Riot's
-// chat host/port from client config, but the live roster still requires the
-// local Riot Client chat server until we add a real XMPP client.
+// GetSocialStatus returns friend presence from token-authenticated XMPP,
+// falling back to the local Riot Client chat API when remote chat is unavailable.
 func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
 	if err != nil {

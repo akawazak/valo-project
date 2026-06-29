@@ -23,35 +23,36 @@ type xmppSocialHub struct {
 }
 
 type xmppSocialSession struct {
-	mu        sync.RWMutex
-	key       string
-	auth      remoteAuthHeaders
-	host      string
-	domain    string
-	port      int
-	state     string
-	lastError string
-	roster    map[string]xmppRosterItem
-	presences map[string]chatPresenceEntry
-	running   bool
-	conn      net.Conn
+	mu          sync.RWMutex
+	key         string
+	auth        remoteAuthHeaders
+	host        string
+	domain      string
+	port        int
+	state       string
+	lastError   string
+	lastAttempt time.Time
+	roster      map[string]xmppRosterItem
+	presences   map[string]chatPresenceEntry
+	running     bool
+	conn        net.Conn
 }
 
 type xmppRosterItem struct {
-	PUUID   string
-	Name    string
+	PUUID    string
+	Name     string
 	GameName string
-	GameTag string
+	GameTag  string
 }
 
 type xmppIQ struct {
 	Query struct {
 		Items []struct {
-			JID         string `xml:"jid,attr"`
-			Name        string `xml:"name,attr"`
-			GameName    string `xml:"game_name,attr"`
-			GameTag     string `xml:"game_tag,attr"`
-			PUUID       string `xml:"puuid,attr"`
+			JID          string `xml:"jid,attr"`
+			Name         string `xml:"name,attr"`
+			GameName     string `xml:"game_name,attr"`
+			GameTag      string `xml:"game_tag,attr"`
+			PUUID        string `xml:"puuid,attr"`
 			Subscription string `xml:"subscription,attr"`
 		} `xml:"item"`
 	} `xml:"query"`
@@ -99,9 +100,14 @@ func (s *xmppSocialSession) ensureRunning(auth remoteAuthHeaders) {
 		s.mu.Unlock()
 		return
 	}
+	if s.state == "error" && time.Since(s.lastAttempt) < 15*time.Second {
+		s.mu.Unlock()
+		return
+	}
 	s.running = true
 	s.state = "connecting"
 	s.lastError = ""
+	s.lastAttempt = time.Now()
 	s.mu.Unlock()
 	go s.run(auth)
 }

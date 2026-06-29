@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
+import { Weapon } from '@/lib/types';
 import './LiveMatchOverlay.css';
 
 // Sort players for stable rendering. The 5-second poll can reorder
@@ -28,7 +29,7 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
 }
 
 export default function LiveMatchOverlay() {
-    const { activeAccount } = useData();
+    const { activeAccount, weapons } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
     const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
@@ -295,6 +296,7 @@ export default function LiveMatchOverlay() {
                     player={selectedPlayer}
                     agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
                     tier={tierCache[selectedPlayer.competitiveTier]}
+                    weapons={weapons}
                     onClose={() => setSelectedPlayer(null)}
                 />
             )}
@@ -388,14 +390,17 @@ function LivePlayerModal({
     player,
     agent,
     tier,
+    weapons,
     onClose,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
+    weapons: Weapon[];
     onClose: () => void;
 }) {
     const [stats, setStats] = useState<LivePlayerStats | null>(null);
+    const [loadoutIds, setLoadoutIds] = useState<string[] | null>(null);
 
     useEffect(() => {
         if (!player.puuid || !player.agentId) {
@@ -410,6 +415,46 @@ function LivePlayerModal({
             cancelled = true;
         };
     }, [player.agentId, player.puuid]);
+
+    useEffect(() => {
+        if (!player.puuid) {
+            setLoadoutIds([]);
+            return;
+        }
+        let cancelled = false;
+        setLoadoutIds(null);
+        getLiveLoadouts().then((response) => {
+            if (cancelled) return;
+            const loadout = response.players?.find((entry) => entry.puuid?.toLowerCase() === player.puuid.toLowerCase());
+            setLoadoutIds(loadout?.skinIds || []);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [player.puuid]);
+
+    const equippedSkins = useMemo(() => {
+        if (!loadoutIds?.length) return [];
+        const byItemId = new Map<string, { uuid: string; name: string; icon: string }>();
+        for (const weapon of weapons) {
+            for (const skin of weapon.skins) {
+                const cosmetic = {
+                    uuid: skin.uuid,
+                    name: skin.displayName,
+                    icon: skin.displayIcon || skin.chromas[0]?.fullRender || weapon.displayIcon,
+                };
+                byItemId.set(skin.uuid.toLowerCase(), cosmetic);
+                for (const level of skin.levels) byItemId.set(level.uuid.toLowerCase(), cosmetic);
+                for (const chroma of skin.chromas) byItemId.set(chroma.uuid.toLowerCase(), cosmetic);
+            }
+        }
+        return Array.from(new Map(
+            loadoutIds
+                .map((id) => byItemId.get(id.toLowerCase()))
+                .filter((skin): skin is { uuid: string; name: string; icon: string } => Boolean(skin))
+                .map((skin) => [skin.uuid, skin]),
+        ).values()).slice(0, 8);
+    }, [loadoutIds, weapons]);
 
     const rankName = tier?.name || (player.competitiveTier > 0 ? `Tier ${player.competitiveTier}` : "Rank unavailable");
     const selection = player.selectionState === "locked"
@@ -455,6 +500,23 @@ function LivePlayerModal({
                     <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
                     <InfoTile label="Identity" value={player.cardId ? "Card available" : "Unavailable"} detail={player.cardId || "Not returned by live endpoint"} />
                 </div>
+
+                <section className="live-player-loadout" aria-label={`${player.name || "Player"} equipped skins`}>
+                    <div className="live-player-loadout-heading">
+                        <span>Equipped skins</span>
+                        <small>{loadoutIds === null ? "Loading…" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}</small>
+                    </div>
+                    {equippedSkins.length > 0 && (
+                        <div className="live-player-loadout-grid">
+                            {equippedSkins.map((skin) => (
+                                <div className="live-player-loadout-item" key={skin.uuid}>
+                                    {skin.icon && <img src={skin.icon} alt="" aria-hidden="true" />}
+                                    <span>{skin.name}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
 
                 <div className="live-player-modal-note">
                     Only live endpoint fields and cached agent stats are shown here. Missing Riot fields stay hidden instead of being guessed.

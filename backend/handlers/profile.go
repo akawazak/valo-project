@@ -99,114 +99,89 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Ove
 		return
 	}
 	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
-	var live struct {
-		LatestCompetitiveUpdate struct {
-			SeasonID                string `json:"SeasonID"`
-			TierAfterUpdate         int    `json:"TierAfterUpdate"`
-			RankedRatingAfterUpdate int    `json:"RankedRatingAfterUpdate"`
-		} `json:"LatestCompetitiveUpdate"`
-		QueueSkills map[string]struct {
-			TotalGamesWon            int `json:"TotalGamesWon"`
-			RankedRating             int `json:"RankedRating"`
-			CurrentSeasonGamesPlayed int `json:"CurrentSeasonGamesPlayed"`
-			SeasonalInfoBySeasonID   map[string]struct {
-				TotalWins        int `json:"TotalWins"`
-				NumberOfGames    int `json:"NumberOfGames"`
-				RankedRating     int `json:"RankedRating"`
-				RankedRatingPeak int `json:"RankedRatingPeak"`
-				PeakRank         int `json:"PeakRank"`
-				FinalRank        int `json:"FinalRank"`
-			} `json:"SeasonalInfoBySeasonID"`
-		} `json:"QueueSkills"`
-	}
+	var live playerMMRResponse
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
 		return
 	}
+	mergeLiveMMR(overview, live)
+}
 
-	// 1. Process the latest competitive update first (regardless of current act queue skills)
-	if live.LatestCompetitiveUpdate.SeasonID != "" {
-		overview.CurrentSeasonID = live.LatestCompetitiveUpdate.SeasonID
-	}
-	if live.LatestCompetitiveUpdate.TierAfterUpdate > 0 {
-		overview.CurrentRank.CompetitiveTier = live.LatestCompetitiveUpdate.TierAfterUpdate
-		overview.CurrentRank.RankedRating = live.LatestCompetitiveUpdate.RankedRatingAfterUpdate
-	}
+type playerMMRResponse struct {
+	LatestCompetitiveUpdate struct {
+		SeasonID                string `json:"SeasonID"`
+		TierAfterUpdate         int    `json:"TierAfterUpdate"`
+		RankedRatingAfterUpdate int    `json:"RankedRatingAfterUpdate"`
+	} `json:"LatestCompetitiveUpdate"`
+	QueueSkills map[string]struct {
+		SeasonalInfoBySeasonID map[string]struct {
+			NumberOfWins    int            `json:"NumberOfWins"`
+			NumberOfGames   int            `json:"NumberOfGames"`
+			CompetitiveTier int            `json:"CompetitiveTier"`
+			RankedRating    int            `json:"RankedRating"`
+			WinsByTier      map[string]int `json:"WinsByTier"`
+		} `json:"SeasonalInfoBySeasonID"`
+	} `json:"QueueSkills"`
+}
 
-	// 2. Set static tier name fallbacks if needed, using last known tier
-	if overview.CurrentRank.CompetitiveTier > 0 {
-		if overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked") {
-			overview.CurrentRank.TierName = fmt.Sprintf("Tier %d", overview.CurrentRank.CompetitiveTier)
-		}
-	}
-	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
-		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
-	}
-
-	// 3. Fallback early if no competitive queue skills are found in current act
-	comp, ok := live.QueueSkills["competitive"]
-	if !ok {
+func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
+	if overview == nil {
 		return
 	}
 
-	// 4. Overwrite/merge with specific current-act queue statistics
-	if comp.RankedRating > 0 {
-		overview.CurrentRank.RankedRating = comp.RankedRating
+	latest := live.LatestCompetitiveUpdate
+	if latest.SeasonID != "" {
+		overview.CurrentSeasonID = latest.SeasonID
 	}
-	if comp.TotalGamesWon > 0 {
-		overview.CurrentRank.NumberOfWins = comp.TotalGamesWon
+	if latest.TierAfterUpdate > 0 {
+		overview.CurrentRank.CompetitiveTier = latest.TierAfterUpdate
+		overview.CurrentRank.RankedRating = latest.RankedRatingAfterUpdate
 	}
-	if comp.CurrentSeasonGamesPlayed > 0 {
-		overview.CurrentRank.NumberOfGames = comp.CurrentSeasonGamesPlayed
+
+	comp, ok := live.QueueSkills["competitive"]
+	if !ok {
+		return
 	}
 
 	seasonID := overview.CurrentSeasonID
 	if seasonID == "" && len(comp.SeasonalInfoBySeasonID) == 1 {
 		for id := range comp.SeasonalInfoBySeasonID {
 			seasonID = id
-		}
-	}
-	if season, ok := comp.SeasonalInfoBySeasonID[seasonID]; ok {
-		if season.NumberOfGames > 0 {
-			overview.CurrentRank.NumberOfGames = season.NumberOfGames
-		}
-		if season.TotalWins > 0 {
-			overview.CurrentRank.NumberOfWins = season.TotalWins
-		}
-		if season.RankedRating > 0 {
-			overview.CurrentRank.RankedRating = season.RankedRating
-		}
-		// Keep the cached non-zero RR if the seasonal payload reports 0
-		// (e.g. just-reset episode). Never overwrite a real value with 0.
-		if overview.CurrentRank.CompetitiveTier == 0 && season.FinalRank > 0 {
-			overview.CurrentRank.CompetitiveTier = season.FinalRank
-		}
-		if season.PeakRank > overview.PeakRank.CompetitiveTier {
-			overview.PeakRank.CompetitiveTier = season.PeakRank
-			overview.PeakRank.SeasonID = seasonID
+			overview.CurrentSeasonID = id
 		}
 	}
 
-	// Refresh fallback tier names again after seasonal update
-	if overview.CurrentRank.CompetitiveTier > 0 {
-		if overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked") {
-			overview.CurrentRank.TierName = fmt.Sprintf("Tier %d", overview.CurrentRank.CompetitiveTier)
+	if season, ok := comp.SeasonalInfoBySeasonID[seasonID]; ok {
+		overview.CurrentRank.NumberOfGames = season.NumberOfGames
+		overview.CurrentRank.NumberOfWins = season.NumberOfWins
+		if season.CompetitiveTier > 0 {
+			overview.CurrentRank.CompetitiveTier = season.CompetitiveTier
 		}
-	}
-	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
-		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
+		overview.CurrentRank.RankedRating = season.RankedRating
 	}
 
 	acts := make([]tracking.RankActSummary, 0, len(comp.SeasonalInfoBySeasonID))
 	for id, season := range comp.SeasonalInfoBySeasonID {
+		peak := season.CompetitiveTier
+		for tier, wins := range season.WinsByTier {
+			parsed, err := strconv.Atoi(tier)
+			if err == nil && wins > 0 && parsed > peak {
+				peak = parsed
+			}
+		}
+		if peak > overview.PeakRank.CompetitiveTier {
+			overview.PeakRank.CompetitiveTier = peak
+			overview.PeakRank.SeasonID = id
+		}
 		acts = append(acts, tracking.RankActSummary{
 			SeasonID:     id,
-			Wins:         season.TotalWins,
+			Wins:         season.NumberOfWins,
 			Games:        season.NumberOfGames,
 			RankedRating: season.RankedRating,
-			PeakRank:     season.PeakRank,
-			FinalRank:    season.FinalRank,
+			PeakRank:     peak,
+			FinalRank:    season.CompetitiveTier,
 		})
 	}
+
 	sort.SliceStable(acts, func(i, j int) bool {
 		if acts[i].SeasonID == seasonID {
 			return true
@@ -220,6 +195,14 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Ove
 		acts = acts[:8]
 	}
 	overview.RankActs = acts
+
+	if overview.CurrentRank.CompetitiveTier > 0 &&
+		(overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked")) {
+		overview.CurrentRank.TierName = fmt.Sprintf("Tier %d", overview.CurrentRank.CompetitiveTier)
+	}
+	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
+		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
+	}
 }
 
 // GetRRHistory — `GET /v1/profile/rr-history` (design doc §2.2).

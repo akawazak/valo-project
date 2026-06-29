@@ -37,6 +37,10 @@ interface MapMeta {
     name: string;
     splash: string;
 }
+interface SeasonMeta {
+    name: string;
+    parentUuid: string;
+}
 
 const RANK_GROUPS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
 const QUEUE_OPTIONS: Array<{ value: string; label: string }> = [
@@ -83,8 +87,14 @@ function tierLabel(tier: number, fallback?: string): string {
 }
 
 function rankIconUrl(tier: number, tierAssets: Map<number, { smallIcon: string }>): string | null {
-    if (!tier || tier <= 0) return null;
     return tierAssets.get(tier)?.smallIcon || FALLBACK_RANK_ICON;
+}
+
+function seasonLabel(id: string, seasons: Record<string, SeasonMeta>): string {
+    const season = seasons[id.toLowerCase()];
+    if (!season) return id.slice(0, 8).toUpperCase();
+    const parent = seasons[season.parentUuid.toLowerCase()];
+    return parent ? `${parent.name} · ${season.name}` : season.name;
 }
 
 function fmtDate(ms: number): string {
@@ -292,6 +302,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [agents, setAgents] = useState<Record<string, AgentMeta>>({});
     const [maps, setMaps] = useState<Record<string, MapMeta>>({});
     const [tierAssets, setTierAssets] = useState<Map<number, { smallIcon: string }>>(new Map());
+    const [seasons, setSeasons] = useState<Record<string, SeasonMeta>>({});
     const [loading, setLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState("");
@@ -340,6 +351,21 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 setPlayerTitles(titles);
             })
             .catch((e) => console.warn("Failed to load player titles metadata", e));
+        fetch("https://valorant-api.com/v1/seasons")
+            .then((res) => res.json())
+            .then((d) => {
+                if (cancelled) return;
+                const next: Record<string, SeasonMeta> = {};
+                for (const season of d.data || []) {
+                    if (!season.uuid) continue;
+                    next[season.uuid.toLowerCase()] = {
+                        name: season.displayName || "Act",
+                        parentUuid: season.parentUuid || "",
+                    };
+                }
+                setSeasons(next);
+            })
+            .catch((e) => console.warn("Failed to load season metadata", e));
         return () => {
             cancelled = true;
         };
@@ -501,9 +527,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const episodeActLabel = (() => {
         const id = overview?.currentSeasonId;
         if (!id) return "";
-        const m = /^e(\d+)a(\d+)$/i.exec(id);
-        if (m) return `Episode ${m[1]} · Act ${m[2]}`;
-        return id.toUpperCase();
+        return seasonLabel(id, seasons);
     })();
 
     const agentLookup = useMemo(() => {
@@ -679,7 +703,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             <Metric label="K/D Ratio" value={fmtRatio(summary?.avgKda)} tone={kdColor(summary?.avgKda)} />
                                             <Metric label="Headshot %" value={fmtPct(summary?.avgHsPct)} tone={hsColor(summary?.avgHsPct)} />
                                             <Metric label="Matches" value={String(summary?.matches ?? 0)} />
-                                            <Metric label="Top Agent" value={summary?.topAgent || "—"} />
+                                            <Metric label="Top Agent" value={topAgentMeta?.name || summary?.topAgent || "—"} />
                                             <Metric label="Peak Rank" value={peakRankLabel} />
                                         </div>
                                     </Panel>
@@ -815,6 +839,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         acts={overview?.rankActs ?? []}
                                         currentSeasonId={overview?.currentSeasonId ?? ""}
                                         tierAssets={tierAssets}
+                                        seasons={seasons}
                                     />
                                 </Panel>
                             </>
@@ -902,7 +927,7 @@ function MatchRow({
     const matchRRIcon = rankIconUrl(matchTier, tierAssets);
     const matchRRLabel = tierLabel(matchTier);
     const rrEarned = match.rrEarned ?? 0;
-    const rrSign = rrEarned > 0 ? "+" : rrEarned < 0 ? "" : "?";
+    const rrSign = rrEarned > 0 ? "+" : "";
 
     const kda = match.localPlayer.kda;
     const hsPct = match.localPlayer.hsPct;
@@ -918,7 +943,7 @@ function MatchRow({
                 <div className={s.matchResultBlock}>
                     <span className={`${s.matchResultText} ${resultClass}`}>{match.win ? "WIN" : "LOSS"}</span>
                     <span className={s.matchResultMeta}>
-                        {queueName} ? {fmtLength(match.gameLengthMillis)}
+                        {queueName} · {fmtLength(match.gameLengthMillis)}
                     </span>
                     <div className={s.matchDateRow}>
                         <span className={s.matchDateChip}>{fmtDate(match.gameStartMillis)}</span>
@@ -1026,14 +1051,14 @@ function MatchRow({
                 </div>
 
                 <span className={s.matchChevron} aria-hidden="true">
-                    {expanded ? "?" : loading ? "?" : "?"}
+                    {expanded ? "⌃" : loading ? "…" : "›"}
                 </span>
             </button>
 
             {expanded && (
                 <div className={s.matchDetail}>
                     {loading ? (
-                        <div className={s.placeholder}>Loading scoreboard?</div>
+                        <div className={s.placeholder}>Loading scoreboard…</div>
                     ) : detail ? (
                         <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} />
                     ) : (
@@ -1176,10 +1201,12 @@ function ActSummaryList({
     acts,
     currentSeasonId,
     tierAssets,
+    seasons,
 }: {
     acts: Array<{ seasonId: string; wins: number; games: number; rankedRating: number; peakRank: number; finalRank: number }>;
     currentSeasonId: string;
     tierAssets: Map<number, { smallIcon: string }>;
+    seasons: Record<string, SeasonMeta>;
 }) {
     if (!acts.length) {
         return <div className={s.placeholder}>No competitive act data yet.</div>;
@@ -1187,7 +1214,8 @@ function ActSummaryList({
     return (
         <div className={s.actList}>
             {acts.map((act) => {
-                const label = act.seasonId === currentSeasonId ? "Current Act" : `Act ${act.seasonId.slice(0, 6)}`;
+                const name = seasonLabel(act.seasonId, seasons);
+                const label = act.seasonId === currentSeasonId ? `Current · ${name}` : name;
                 const rank = act.finalRank || act.peakRank;
                 const winrate = act.games > 0 ? (act.wins / act.games) * 100 : 0;
                 const rankIcon = rankIconUrl(rank, tierAssets);

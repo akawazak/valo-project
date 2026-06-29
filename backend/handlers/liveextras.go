@@ -131,11 +131,16 @@ func normalizeLoadoutPlayers(raw map[string]any) []LiveLoadoutPlayer {
 		if !ok {
 			continue
 		}
-		skins := uniqueStrings(collectStringFields(m, "SkinID", "SkinId", "SkinLevelID", "ChromaID"))
+		loadout, _ := m["Loadout"].(map[string]any)
+		if loadout == nil {
+			loadout, _ = m["loadout"].(map[string]any)
+		}
+		items := firstMap(loadout, "Items", "items")
+		skins := uniqueStrings(collectStringFields(items, "ID"))
 		players = append(players, LiveLoadoutPlayer{
-			Puuid:    firstString(m, "Subject", "subject", "PlayerID", "playerId", "Puuid", "puuid"),
+			Puuid:    firstString(loadout, "Subject", "subject"),
 			SkinIDs:  skins,
-			GunCount: countArrayFields(m, "Guns", "guns", "Weapons", "weapons"),
+			GunCount: len(items),
 		})
 	}
 	return players
@@ -273,6 +278,15 @@ func boolFromAny(v any) *bool {
 	return nil
 }
 
+func firstMap(m map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if value, ok := m[key].(map[string]any); ok {
+			return value
+		}
+	}
+	return nil
+}
+
 func collectStringFields(v any, keys ...string) []string {
 	wanted := map[string]struct{}{}
 	for _, key := range keys {
@@ -316,15 +330,6 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func countArrayFields(m map[string]any, keys ...string) int {
-	for _, key := range keys {
-		if arr, ok := m[key].([]any); ok {
-			return len(arr)
-		}
-	}
-	return 0
 }
 
 func countPenaltyEntries(raw map[string]any) int {
