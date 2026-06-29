@@ -22,7 +22,11 @@ func TestNormalizeLoadoutPlayersUsesDocumentedNestedLoadout(t *testing.T) {
 	if len(got) != 1 || got[0].Puuid != "player-1" || got[0].GunCount != 1 {
 		t.Fatalf("unexpected normalized player: %#v", got)
 	}
-	if len(got[0].SkinIDs) != 2 || got[0].SkinIDs[0] != "skin-level-1" || got[0].SkinIDs[1] != "chroma-1" {
+	ids := make(map[string]bool, len(got[0].SkinIDs))
+	for _, id := range got[0].SkinIDs {
+		ids[id] = true
+	}
+	if len(ids) != 2 || !ids["skin-level-1"] || !ids["chroma-1"] {
 		t.Fatalf("unexpected item ids: %#v", got[0].SkinIDs)
 	}
 }

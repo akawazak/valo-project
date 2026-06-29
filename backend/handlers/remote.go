@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -100,12 +101,33 @@ func getRemoteAuthHeaders(r *http.Request) (*remoteAuthHeaders, bool, error) {
 	if !hasAll {
 		return nil, false, nil
 	}
+	if subject := accessTokenSubject(accessToken); subject != "" && !strings.EqualFold(subject, puuid) {
+		return nil, false, fmt.Errorf("the refreshed Riot token belongs to a different account; refresh the selected account again")
+	}
 	return &remoteAuthHeaders{
 		AccessToken:       accessToken,
 		EntitlementsToken: entitlementsToken,
 		Puuid:             puuid,
 		Region:            region,
 	}, true, nil
+}
+
+func accessTokenSubject(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Subject string `json:"sub"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.Subject)
 }
 
 func buildRiotHeaders(accessToken, entitlementsToken string) http.Header {
@@ -368,7 +390,7 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract access_token from the redirect URI fragment (after #)
-	accessToken, _, expiresIn, err := extractTokens(location)
+	accessToken, idToken, expiresIn, err := extractTokens(location)
 	if err != nil {
 		h.returnError(w, fmt.Errorf("failed to extract tokens from cookie reauth redirect: %w", err))
 		return
@@ -383,6 +405,28 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var userInfo struct {
+		Sub  string `json:"sub"`
+		Acct struct {
+			GameName string `json:"game_name"`
+			TagLine  string `json:"tag_line"`
+		} `json:"acct"`
+	}
+	if err := getJSON("https://auth.riotgames.com/userinfo", accessToken, &userInfo); err != nil {
+		h.returnError(w, fmt.Errorf("failed to identify refreshed Riot account: %w", err))
+		return
+	}
+	var geoResult struct {
+		Affinities struct {
+			Live string `json:"live"`
+		} `json:"affinities"`
+	}
+	payload, _ := json.Marshal(map[string]string{"id_token": idToken})
+	if err := putJSON("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", accessToken, payload, &geoResult); err != nil {
+		h.returnError(w, fmt.Errorf("failed to resolve refreshed Riot region: %w", err))
+		return
+	}
+
 	// Merge newly received cookies with old cookies to rotate and maintain the session
 	rotatedCookies := mergeCookies(body.Cookies, resp.Cookies())
 
@@ -390,6 +434,10 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 		AccessToken:       accessToken,
 		EntitlementsToken: entitlements.EntitlementsToken,
 		ExpiresIn:         expiresIn,
+		Puuid:             userInfo.Sub,
+		Region:            geoResult.Affinities.Live,
+		GameName:          userInfo.Acct.GameName,
+		TagLine:           userInfo.Acct.TagLine,
 		Cookies:           rotatedCookies,
 	})
 }
@@ -542,7 +590,7 @@ func runRiotJSON(method, apiURL string, headers http.Header, body any, result an
 	defer resp.Body.Close()
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Riot storefront returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 	if result != nil && len(bodyBytes) > 0 {
 		return json.Unmarshal(bodyBytes, result)

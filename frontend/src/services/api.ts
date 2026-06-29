@@ -340,6 +340,10 @@ export interface ReauthTokenResponse {
     access_token: string;
     entitlements_token: string;
     expires_in: number;
+    puuid: string;
+    region: string;
+    game_name: string;
+    tag_line: string;
     cookies?: string;
 }
 
@@ -744,6 +748,8 @@ export interface ProfileOverview {
     account: ProfileAccountSummary;
     lastDeltas: ProfileRRSnapshot[];
     rankActs: ProfileRankActSummary[];
+    rankSource?: "live" | "cache";
+    rankError?: string;
     seasonSummary: ProfileSeasonSummary | null;
 }
 
@@ -1266,7 +1272,7 @@ export interface SocialPresence {
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/social', undefined, { forceRemoteAuth: true });
+        const response = await fetchWithAuth(LOCAL_URL + '/social?remoteOnly=true', undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };

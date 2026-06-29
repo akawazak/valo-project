@@ -367,6 +367,12 @@
     gap: 18px;
 }
 
+.progressionGrid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.85fr);
+    gap: 18px;
+}
+
 /* ── Buttons + selects ── */
 .select {
     height: 34px;
@@ -1253,6 +1259,16 @@
     gap: 2px;
 }
 
+.rankNotice {
+    margin-bottom: 8px;
+    padding: 9px 10px;
+    border: 1px solid rgba(83, 180, 230, 0.28);
+    background: rgba(35, 125, 175, 0.1);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+
 .actRow {
     display: flex;
     align-items: center;
@@ -1385,6 +1401,9 @@
         max-width: 360px;
     }
     .overviewTop {
+        grid-template-columns: 1fr;
+    }
+    .progressionGrid {
         grid-template-columns: 1fr;
     }
 }

@@ -54,18 +54,18 @@ type MatchPartyMember struct {
 
 // MatchSummary is the per-row payload of `GET /v1/profile/match-history`.
 type MatchSummary struct {
-	MatchID          string      `json:"matchId"`
-	QueueID          string      `json:"queueID"`
-	MapID            string      `json:"mapID"`
-	GameMode         string      `json:"gameMode"`
-	GameStartMillis  int64       `json:"gameStartMillis"`
-	GameLengthMillis int64       `json:"gameLengthMillis"`
-	SeasonID         string      `json:"seasonId"`
-	IsRanked         bool        `json:"isRanked"`
-	Win              bool        `json:"win"`
-	TierAfter        int         `json:"tierAfter"`
-	RREarned         int         `json:"rrEarned"`
-	LocalPlayer      PlayerStats `json:"localPlayer"`
+	MatchID          string             `json:"matchId"`
+	QueueID          string             `json:"queueID"`
+	MapID            string             `json:"mapID"`
+	GameMode         string             `json:"gameMode"`
+	GameStartMillis  int64              `json:"gameStartMillis"`
+	GameLengthMillis int64              `json:"gameLengthMillis"`
+	SeasonID         string             `json:"seasonId"`
+	IsRanked         bool               `json:"isRanked"`
+	Win              bool               `json:"win"`
+	TierAfter        int                `json:"tierAfter"`
+	RREarned         int                `json:"rrEarned"`
+	LocalPlayer      PlayerStats        `json:"localPlayer"`
 	PartyMembers     []MatchPartyMember `json:"partyMembers,omitempty"`
 }
 
@@ -192,6 +192,8 @@ type Overview struct {
 	PlayerTitleID           string           `json:"playerTitleId,omitempty"`
 	LastCacheSyncedAt       int64            `json:"lastCacheSyncedAt"`
 	LastLiveRankRefreshedAt int64            `json:"lastLiveRankRefreshedAt"`
+	RankSource              string           `json:"rankSource,omitempty"`
+	RankError               string           `json:"rankError,omitempty"`
 	SeasonSummary           *SeasonSummary   `json:"seasonSummary"`
 }
 

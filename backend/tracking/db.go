@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -780,6 +781,49 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	return out, nil
 }
 
+func rankActsFromSnapshots(snapshots []RRSnapshot) []RankActSummary {
+	type actState struct {
+		summary RankActSummary
+		lastAt  int64
+	}
+	bySeason := make(map[string]*actState)
+	for _, snapshot := range snapshots {
+		if snapshot.SeasonID == "" {
+			continue
+		}
+		state := bySeason[snapshot.SeasonID]
+		if state == nil {
+			state = &actState{summary: RankActSummary{SeasonID: snapshot.SeasonID}}
+			bySeason[snapshot.SeasonID] = state
+		}
+		state.summary.Games++
+		if snapshot.RREarned > 0 {
+			state.summary.Wins++
+		}
+		state.summary.PeakRank = max(state.summary.PeakRank, snapshot.TierBefore, snapshot.TierAfter)
+		if snapshot.MatchStartTime >= state.lastAt {
+			state.lastAt = snapshot.MatchStartTime
+			state.summary.FinalRank = snapshot.TierAfter
+			state.summary.RankedRating = snapshot.RRAfter
+		}
+	}
+
+	states := make([]*actState, 0, len(bySeason))
+	for _, state := range bySeason {
+		states = append(states, state)
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].lastAt > states[j].lastAt })
+
+	acts := make([]RankActSummary, 0, min(8, len(states)))
+	for _, state := range states {
+		acts = append(acts, state.summary)
+		if len(acts) == 8 {
+			break
+		}
+	}
+	return acts
+}
+
 // GetAgentStats returns per-agent aggregate rows for the given puuid,
 // sorted by matches DESC. queue == "" means "all".
 func GetAgentStats(db *sql.DB, puuid, queue string) ([]AgentStat, error) {
@@ -986,6 +1030,18 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview rr rows: %w", err)
+	}
+
+	allSnapshots, err := GetRRSnapshots(db, puuid, "")
+	if err != nil {
+		return nil, fmt.Errorf("tracking: GetOverview act history: %w", err)
+	}
+	out.RankActs = rankActsFromSnapshots(allSnapshots)
+	for _, act := range out.RankActs {
+		if act.PeakRank > out.PeakRank.CompetitiveTier {
+			out.PeakRank.CompetitiveTier = act.PeakRank
+			out.PeakRank.SeasonID = act.SeasonID
+		}
 	}
 
 	// Season summary aggregates.

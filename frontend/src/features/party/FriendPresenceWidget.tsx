@@ -101,6 +101,25 @@ function presenceSubLabel(presence: SocialPresence): string {
     return state ? `${product} · ${state}` : product;
 }
 
+function presencePriority(presence: SocialPresence): number {
+    if (presence.queueId || /in.?game|match/i.test(presence.state || "")) return 0;
+    if ((presence.state || "").toLowerCase() !== "offline") return 1;
+    return 2;
+}
+
+function presenceErrorLabel(error: string): string {
+    if (/missing|no oauth|access token/i.test(error)) {
+        return "This account has no Riot access token. Refresh or reconnect it, then reopen Friends.";
+    }
+    if (/expired|unauthorized|not.authorized|forbidden|401|403|authentication rejected/i.test(error)) {
+        return "Riot rejected this session. Refresh or reconnect the account to restore friend presence.";
+    }
+    if (/timeout|timed out|network|connect/i.test(error)) {
+        return "Riot presence could not connect. Check your connection and try again.";
+    }
+    return "Friend presence is unavailable right now. Refresh the account and try again.";
+}
+
 function FriendsPopup({
     social,
     onClose,
@@ -109,15 +128,18 @@ function FriendsPopup({
     onClose: () => void;
 }) {
     const sourceLabel =
-        social?.source === "local"
-            ? "Local Riot Client"
-            : social?.remoteStatus === "config" || social?.remoteStatus === "connecting" || social?.remoteStatus === "live"
-                ? "Riot Token"
-                : social?.source || "Unavailable";
+        social?.source === "remote"
+            ? "Riot Token"
+            : social?.source === "local"
+                ? "Local Riot Client"
+                : "Unavailable";
 
-    const presences = (social?.presences || []).filter(
-        (presence) => !!(presence.name || presence.product || presence.state || presence.queueId),
-    );
+    const presences = (social?.presences || [])
+        .filter((presence) => !!(presence.name || presence.product || presence.state || presence.queueId))
+        .sort((a, b) =>
+            presencePriority(a) - presencePriority(b) ||
+            (a.name || "").localeCompare(b.name || ""),
+        );
 
     return (
         <section
@@ -149,12 +171,12 @@ function FriendsPopup({
                 {!social && (
                     <div className={styles.emptyState}>
                         <strong>Connecting to Riot…</strong>
-                        Reading /chat/v4 from your local Riot Client.
+                        Authenticating friend presence with your Riot access token.
                     </div>
                 )}
 
                 {social?.status === "unavailable" && social.error && (
-                    <div className={styles.errorBlock}>{social.error}</div>
+                    <div className={styles.errorBlock}>{presenceErrorLabel(social.error)}</div>
                 )}
 
                 {social && social.status !== "unavailable" && (

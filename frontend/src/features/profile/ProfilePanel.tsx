@@ -280,8 +280,6 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     return tierPromise;
 }
 
-type Tab = "overview" | "matches" | "career";
-
 export default function ProfilePanel({ onConnectAccount }: Props) {
     const { activeAccount } = useData();
     const puuid = activeAccount?.puuid ?? "";
@@ -307,7 +305,6 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
-    const [tab, setTab] = useState<Tab>("overview");
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
     const [playerCards, setPlayerCards] = useState<Record<string, { wide: string; icon: string; name: string }>>({});
     const [playerTitles, setPlayerTitles] = useState<Record<string, string>>({});
@@ -674,28 +671,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                 {/* ── Main content ── */}
                 <main className={s.main}>
                     {/* ── Tabs ── */}
-                    <div className={s.tabs} role="tablist" aria-label="Profile sections">
-                        {(
-                            [
-                                ["overview", "Overview"],
-                                ["career", "Career"],
-                            ] as Array<[Tab, string]>
-                        ).map(([key, label]) => (
-                            <button
-                                key={key}
-                                role="tab"
-                                aria-selected={tab === key}
-                                className={`${s.tab} ${tab === key ? s.tabActive : ""}`}
-                                onClick={() => setTab(key)}
-                            >
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-
                     <div className={s.body}>
-                        {tab === "overview" && (
-                            <>
+                        <>
                                 <div className={s.overviewTop}>
                                     <Panel title="Season Averages" subtitle="This act">
                                         <div className={s.metricGrid}>
@@ -738,6 +715,33 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                 <div className={s.placeholder}>No agent stats cached.</div>
                                             )}
                                         </div>
+                                    </Panel>
+                                </div>
+
+                                <div className={s.progressionGrid}>
+                                    <Panel
+                                        title="RR Progression"
+                                        subtitle={
+                                            rrHistory?.snapshots?.length
+                                                ? `${rrHistory.snapshots.length} ranked games tracked`
+                                                : "Sync competitive games to build the graph"
+                                        }
+                                    >
+                                        <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} height={240} />
+                                    </Panel>
+                                    <Panel title="Act History" subtitle="Peak and final rank by act">
+                                        {overview?.rankError && (
+                                            <div className={s.rankNotice}>
+                                                {overview.rankActs?.length ? "Showing cached history. " : "Live history unavailable. "}
+                                                {cleanError(overview.rankError)}
+                                            </div>
+                                        )}
+                                        <ActSummaryList
+                                            acts={overview?.rankActs ?? []}
+                                            currentSeasonId={overview?.currentSeasonId ?? ""}
+                                            tierAssets={tierAssets}
+                                            seasons={seasons}
+                                        />
                                     </Panel>
                                 </div>
 
@@ -819,31 +823,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         </div>
                                     )}
                                 </Panel>
-                            </>
-                        )}
-
-                        {tab === "career" && (
-                            <>
-                                <Panel
-                                    title="Ranked Rating"
-                                    subtitle={
-                                        rrHistory?.snapshots?.length
-                                            ? `${rrHistory.snapshots.length} ranked games this act`
-                                            : "No ranked games yet"
-                                    }
-                                >
-                                    <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} height={240} />
-                                </Panel>
-                                <Panel title="Act History" subtitle="Rank by competitive act">
-                                    <ActSummaryList
-                                        acts={overview?.rankActs ?? []}
-                                        currentSeasonId={overview?.currentSeasonId ?? ""}
-                                        tierAssets={tierAssets}
-                                        seasons={seasons}
-                                    />
-                                </Panel>
-                            </>
-                        )}
+                        </>
                     </div>
                 </main>
             </div>

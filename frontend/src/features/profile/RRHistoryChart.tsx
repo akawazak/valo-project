@@ -17,6 +17,20 @@ const PAD_LEFT = 36;
 const PAD_RIGHT = 8;
 const PAD_TOP = 12;
 const PAD_BOTTOM = 22;
+const RANKS = ["I", "B", "S", "G", "P", "D", "A", "Im"];
+
+function rankPosition(tier: number, rr: number) {
+    return Math.max(0, tier) * 100 + Math.max(0, rr);
+}
+
+function rankPositionLabel(value: number) {
+    const tier = Math.max(0, Math.floor(value / 100));
+    const rr = Math.max(0, Math.round(value % 100));
+    if (tier < 3) return `${rr} RR`;
+    if (tier >= 27) return "Rad";
+    const group = RANKS[Math.floor((tier - 3) / 3)] || "R";
+    return `${group}${((tier - 3) % 3) + 1} ${rr}`;
+}
 
 export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
     const sorted = useMemo(
@@ -44,7 +58,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                 <svg width="100%" height={height} viewBox={`0 0 600 ${height}`} preserveAspectRatio="none">
                     <circle cx={300} cy={height / 2} r={5} className="rr-chart-dot" />
                     <text x={310} y={height / 2 + 4} className="rr-chart-point-label">
-                        {only.rrAfter} RR
+                        {rankPositionLabel(rankPosition(only.tierAfter, only.rrAfter))}
                     </text>
                 </svg>
             </div>
@@ -59,8 +73,9 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
     let minRR = Infinity;
     let maxRR = -Infinity;
     for (const s of sorted) {
-        if (s.rrAfter < minRR) minRR = s.rrAfter;
-        if (s.rrAfter > maxRR) maxRR = s.rrAfter;
+        const value = rankPosition(s.tierAfter, s.rrAfter);
+        if (value < minRR) minRR = value;
+        if (value > maxRR) maxRR = value;
     }
     // Pad the Y domain a touch so the line doesn't kiss the edges.
     const yPad = Math.max(10, (maxRR - minRR) * 0.15);
@@ -78,7 +93,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
         PAD_TOP + (1 - (rr - yLo) / yRange) * plotH;
 
     const lineD = sorted
-        .map((s, i) => `${i === 0 ? "M" : "L"} ${xOf(s.matchStartTime).toFixed(1)} ${yOf(s.rrAfter).toFixed(1)}`)
+        .map((s, i) => `${i === 0 ? "M" : "L"} ${xOf(s.matchStartTime).toFixed(1)} ${yOf(rankPosition(s.tierAfter, s.rrAfter)).toFixed(1)}`)
         .join(" ");
 
     const areaD = sorted.length > 1
@@ -127,7 +142,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                             textAnchor="end"
                             className="rr-chart-axis-label"
                         >
-                            {t.rr}
+                            {rankPositionLabel(t.rr)}
                         </text>
                     </g>
                 ))}
@@ -149,12 +164,12 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                     <circle
                         key={`pt-${s.matchId}-${i}`}
                         cx={xOf(s.matchStartTime)}
-                        cy={yOf(s.rrAfter)}
+                        cy={yOf(rankPosition(s.tierAfter, s.rrAfter))}
                         r={3}
                         className={`rr-chart-dot ${s.rrEarned >= 0 ? "win" : "loss"}`}
                     >
                         <title>
-                            {new Date(s.matchStartTime).toLocaleString()} · {s.rrBefore}→{s.rrAfter}
+                            {new Date(s.matchStartTime).toLocaleString()} · {rankPositionLabel(rankPosition(s.tierBefore, s.rrBefore))}→{rankPositionLabel(rankPosition(s.tierAfter, s.rrAfter))}
                             {" "}({s.rrEarned >= 0 ? "+" : ""}{s.rrEarned} RR)
                         </title>
                     </circle>

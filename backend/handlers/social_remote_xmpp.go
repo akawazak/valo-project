@@ -301,12 +301,13 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 		if productIsActive(entry.Product) || strings.EqualFold(entry.State, "online") {
 			onlineCount++
 		}
-		if strings.EqualFold(entry.Product, "valorant") {
+		normalized := normalizeChatPresence(entry, map[string]string{
+			puuid: firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid)),
+		})
+		if normalized.QueueID != "" || strings.EqualFold(normalized.State, "ingame") || strings.EqualFold(normalized.State, "pregame") {
 			inGameCount++
 		}
-		out = append(out, normalizeChatPresence(entry, map[string]string{
-			puuid: firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid)),
-		}))
+		out = append(out, normalized)
 	}
 
 	status := "ok"
@@ -418,12 +419,12 @@ func xmppAuthenticate(conn net.Conn, reader *bufio.Reader, domain, accessToken, 
 		out   string
 		until string
 	}{
-		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "X-Riot-RSO-PAS"},
+		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "</stream:features>"},
 		{out: fmt.Sprintf(`<auth mechanism="X-Riot-RSO-PAS" xmlns="urn:ietf:params:xml:ns:xmpp-sasl"><rso_token>%s</rso_token><pas_token>%s</pas_token></auth>`, accessToken, pasToken), until: "</success>"},
-		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "stream:features"},
-		{out: `<iq id="_xmpp_bind1" type="set"><bind xmlns="urn:ietf:params:xml:ns:xmpp-bind"><puuid-mode enabled="true"/></bind></iq>`, until: "_xmpp_bind1"},
-		{out: `<iq id="_xmpp_session1" type="set"><session xmlns="urn:ietf:params:xml:ns:xmpp-session"><platform>riot</platform></session></iq>`, until: "_xmpp_session1"},
-		{out: fmt.Sprintf(`<iq id="xmpp_entitlements_0" type="set"><entitlements xmlns="urn:riotgames:entitlements"><token xmlns="">%s</token></entitlements></iq>`, entitlementToken), until: "xmpp_entitlements_0"},
+		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "</stream:features>"},
+		{out: `<iq id="_xmpp_bind1" type="set"><bind xmlns="urn:ietf:params:xml:ns:xmpp-bind"></bind></iq>`, until: "</iq>"},
+		{out: `<iq id="_xmpp_session1" type="set"><session xmlns="urn:ietf:params:xml:ns:xmpp-session"/></iq>`, until: "</iq>"},
+		{out: fmt.Sprintf(`<iq id="xmpp_entitlements_0" type="set"><entitlements xmlns="urn:riotgames:entitlements"><token xmlns="">%s</token></entitlements></iq>`, entitlementToken), until: "</iq>"},
 	}
 	for _, step := range steps {
 		_ = conn.SetReadDeadline(time.Now().Add(8 * time.Second))
@@ -441,8 +442,12 @@ func xmppAuthenticate(conn net.Conn, reader *bufio.Reader, domain, accessToken, 
 func readUntilContains(reader *bufio.Reader, needle string) (string, error) {
 	var out strings.Builder
 	for {
-		if len(needle) > 0 && strings.Contains(out.String(), needle) {
-			return out.String(), nil
+		current := out.String()
+		if len(needle) > 0 && strings.Contains(current, needle) {
+			return current, nil
+		}
+		if strings.Contains(current, "</failure>") || strings.Contains(current, "</stream:error>") {
+			return current, fmt.Errorf("xmpp authentication rejected")
 		}
 		b, err := reader.ReadByte()
 		if err != nil {

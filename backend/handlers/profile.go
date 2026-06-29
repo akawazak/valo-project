@@ -87,23 +87,41 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
-	h.applyLiveMMRToOverview(r, overview, puuid)
+	if len(overview.RankActs) > 0 || len(overview.LastDeltas) > 0 {
+		overview.RankSource = "cache"
+	}
+	if err := h.applyLiveMMRToOverview(r, overview, puuid); err != nil {
+		overview.RankError = err.Error()
+	} else {
+		overview.RankSource = "live"
+		overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
+	}
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
 }
 
-func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Overview, puuid string) {
+func (h *Handler) applyLiveMMRToOverview(r *http.Request, overview *tracking.Overview, puuid string) error {
 	val, err := h.getClient(r)
 	if err != nil || val == nil || val.Player == nil {
-		return
+		if err != nil {
+			return fmt.Errorf("rank refresh unavailable: %w", err)
+		}
+		return fmt.Errorf("rank refresh unavailable: Riot session is missing")
 	}
 	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
 	var live playerMMRResponse
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
-		return
+		if strings.Contains(err.Error(), "status 404") {
+			return fmt.Errorf("rank refresh failed: the selected account or region does not match this Riot session; refresh the selected account")
+		}
+		return fmt.Errorf("rank refresh failed: %w", err)
+	}
+	if _, ok := live.QueueSkills["competitive"]; !ok {
+		return fmt.Errorf("rank refresh failed: Riot returned no competitive MMR data")
 	}
 	mergeLiveMMR(overview, live)
+	return nil
 }
 
 type playerMMRResponse struct {
@@ -160,6 +178,7 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	}
 
 	acts := make([]tracking.RankActSummary, 0, len(comp.SeasonalInfoBySeasonID))
+	seenActs := make(map[string]struct{}, len(comp.SeasonalInfoBySeasonID))
 	for id, season := range comp.SeasonalInfoBySeasonID {
 		peak := season.CompetitiveTier
 		for tier, wins := range season.WinsByTier {
@@ -180,6 +199,12 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 			PeakRank:     peak,
 			FinalRank:    season.CompetitiveTier,
 		})
+		seenActs[id] = struct{}{}
+	}
+	for _, cached := range overview.RankActs {
+		if _, exists := seenActs[cached.SeasonID]; !exists {
+			acts = append(acts, cached)
+		}
 	}
 
 	sort.SliceStable(acts, func(i, j int) bool {
@@ -194,7 +219,9 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	if len(acts) > 8 {
 		acts = acts[:8]
 	}
-	overview.RankActs = acts
+	if len(acts) > 0 {
+		overview.RankActs = acts
+	}
 
 	if overview.CurrentRank.CompetitiveTier > 0 &&
 		(overview.CurrentRank.TierName == "" || strings.EqualFold(overview.CurrentRank.TierName, "unranked")) {

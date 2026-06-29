@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/truearken/valclient/valclient"
 )
 
 // Chat presence payload used by the local chat server (chat/v4/presences).
@@ -78,6 +80,7 @@ type remoteSocialProbe struct {
 // GetSocialStatus returns friend presence from token-authenticated XMPP,
 // falling back to the local Riot Client chat API when remote chat is unavailable.
 func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
+	remoteOnly := strings.EqualFold(r.URL.Query().Get("remoteOnly"), "true")
 	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
 	if err != nil {
 		h.returnAny(w, SocialStatusResponse{Status: "unavailable", Source: "remote", Error: err.Error()})
@@ -85,8 +88,18 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	remoteProbe := remoteSocialProbe{Status: "missing"}
+	if remoteOnly && !hasRemoteAuth {
+		h.returnAny(w, SocialStatusResponse{
+			Status:       "unavailable",
+			Source:       "remote",
+			RemoteStatus: "missing",
+			Error:        "Riot access token is missing. Refresh or reconnect this account.",
+		})
+		return
+	}
 	if hasRemoteAuth {
 		remoteResp := fetchRemoteSocialStatus(remoteAuth)
+		h.enrichRemoteSocialNames(remoteAuth, &remoteResp)
 		remoteProbe = remoteSocialProbe{
 			Status: remoteResp.RemoteStatus,
 			Host:   remoteResp.RemoteChatHost,
@@ -94,6 +107,10 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			Error:  remoteResp.Error,
 		}
 		if remoteResp.Status == "ok" || remoteResp.RemoteStatus == "connecting" || remoteResp.RemoteStatus == "live" {
+			h.returnAny(w, remoteResp)
+			return
+		}
+		if remoteOnly {
 			h.returnAny(w, remoteResp)
 			return
 		}
@@ -119,6 +136,58 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	resp.RemoteChatHost = remoteProbe.Host
 	resp.RemoteChatPort = remoteProbe.Port
 	h.returnAny(w, resp)
+}
+
+func (h *Handler) enrichRemoteSocialNames(auth *remoteAuthHeaders, response *SocialStatusResponse) {
+	if auth == nil || response == nil || len(response.Presences) == 0 {
+		return
+	}
+
+	names := make(map[string]string, len(response.Presences))
+	missing := make([]string, 0, len(response.Presences))
+	h.namesMu.RLock()
+	for _, presence := range response.Presences {
+		puuid := strings.ToLower(presence.Puuid)
+		if name := h.namesCache[puuid]; name != "" {
+			names[puuid] = name
+		} else if presence.Name == "" || strings.HasPrefix(presence.Name, "Player ") || strings.HasPrefix(presence.Name, "Unknown") {
+			missing = append(missing, puuid)
+		}
+	}
+	h.namesMu.RUnlock()
+
+	if len(missing) > 0 {
+		val := &valclient.ValClient{
+			Shard:  valclient.Shard(getShardFromRegion(auth.Region)),
+			Region: valclient.Region(strings.ToLower(auth.Region)),
+			Player: &valclient.ValClientPlayer{Uuid: auth.Puuid},
+			Header: buildRiotHeaders(auth.AccessToken, auth.EntitlementsToken),
+		}
+		if resolved, err := val.GetNames(missing); err == nil {
+			h.namesMu.Lock()
+			if h.namesCache == nil {
+				h.namesCache = make(map[string]string)
+			}
+			for _, player := range resolved {
+				name := friendDisplayName(player.GameName, player.TagLine, "")
+				if name == "Unknown friend" {
+					name = player.DisplayName
+				}
+				if name != "" {
+					puuid := strings.ToLower(player.Subject)
+					names[puuid] = name
+					h.namesCache[puuid] = name
+				}
+			}
+			h.namesMu.Unlock()
+		}
+	}
+
+	for i := range response.Presences {
+		if name := names[strings.ToLower(response.Presences[i].Puuid)]; name != "" {
+			response.Presences[i].Name = name
+		}
+	}
 }
 
 func (h *Handler) probeRemoteSocial(remoteAuth *remoteAuthHeaders) remoteSocialProbe {
@@ -445,17 +514,14 @@ func resolvePresenceName(entry chatPresenceEntry, nameByPuuid map[string]string)
 	return gameName
 }
 
-func friendDisplayName(gameName, tag, puuid string) string {
+func friendDisplayName(gameName, tag, _ string) string {
 	if gameName != "" && tag != "" {
 		return gameName + "#" + tag
 	}
 	if gameName != "" {
 		return gameName
 	}
-	if puuid != "" {
-		return "Player " + puuid[:min(len(puuid), 8)]
-	}
-	return "Unknown"
+	return "Unknown friend"
 }
 
 func productIsActive(product string) bool {

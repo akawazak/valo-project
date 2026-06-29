@@ -619,11 +619,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 if (res.ok) {
                     const data = await res.json();
                     if (data.access_token) {
+                        if (data.puuid && data.puuid.toLowerCase() !== acc.puuid.toLowerCase()) {
+                            throw new Error("Saved Riot session belongs to a different account.");
+                        }
                         const updatedAcc: RiotAccount = {
                             ...acc,
                             accessToken: data.access_token,
                             entitlementsToken: data.entitlements_token,
                             expiresAt: Date.now() + Math.max(0, (data.expires_in || 3600) - 60) * 1000,
+                            region: data.region || acc.region,
+                            gameName: data.game_name || acc.gameName,
+                            tagLine: data.tag_line || acc.tagLine,
                             ssid: data.cookies || acc.ssid,
                             sessionId,
                         };
@@ -707,6 +713,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     try {
                         const redirectUrl = event.payload.url;
                         const res = await submitTokenUrl(redirectUrl);
+                        if (res.puuid.toLowerCase() !== acc.puuid.toLowerCase()) {
+                            throw new Error("You signed into a different Riot account. Refresh the selected account instead.");
+                        }
 
                         // Save the tokens immediately — we can't read ssid cookies yet
                         // because the popup is still running and WebView2 hasn't flushed
