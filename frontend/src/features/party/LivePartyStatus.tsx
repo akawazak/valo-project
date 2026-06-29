@@ -81,7 +81,7 @@ export default function LivePartyStatus() {
 
             if (data.phase === "none") {
                 latestPartyRef.current = null;
-                setParty(null);
+                setParty(data);
                 setStale(false);
                 return;
             }
@@ -91,7 +91,7 @@ export default function LivePartyStatus() {
                     setParty(latestPartyRef.current);
                     setStale(true);
                 } else {
-                    setParty(null);
+                    setParty(data);
                     setStale(false);
                 }
                 return;
@@ -164,12 +164,6 @@ export default function LivePartyStatus() {
 
     const presences = visiblePresences(social);
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
-    const hasFriends = presences.length > 0;
-
-    if (!hasParty && !hasFriends) {
-        return null;
-    }
-
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
 
@@ -201,15 +195,15 @@ export default function LivePartyStatus() {
             <div key={refreshKey} className="live-party-refresh" />
             <div className="live-party-header">
                 <div>
-                    <div className="live-party-kicker">{hasParty ? "Live Party" : "Friend Presence"}</div>
+                    <div className="live-party-kicker">{hasParty ? "Live Party" : "Party & Friends"}</div>
                     <div className="live-party-title">
-                        {hasParty ? phaseLabel(party!.phase, party!.queueId) : `${social?.onlineCount || presences.length} online`}
+                        {hasParty ? phaseLabel(party!.phase, party!.queueId) : socialTitle(social, presences)}
                     </div>
                 </div>
                 <div className="live-party-header-actions">
                     <div className="live-party-meta">
                         {hasParty && <span>{members.length}/5</span>}
-                        {hasFriends && <span>{presences.length} friends</span>}
+                        <span>{social?.onlineCount || 0} online</span>
                         {(party?.source || social?.source) && <span>{party?.source || social?.source}</span>}
                         {stale && <span>stale</span>}
                     </div>
@@ -236,7 +230,8 @@ export default function LivePartyStatus() {
                     ))}
                 </div>
             )}
-            <FriendPresenceList social={social} presences={presences} />
+            {!hasParty && <PartyEmptyState party={party} />}
+            <FriendPresenceList social={social} presences={presences} cardCache={cardCache} />
         </aside>
     );
 }
@@ -305,11 +300,11 @@ function FriendsPill({
             title="Open friends"
         >
             <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
-                <span className="live-party-pill-avatar-letter">{presences.length}</span>
+                <span className="live-party-pill-avatar-letter">{social?.onlineCount || 0}</span>
             </span>
             <span className="live-party-pill-body">
-                <span className="live-party-pill-kicker">Friends Online</span>
-                <span className="live-party-pill-title">{social?.onlineCount || presences.length} online</span>
+                <span className="live-party-pill-kicker">Party & Friends</span>
+                <span className="live-party-pill-title">{socialTitle(social, presences)}</span>
                 <span className="live-party-pill-sub">
                     {social?.inGameCount || 0} in match - {social?.friendCount || presences.length} total
                 </span>
@@ -322,20 +317,19 @@ function FriendsPill({
 function FriendPresenceList({
     social,
     presences,
+    cardCache,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
+    cardCache: Record<string, CardMeta>;
 }) {
     if (!presences.length) {
-        if (social?.status === "unavailable" && social.error) {
-            return (
-                <div className="live-party-friends">
-                    <div className="live-party-section-title">Friends</div>
-                    <div className="live-party-friend-empty">{social.error}</div>
-                </div>
-            );
-        }
-        return null;
+        return (
+            <div className="live-party-friends">
+                <div className="live-party-section-title">Friends</div>
+                <div className="live-party-friend-empty">{socialEmptyLabel(social)}</div>
+            </div>
+        );
     }
 
     return (
@@ -350,9 +344,13 @@ function FriendPresenceList({
             <div className="live-party-friend-list">
                 {presences.map((presence, index) => {
                     const state = presenceState(presence);
+                    const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
                     return (
                     <div className={`live-party-friend-row is-${state}`} key={presence.puuid || `${presence.name}-${index}`}>
-                        <span className="live-party-friend-dot" aria-hidden="true" />
+                        <span className="live-party-friend-avatar" aria-hidden="true">
+                            {card?.small ? <img src={card.small} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
+                            <i className="live-party-friend-dot" />
+                        </span>
                         <span className="live-party-friend-main">
                             <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
                             <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
@@ -366,6 +364,31 @@ function FriendPresenceList({
             </div>
         </div>
     );
+}
+
+function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
+    const unavailable = party?.phase === "error";
+    return (
+        <div className={`live-party-empty${unavailable ? " is-unavailable" : ""}`}>
+            <span className="live-party-empty-icon" aria-hidden="true">{unavailable ? "!" : "+"}</span>
+            <span>
+                <strong>{unavailable ? "Live party unavailable" : "No active party"}</strong>
+                <small>{unavailable ? "This Riot session cannot read party status right now." : "Join or create a party in VALORANT and it will appear here automatically."}</small>
+            </span>
+        </div>
+    );
+}
+
+function socialTitle(social: SocialStatusResponse | null, presences: SocialPresence[]) {
+    if (!social) return "Connecting presence";
+    if (social.status === "unavailable") return "Presence unavailable";
+    return `${social.onlineCount || presences.length} online`;
+}
+
+function socialEmptyLabel(social: SocialStatusResponse | null) {
+    if (!social) return "Connecting to Riot presence...";
+    if (social.status === "unavailable") return "Presence is unavailable for this session. Riot Client or a valid access-token session may be required.";
+    return "No friends are online right now.";
 }
 
 function visiblePresences(social: SocialStatusResponse | null) {

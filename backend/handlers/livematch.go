@@ -29,6 +29,7 @@ type LivePlayer struct {
 	IsLocal         bool   `json:"isLocal"`
 	CompetitiveTier int    `json:"competitiveTier"`
 	RankedRating    int    `json:"rankedRating"`
+	PartyGroup      string `json:"partyGroup,omitempty"`
 }
 
 type CoreGamePlayerResponse struct {
@@ -86,6 +87,7 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		preMatch, err := val.GetPreGameMatch()
 		if err == nil && preMatch != nil {
 			response := h.buildPregameResponse(val, preMatch)
+			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			h.returnAny(w, response)
@@ -100,6 +102,7 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		coreMatch, err := getCoreGameMatch(val, corePlayer.MatchID)
 		if err == nil && coreMatch != nil {
 			response := h.buildCoregameResponse(val, coreMatch)
+			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			h.returnAny(w, response)
@@ -114,6 +117,41 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		Source: source,
 		Error:  fmt.Sprintf("pregame: %s; coregame: %s", errString(pregameErr), errString(coregameErr)),
 	})
+}
+
+// markCurrentParty labels only the signed-in player's own party. Live match
+// payloads do not expose every premade, so unknown groups stay unlabelled.
+// Raw Riot party IDs never leave the backend.
+func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatchResponse) {
+	current, err := getCurrentParty(val)
+	if err != nil || current == nil || current.CurrentPartyID == "" {
+		return
+	}
+	details, err := getPartyDetails(val, current.CurrentPartyID)
+	if err != nil || details == nil || len(details.Members) < 2 {
+		return
+	}
+	members := make([]string, 0, len(details.Members))
+	for _, member := range details.Members {
+		members = append(members, member.Subject)
+	}
+	markPartyMembers(response, members)
+}
+
+func markPartyMembers(response *LiveMatchResponse, memberPuuids []string) {
+	members := make(map[string]struct{}, len(memberPuuids))
+	for _, puuid := range memberPuuids {
+		members[puuid] = struct{}{}
+	}
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player != nil {
+				if _, ok := members[player.Puuid]; ok {
+					player.PartyGroup = "your-party"
+				}
+			}
+		}
+	}
 }
 
 func (h *Handler) fillLiveQueueID(val *valclient.ValClient, response *LiveMatchResponse) {

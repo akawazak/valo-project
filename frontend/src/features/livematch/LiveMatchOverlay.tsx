@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { Weapon } from '@/lib/types';
+import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
 import './LiveMatchOverlay.css';
 
 // Sort players for stable rendering. The 5-second poll can reorder
@@ -226,6 +227,7 @@ export default function LiveMatchOverlay() {
     const currentMap = mapCache[match.mapId?.toLowerCase()] || { name: "Unknown Map", splash: "" };
     const sortedAllies = stablePlayerSort(match.allyTeam);
     const sortedEnemies = stablePlayerSort(match.enemyTeam);
+    const partySizes = partyGroupSizes([...sortedAllies, ...sortedEnemies]);
 
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
@@ -266,6 +268,7 @@ export default function LiveMatchOverlay() {
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
+                                partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -285,6 +288,7 @@ export default function LiveMatchOverlay() {
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
+                                partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -309,28 +313,39 @@ function liveMatchKey(match: LiveMatchResponse | null) {
     return match.matchId || `${match.phase}:${match.mapId || "map"}:${match.queueId || "queue"}`;
 }
 
+function partyGroupSizes(players: LivePlayer[]) {
+    const sizes = new Map<string, number>();
+    for (const player of players) {
+        if (player.partyGroup) sizes.set(player.partyGroup, (sizes.get(player.partyGroup) || 0) + 1);
+    }
+    return sizes;
+}
+
 function PlayerCard({
     player,
     agent,
     tier,
+    partySize,
     onSelect,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
+    partySize?: number;
     onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
     const isSelecting = player.selectionState === "selected";
     const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
+    const displayName = privatePlayerLabel(player, agent?.name);
 
     return (
         <button
             type="button"
             className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}
             onClick={() => onSelect(player)}
-            aria-label={`Open details for ${player.name || "player"}`}
+            aria-label={`Open details for ${displayName}`}
         >
             {agent?.full && (
                 <div className="agent-card-full-art" style={{ backgroundImage: `url(${agent.full})` }}></div>
@@ -350,8 +365,9 @@ function PlayerCard({
 
                 <div className="player-details">
                     <div className="player-name-row">
-                        <span className="player-display-name">{player.name || "Selecting..."}</span>
+                        <span className="player-display-name">{displayName}</span>
                         {player.isLocal && <span className="local-user-pill">YOU</span>}
+                        {partySize && partySize > 1 ? <span className="player-party-pill">{partySize === 2 ? "YOUR DUO" : `YOUR PARTY · ${partySize}`}</span> : null}
                     </div>
                     <span className="agent-name-display">
                         {agent ? agent.name : (isLocked || isSelecting ? "Agent Selection" : "Selecting...")}
@@ -401,6 +417,7 @@ function LivePlayerModal({
 }) {
     const [stats, setStats] = useState<LivePlayerStats | null>(null);
     const [loadoutIds, setLoadoutIds] = useState<string[] | null>(null);
+    const [showLoadout, setShowLoadout] = useState(false);
 
     useEffect(() => {
         if (!player.puuid || !player.agentId) {
@@ -417,6 +434,7 @@ function LivePlayerModal({
     }, [player.agentId, player.puuid]);
 
     useEffect(() => {
+        if (!showLoadout) return;
         if (!player.puuid) {
             setLoadoutIds([]);
             return;
@@ -431,15 +449,17 @@ function LivePlayerModal({
         return () => {
             cancelled = true;
         };
-    }, [player.puuid]);
+    }, [player.puuid, showLoadout]);
 
     const equippedSkins = useMemo(() => {
         if (!loadoutIds?.length) return [];
-        const byItemId = new Map<string, { uuid: string; name: string; icon: string }>();
+        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; icon: string }>();
         for (const weapon of weapons) {
             for (const skin of weapon.skins) {
                 const cosmetic = {
                     uuid: skin.uuid,
+                    weaponId: weapon.uuid,
+                    weapon: weapon.displayName,
                     name: skin.displayName,
                     icon: skin.displayIcon || skin.chromas[0]?.fullRender || weapon.displayIcon,
                 };
@@ -451,10 +471,20 @@ function LivePlayerModal({
         return Array.from(new Map(
             loadoutIds
                 .map((id) => byItemId.get(id.toLowerCase()))
-                .filter((skin): skin is { uuid: string; name: string; icon: string } => Boolean(skin))
-                .map((skin) => [skin.uuid, skin]),
-        ).values()).slice(0, 8);
+                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; icon: string } => Boolean(skin))
+                .map((skin) => [skin.weaponId, skin]),
+        ).values());
     }, [loadoutIds, weapons]);
+
+    const loadoutColumns = useMemo(() => {
+        const equippedByWeapon = new Map(equippedSkins.map((skin) => [skin.weaponId, skin]));
+        return buildValorantLoadoutColumns(weapons).map((column) => ({
+            sections: column.sections.map((section) => ({
+                label: section.label,
+                skins: section.weapons.map((weapon) => equippedByWeapon.get(weapon.uuid)).filter(Boolean),
+            })).filter((section) => section.skins.length > 0),
+        })).filter((column) => column.sections.length > 0);
+    }, [equippedSkins, weapons]);
 
     const rankName = tier?.name || (player.competitiveTier > 0 ? `Tier ${player.competitiveTier}` : "Rank unavailable");
     const selection = player.selectionState === "locked"
@@ -463,6 +493,7 @@ function LivePlayerModal({
             ? "Selecting"
             : "Not selected";
     const losses = stats?.loaded ? Math.max(0, stats.matches - stats.wins) : 0;
+    const displayName = privatePlayerLabel(player, agent?.name);
 
     return (
         <div className="live-player-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -470,7 +501,7 @@ function LivePlayerModal({
                 className="live-player-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label={`${player.name || "Player"} details`}
+                aria-label={`${displayName} details`}
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {agent?.full && (
@@ -489,7 +520,7 @@ function LivePlayerModal({
                     </div>
                     <div className="live-player-modal-title">
                         <span className="live-player-modal-kicker">{player.isLocal ? "Your player" : "Live player"}</span>
-                        <h2>{player.name || "Hidden player"}</h2>
+                        <h2>{displayName}</h2>
                         <p>{agent?.name || "Agent unavailable"} · {selection}</p>
                     </div>
                 </div>
@@ -498,25 +529,39 @@ function LivePlayerModal({
                     <InfoTile label="Rank" value={rankName} detail={player.rankedRating > 0 ? `${player.rankedRating} RR` : "RR unavailable"} icon={tier?.icon} />
                     <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
                     <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
-                    <InfoTile label="Identity" value={player.cardId ? "Card available" : "Unavailable"} detail={player.cardId || "Not returned by live endpoint"} />
+                    <button type="button" className="live-player-info-tile live-player-loadout-tile" onClick={() => setShowLoadout((open) => !open)}>
+                        <span>Loadout</span>
+                        <strong>{showLoadout ? "Close Loadout" : "Open Loadout"}</strong>
+                        <small>{equippedSkins.length ? `${equippedSkins.length} equipped skins` : showLoadout && loadoutIds === null ? "Loading live cosmetics" : "View equipped weapons"}</small>
+                    </button>
                 </div>
 
-                <section className="live-player-loadout" aria-label={`${player.name || "Player"} equipped skins`}>
+                {showLoadout && <section className="live-player-loadout" aria-label={`${displayName} equipped skins`}>
                     <div className="live-player-loadout-heading">
-                        <span>Equipped skins</span>
+                        <span>Live Loadout</span>
+                        <button type="button" className="live-player-loadout-close" onClick={() => setShowLoadout(false)}>Close</button>
                         <small>{loadoutIds === null ? "Loading…" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}</small>
                     </div>
-                    {equippedSkins.length > 0 && (
-                        <div className="live-player-loadout-grid">
-                            {equippedSkins.map((skin) => (
-                                <div className="live-player-loadout-item" key={skin.uuid}>
-                                    {skin.icon && <img src={skin.icon} alt="" aria-hidden="true" />}
-                                    <span>{skin.name}</span>
+                    {loadoutColumns.length > 0 ? (
+                        <div className="live-player-loadout-board">
+                            {loadoutColumns.map((column, columnIndex) => (
+                                <div className="live-player-loadout-column" key={columnIndex}>
+                                    {column.sections.map((section) => (
+                                        <section className="live-player-loadout-section" key={section.label}>
+                                            <h3>{section.label}</h3>
+                                            {section.skins.map((skin) => skin ? (
+                                                <div className="live-player-loadout-item" key={skin.uuid}>
+                                                    {skin.icon && <img src={skin.icon} alt="" aria-hidden="true" />}
+                                                    <span><b>{skin.weapon}</b><small>{skin.name}</small></span>
+                                                </div>
+                                            ) : null)}
+                                        </section>
+                                    ))}
                                 </div>
                             ))}
                         </div>
-                    )}
-                </section>
+                    ) : <div className="live-player-loadout-empty">{loadoutIds === null ? "Reading this player's live loadout..." : "Riot did not expose this player's loadout."}</div>}
+                </section>}
 
                 <div className="live-player-modal-note">
                     Only live endpoint fields and cached agent stats are shown here. Missing Riot fields stay hidden instead of being guessed.
@@ -524,6 +569,13 @@ function LivePlayerModal({
             </section>
         </div>
     );
+}
+
+function privatePlayerLabel(player: LivePlayer, agentName?: string) {
+    if (!player.name || player.name === "Agent" || player.name === "Enemy") {
+        return agentName || (player.selectionState === "none" ? "Selecting..." : "Hidden player");
+    }
+    return player.name;
 }
 
 function InfoTile({

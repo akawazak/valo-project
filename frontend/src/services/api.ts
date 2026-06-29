@@ -1057,6 +1057,8 @@ export interface LivePlayer {
     isLocal: boolean;
     competitiveTier: number;
     rankedRating: number;
+    /** Opaque grouping only; raw Riot party IDs are never returned. */
+    partyGroup?: string;
 }
 
 export async function getLiveMatch(): Promise<LiveMatchResponse> {
@@ -1268,6 +1270,7 @@ export interface SocialPresence {
     product?: string;
     state?: string;
     queueId?: string;
+    cardId?: string;
 }
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {

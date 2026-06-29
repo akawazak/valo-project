@@ -12,12 +12,12 @@
   padding: 10px 14px;
   color: var(--text-primary);
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 32%),
-    radial-gradient(ellipse at 100% 0%, rgba(34, 211, 163, 0.18), transparent 56%),
-    rgba(7, 13, 18, 0.92);
-  border: 1px solid rgba(34, 211, 163, 0.42);
-  border-radius: 10px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    linear-gradient(135deg, rgba(71, 181, 221, 0.13), transparent 38%),
+    radial-gradient(ellipse at 100% 0%, rgba(57, 112, 255, 0.2), transparent 58%),
+    rgba(5, 22, 34, 0.94);
+  border: 1px solid rgba(76, 183, 224, 0.38);
+  border-radius: 14px;
+  box-shadow: 0 20px 58px rgba(0, 5, 18, 0.52), 0 0 28px rgba(28, 145, 194, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   backdrop-filter: blur(12px);
   text-align: left;
   font-family: inherit;
@@ -177,12 +177,12 @@
   overflow: hidden;
   color: var(--text-primary);
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.07), transparent 28%),
-    radial-gradient(ellipse at 18% 0%, rgba(34, 211, 163, 0.16), transparent 48%),
-    rgba(7, 13, 18, 0.92);
-  border: 1px solid rgba(34, 211, 163, 0.36);
-  border-radius: 8px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    linear-gradient(135deg, rgba(65, 173, 212, 0.12), transparent 32%),
+    radial-gradient(ellipse at 90% 0%, rgba(60, 94, 255, 0.17), transparent 52%),
+    rgba(4, 21, 33, 0.95);
+  border: 1px solid rgba(76, 183, 224, 0.34);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 5, 18, 0.58), 0 0 34px rgba(28, 145, 194, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.055);
   backdrop-filter: blur(12px);
 }
 
@@ -358,6 +358,66 @@
   border-radius: 6px;
 }
 
+.live-party-friend-avatar {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #dff9ff;
+  background: linear-gradient(145deg, rgba(67, 170, 205, 0.24), rgba(42, 75, 131, 0.18));
+  border: 1px solid rgba(102, 205, 235, 0.24);
+  border-radius: 9px;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.live-party-friend-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.live-party-friend-avatar .live-party-friend-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  border: 2px solid #061722;
+}
+
+.live-party-empty {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 0.78rem;
+  padding: 0.72rem;
+  color: var(--text-primary);
+  background: linear-gradient(90deg, rgba(61, 161, 198, 0.11), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(76, 183, 224, 0.17);
+  border-radius: 10px;
+}
+
+.live-party-empty.is-unavailable { border-color: rgba(245, 197, 66, 0.25); }
+
+.live-party-empty-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: #a8edff;
+  background: rgba(68, 184, 220, 0.12);
+  border: 1px solid rgba(88, 203, 235, 0.25);
+  border-radius: 9px;
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.live-party-empty > span:last-child { display: flex; flex-direction: column; gap: 3px; }
+.live-party-empty strong { font-size: 0.78rem; }
+.live-party-empty small { color: var(--text-secondary); font-size: 0.67rem; line-height: 1.35; }
+
 .live-party-friend-row {
   position: relative;
   overflow: hidden;
@@ -374,6 +434,22 @@
 .live-party-friend-row.is-game {
   background: linear-gradient(90deg, rgba(34, 211, 163, 0.1), rgba(255, 255, 255, 0.025));
   border-color: rgba(34, 211, 163, 0.2);
+}
+
+.live-party-friend-row.is-online {
+  background: linear-gradient(90deg, rgba(57, 154, 255, 0.09), rgba(255, 255, 255, 0.025));
+  border-color: rgba(73, 164, 255, 0.16);
+}
+
+.live-party-friend-row.is-online::before,
+.live-party-friend-row.is-online .live-party-friend-dot {
+  background: #54a9ff;
+}
+
+.live-party-friend-row.is-online .live-party-friend-state {
+  color: #8bc5ff;
+  border-color: rgba(73, 164, 255, 0.22);
+  background: rgba(73, 164, 255, 0.08);
 }
 
 .live-party-friend-row.is-offline {

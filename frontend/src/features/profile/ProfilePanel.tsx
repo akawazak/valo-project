@@ -282,7 +282,9 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
 
 export default function ProfilePanel({ onConnectAccount }: Props) {
     const { activeAccount } = useData();
-    const puuid = activeAccount?.puuid ?? "";
+    const [viewedProfile, setViewedProfile] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
+    const ownPuuid = activeAccount?.puuid ?? "";
+    const puuid = viewedProfile?.puuid || ownPuuid;
     const region = activeAccount?.region ?? "na";
 
     const [overview, setOverview] = useState<ProfileOverview | null>(null);
@@ -311,6 +313,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
+
+    useEffect(() => setViewedProfile(null), [ownPuuid]);
 
     useEffect(() => {
         let cancelled = false;
@@ -472,11 +476,11 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
             void runSync(false);
             return;
         }
-        if (syncStatus.totalMatches === 0 && autoSyncPuuidRef.current !== puuid) {
+        if ((viewedProfile || syncStatus.totalMatches === 0) && autoSyncPuuidRef.current !== puuid) {
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
         }
-    }, [loading, puuid, runSync, syncStatus, syncing]);
+    }, [loading, puuid, runSync, syncStatus, syncing, viewedProfile]);
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
@@ -565,6 +569,8 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     }
 
     const heroBg = cardData?.wide || topAgentMeta?.full;
+    const viewedGameName = overview?.gameName || viewedProfile?.gameName || activeAccount?.gameName || "Unknown";
+    const viewedTagLine = overview?.tagLine || viewedProfile?.tagLine || activeAccount?.tagLine || "";
 
     const stats: Array<{ label: string; value: string; accent?: boolean }> = [
         { label: "Rank", value: currentRankLabel, accent: true },
@@ -602,9 +608,14 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                     </div>
 
                     <div className={s.railBody}>
+                        {viewedProfile && (
+                            <button type="button" className={s.backToProfile} onClick={() => setViewedProfile(null)}>
+                                ← Back to my profile
+                            </button>
+                        )}
                         <div className={s.railName}>
-                            {activeAccount?.gameName || "Unknown"}
-                            <span className={s.railTag}>#{activeAccount?.tagLine || ""}</span>
+                            {viewedGameName}
+                            <span className={s.railTag}>#{viewedTagLine}</span>
                         </div>
                         {titleText && <div className={s.railTitle}>{titleText}</div>}
                         <div className={s.railSubline}>
@@ -819,6 +830,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                     maps={maps}
                                                     tierAssets={tierAssets}
                                                     onToggle={() => toggleDetails(match.matchId)}
+                                                    onViewProfile={setViewedProfile}
                                                 />
                                             ))}
                                         </div>
@@ -887,6 +899,7 @@ function MatchRow({
     maps,
     tierAssets,
     onToggle,
+    onViewProfile,
 }: {
     match: ProfileMatchSummary;
     detail?: ProfileMatchDetails;
@@ -896,6 +909,7 @@ function MatchRow({
     maps: Record<string, MapMeta>;
     tierAssets: Map<number, { smallIcon: string }>;
     onToggle: () => void;
+    onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const agentMeta = agents[match.localPlayer.characterId?.toLowerCase?.() || ""];
     const mapMeta = maps[match.mapID?.toLowerCase?.() || ""];
@@ -1041,7 +1055,7 @@ function MatchRow({
                     {loading ? (
                         <div className={s.placeholder}>Loading scoreboard…</div>
                     ) : detail ? (
-                        <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} />
+                        <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} onViewProfile={onViewProfile} />
                     ) : (
                         <div className={s.placeholder}>No details cached for this match.</div>
                     )}
@@ -1055,10 +1069,12 @@ function Scoreboard({
     detail,
     agents,
     tierAssets,
+    onViewProfile,
 }: {
     detail: ProfileMatchDetails;
     agents: Record<string, AgentMeta>;
     tierAssets: Map<number, { smallIcon: string }>;
+    onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const blue = detail.players.filter((p) => p.teamId === "Blue");
     const red = detail.players.filter((p) => p.teamId === "Red");
@@ -1083,6 +1099,7 @@ function Scoreboard({
                 agents={agents}
                 mvpPlayer={mvpPlayer}
                 tierAssets={tierAssets}
+                onViewProfile={onViewProfile}
             />
             <ScoreTeam
                 title="Red"
@@ -1092,6 +1109,7 @@ function Scoreboard({
                 agents={agents}
                 mvpPlayer={mvpPlayer}
                 tierAssets={tierAssets}
+                onViewProfile={onViewProfile}
             />
         </div>
     );
@@ -1105,6 +1123,7 @@ function ScoreTeam({
     agents,
     mvpPlayer,
     tierAssets,
+    onViewProfile,
 }: {
     title: string;
     won: boolean;
@@ -1113,6 +1132,7 @@ function ScoreTeam({
     agents: Record<string, AgentMeta>;
     mvpPlayer: ProfileMatchDetails["players"][number] | null;
     tierAssets: Map<number, { smallIcon: string }>;
+    onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     return (
         <div className={s.scoreTeam}>
@@ -1153,7 +1173,17 @@ function ScoreTeam({
                                                 {rankIcon && (
                                                     <Image src={rankIcon} alt="" width={16} height={16} unoptimized className={s.scoreRankIcon} />
                                                 )}
-                                                {name}
+                                                {p.subject && !p.isLocal ? (
+                                                    <button
+                                                        type="button"
+                                                        className={s.scoreProfileBtn}
+                                                        onClick={() => onViewProfile({ puuid: p.subject, gameName: p.gameName || meta?.name || "Player", tagLine: p.tagLine || "" })}
+                                                        title={`View ${name}'s profile`}
+                                                    >
+                                                        {name}
+                                                    </button>
+                                                ) : name}
+                                                {p.isLocal && <span className={s.viewingBadge}>VIEWING</span>}
                                                 {isMvp && <span className={s.mvpBadge}>MVP</span>}
                                             </span>
                                             <small>{meta?.name || "Agent"}</small>

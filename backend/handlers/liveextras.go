@@ -62,6 +62,7 @@ type SocialPresence struct {
 	Product string `json:"product,omitempty"`
 	State   string `json:"state,omitempty"`
 	QueueID string `json:"queueId,omitempty"`
+	CardID  string `json:"cardId,omitempty"`
 }
 
 func (h *Handler) GetLiveLoadouts(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +229,10 @@ func normalizePresences(raw map[string]any) []SocialPresence {
 					if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
 						p.State = firstString(mpd, "sessionLoopState", "SessionLoopState")
 						p.QueueID = firstString(mpd, "queueId", "QueueID")
+						p.CardID = firstString(mpd, "playerCardId", "PlayerCardID")
+					}
+					if p.CardID == "" {
+						p.CardID = firstString(private, "playerCardId", "PlayerCardID")
 					}
 				}
 			}

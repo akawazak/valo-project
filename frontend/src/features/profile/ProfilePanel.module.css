@@ -200,6 +200,22 @@
     color: var(--text-primary);
 }
 
+.backToProfile {
+    width: 100%;
+    margin: -22px 0 16px;
+    padding: 8px 10px;
+    color: #9eeaff;
+    background: rgba(61, 168, 205, 0.09);
+    border: 1px solid rgba(79, 190, 225, 0.22);
+    border-radius: 9px;
+    font: inherit;
+    font-size: 0.7rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.backToProfile:hover { background: rgba(61, 168, 205, 0.16); }
+
 .railTag {
     margin-left: 5px;
     font-size: 0.9rem;
@@ -1188,7 +1204,32 @@
 }
 
 .scoreLocal td {
-    background: rgba(var(--accent-rgb), 0.08);
+    background: linear-gradient(90deg, rgba(34, 211, 163, 0.16), rgba(57, 154, 255, 0.08));
+    border-top: 1px solid rgba(58, 226, 182, 0.3);
+    border-bottom: 1px solid rgba(58, 226, 182, 0.3);
+}
+
+.scoreProfileBtn {
+    padding: 0;
+    color: inherit;
+    background: none;
+    border: 0;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+}
+
+.scoreProfileBtn:hover { color: #89eaff; text-decoration: underline; }
+
+.viewingBadge {
+    padding: 2px 5px;
+    color: #77f2cd;
+    background: rgba(34, 211, 163, 0.1);
+    border: 1px solid rgba(34, 211, 163, 0.26);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 0.48rem;
+    letter-spacing: 0.07em;
 }
 
 .scorePlayer {
