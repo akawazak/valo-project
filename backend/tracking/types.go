@@ -19,6 +19,7 @@ package tracking
 type PlayerStats struct {
 	Subject         string  `json:"subject"`
 	TeamID          string  `json:"teamId"`
+	PartyID         string  `json:"partyId,omitempty"`
 	GameName        string  `json:"gameName"`
 	TagLine         string  `json:"tagLine"`
 	PlayerCardID    string  `json:"playerCardId,omitempty"`
@@ -42,6 +43,15 @@ type PlayerStats struct {
 	HSPct           float64 `json:"hsPct"`
 }
 
+type MatchPartyMember struct {
+	Subject       string `json:"subject"`
+	GameName      string `json:"gameName"`
+	TagLine       string `json:"tagLine"`
+	CharacterID   string `json:"characterId"`
+	PlayerCardID  string `json:"playerCardId,omitempty"`
+	PlayerTitleID string `json:"playerTitleId,omitempty"`
+}
+
 // MatchSummary is the per-row payload of `GET /v1/profile/match-history`.
 type MatchSummary struct {
 	MatchID          string      `json:"matchId"`
@@ -56,6 +66,7 @@ type MatchSummary struct {
 	TierAfter        int         `json:"tierAfter"`
 	RREarned         int         `json:"rrEarned"`
 	LocalPlayer      PlayerStats `json:"localPlayer"`
+	PartyMembers     []MatchPartyMember `json:"partyMembers,omitempty"`
 }
 
 // RRSnapshot is one row of `rr_snapshots` plus the API-shaped JSON.
@@ -234,6 +245,7 @@ type PlayerRow struct {
 	MatchID         string
 	Subject         string
 	TeamID          string
+	PartyID         string
 	GameName        string
 	TagLine         string
 	PlayerCardID    string

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS match_players (
     matchID         TEXT    NOT NULL,
     subject         TEXT    NOT NULL,
     teamId          TEXT    NOT NULL,
+    partyId         TEXT    NOT NULL DEFAULT '',
     gameName        TEXT    NOT NULL DEFAULT '',
     tagLine         TEXT    NOT NULL DEFAULT '',
     playerCardId    TEXT    NOT NULL DEFAULT '',
@@ -224,6 +225,9 @@ func migrateRRSnapshotsTable(db *sql.DB) error {
 }
 
 func ensureMatchPlayerNameColumns(db *sql.DB) error {
+	if err := addColumnIfMissing(db, "match_players", "partyId", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := addColumnIfMissing(db, "match_players", "gameName", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
@@ -362,10 +366,10 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO match_players
-		    (matchID, subject, teamId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
+		    (matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		     kills, deaths, assists, score, headshots, bodyshots, legshots,
 		     damageDealt, roundsPlayed, isLocal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare player insert: %w", err)
@@ -377,6 +381,7 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 			matchID,
 			strings.ToLower(p.Subject),
 			p.TeamID,
+			p.PartyID,
 			p.GameName,
 			p.TagLine,
 			p.PlayerCardID,
@@ -432,7 +437,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	}
 
 	rows, err := db.Query(`
-		SELECT matchID, subject, teamId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
+		SELECT matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		       kills, deaths, assists, score, headshots, bodyshots, legshots,
 		       damageDealt, roundsPlayed, isLocal
 		FROM match_players WHERE matchID = ? ORDER BY teamId, score DESC`, matchID)
@@ -446,7 +451,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 		var p PlayerRow
 		var isLocal int
 		if err := rows.Scan(
-			&p.MatchID, &p.Subject, &p.TeamID, &p.GameName, &p.TagLine,
+			&p.MatchID, &p.Subject, &p.TeamID, &p.PartyID, &p.GameName, &p.TagLine,
 			&p.PlayerCardID, &p.PlayerTitleID,
 			&p.CharacterID, &p.AccountLevel, &p.CompetitiveTier,
 			&p.Kills, &p.Deaths, &p.Assists, &p.Score,
@@ -633,7 +638,7 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		rows, err = db.Query(`
 			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
 			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.teamId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
+			       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
 			       mp.roundsPlayed,
 			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
@@ -648,7 +653,7 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		rows, err = db.Query(`
 			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
 			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.teamId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
+			       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
 			       mp.roundsPlayed,
 			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
@@ -676,7 +681,7 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		if err := rows.Scan(
 			&s.MatchID, &s.QueueID, &s.MapID, &s.GameMode, &s.GameStartMillis,
 			&s.GameLengthMillis, &s.SeasonID, &isRanked, &blueWins,
-			&s.LocalPlayer.TeamID,
+			&s.LocalPlayer.TeamID, &s.LocalPlayer.PartyID,
 			&s.LocalPlayer.CharacterID, &s.LocalPlayer.Kills, &s.LocalPlayer.Deaths,
 			&s.LocalPlayer.Assists, &s.LocalPlayer.Score,
 			&s.LocalPlayer.Headshots, &s.LocalPlayer.Bodyshots, &s.LocalPlayer.Legshots,
@@ -690,6 +695,33 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		s.Win = (blueWins == 1 && strings.EqualFold(s.LocalPlayer.TeamID, "Blue")) ||
 			(blueWins == 0 && strings.EqualFold(s.LocalPlayer.TeamID, "Red"))
 		s.LocalPlayer = deriveLocalPlayer(s.LocalPlayer)
+		if s.LocalPlayer.PartyID != "" {
+			partyRows, partyErr := db.Query(`
+				SELECT subject, gameName, tagLine, characterId, playerCardId, playerTitleId
+				FROM match_players
+				WHERE matchID = ? AND partyId = ? AND subject <> ?
+				ORDER BY score DESC, subject ASC
+			`, s.MatchID, s.LocalPlayer.PartyID, strings.ToLower(puuid))
+			if partyErr != nil {
+				return nil, fmt.Errorf("tracking: ListCachedMatches party members: %w", partyErr)
+			}
+			for partyRows.Next() {
+				var member MatchPartyMember
+				if err := partyRows.Scan(
+					&member.Subject, &member.GameName, &member.TagLine, &member.CharacterID, &member.PlayerCardID, &member.PlayerTitleID,
+				); err != nil {
+					partyRows.Close()
+					return nil, fmt.Errorf("tracking: ListCachedMatches party member scan: %w", err)
+				}
+				member.CharacterID = strings.ToLower(member.CharacterID)
+				s.PartyMembers = append(s.PartyMembers, member)
+			}
+			if err := partyRows.Err(); err != nil {
+				partyRows.Close()
+				return nil, fmt.Errorf("tracking: ListCachedMatches party member rows: %w", err)
+			}
+			partyRows.Close()
+		}
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -1136,6 +1168,7 @@ type parsedMatchHeader struct {
 type parsedPlayer struct {
 	Subject         string
 	TeamID          string
+	PartyID         string
 	GameName        string
 	TagLine         string
 	PlayerCardID    string
@@ -1175,6 +1208,7 @@ type rawMatchDetails struct {
 		Subject        string `json:"subject"`
 		GameName       string `json:"gameName"`
 		TagLine        string `json:"tagLine"`
+		PartyID        string `json:"partyId"`
 		PlayerCardID   string `json:"playerCard"`
 		PlayerTitleID  string `json:"playerTitle"`
 		PlayerIdentity struct {
@@ -1280,6 +1314,7 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 		pl := parsedPlayer{
 			Subject:         p.Subject,
 			TeamID:          p.TeamID,
+			PartyID:         p.PartyID,
 			GameName:        p.GameName,
 			TagLine:         p.TagLine,
 			CharacterID:     p.CharacterID,

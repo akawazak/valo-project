@@ -793,6 +793,7 @@ export interface ProfileMapStatsResponse {
 export interface ProfilePlayerStats {
     subject: string;
     teamId: string;
+    partyId?: string;
     gameName: string;
     tagLine: string;
     playerCardId?: string;
@@ -814,6 +815,15 @@ export interface ProfilePlayerStats {
     adr: number;
     acs: number;
     hsPct: number;
+}
+
+export interface ProfileMatchPartyMember {
+    subject: string;
+    gameName: string;
+    tagLine: string;
+    characterId: string;
+    playerCardId?: string;
+    playerTitleId?: string;
 }
 
 export interface ProfileMatchInfo {
@@ -844,6 +854,7 @@ export interface ProfileMatchSummary {
     tierAfter: number;
     rrEarned: number;
     localPlayer: ProfilePlayerStats;
+    partyMembers?: ProfileMatchPartyMember[];
 }
 
 export interface ProfileMatchHistoryResponse {
@@ -1235,7 +1246,7 @@ export async function getAccountHealth(): Promise<AccountHealthResponse> {
 export interface SocialStatusResponse {
     status: "ok" | "unavailable";
     source?: "local" | "remote";
-    remoteStatus?: "missing" | "config" | "error";
+    remoteStatus?: "missing" | "config" | "connecting" | "live" | "error";
     remoteChatHost?: string;
     remoteChatPort?: number;
     friendCount: number;

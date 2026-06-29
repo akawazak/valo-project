@@ -87,7 +87,17 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 
 	remoteProbe := remoteSocialProbe{Status: "missing"}
 	if hasRemoteAuth {
-		remoteProbe = h.probeRemoteSocial(remoteAuth)
+		remoteResp := fetchRemoteSocialStatus(remoteAuth)
+		remoteProbe = remoteSocialProbe{
+			Status: remoteResp.RemoteStatus,
+			Host:   remoteResp.RemoteChatHost,
+			Port:   remoteResp.RemoteChatPort,
+			Error:  remoteResp.Error,
+		}
+		if remoteResp.Status == "ok" || remoteResp.RemoteStatus == "connecting" || remoteResp.RemoteStatus == "live" {
+			h.returnAny(w, remoteResp)
+			return
+		}
 	}
 
 	resp, err := h.fetchLocalSocialStatus()

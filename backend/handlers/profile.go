@@ -423,6 +423,7 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 		ps := tracking.PlayerStats{
 			Subject:         p.Subject,
 			TeamID:          p.TeamID,
+			PartyID:         p.PartyID,
 			GameName:        p.GameName,
 			TagLine:         p.TagLine,
 			PlayerCardID:    p.PlayerCardID,

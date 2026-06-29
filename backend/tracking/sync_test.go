@@ -115,6 +115,41 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 	}
 }
 
+func TestListCachedMatchesIncludesQueuedPartyMembers(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const puuid = "party-local"
+	raw, err := json.Marshal(matchFixtureWithParty(puuid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InsertMatchDetails(db, appDir, "party-match", puuid, raw, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	matches, err := ListCachedMatches(db, puuid, "", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches = %d, want 1", len(matches))
+	}
+	if matches[0].LocalPlayer.PartyID != "party-123" {
+		t.Fatalf("party id = %q, want party-123", matches[0].LocalPlayer.PartyID)
+	}
+	if len(matches[0].PartyMembers) != 1 {
+		t.Fatalf("party members = %d, want 1", len(matches[0].PartyMembers))
+	}
+	if got := matches[0].PartyMembers[0].GameName; got != "Duo" {
+		t.Fatalf("party member name = %q, want Duo", got)
+	}
+}
+
 func matchFixture(puuid string) map[string]any {
 	return map[string]any{
 		"matchInfo": map[string]any{
@@ -171,6 +206,79 @@ func matchFixture(puuid string) map[string]any {
 							{"receiver": "enemy", "damage": 156, "headshots": 1, "bodyshots": 2, "legshots": 0},
 						},
 					},
+				},
+			},
+		},
+	}
+}
+
+func matchFixtureWithParty(puuid string) map[string]any {
+	return map[string]any{
+		"matchInfo": map[string]any{
+			"matchId":          "party-match",
+			"mapId":            "map-2",
+			"queueID":          "swiftplay",
+			"gameMode":         "bomb",
+			"isRanked":         false,
+			"gameStartMillis":  int64(1700001000000),
+			"seasonId":         "season-1",
+			"gameLengthMillis": 900000,
+			"completionState":  "Completed",
+		},
+		"teams": []map[string]any{
+			{"teamId": "Blue", "won": true, "roundsWon": 5},
+			{"teamId": "Red", "won": false, "roundsWon": 2},
+		},
+		"players": []map[string]any{
+			{
+				"subject":         puuid,
+				"teamId":          "Blue",
+				"partyId":         "party-123",
+				"gameName":        "Local",
+				"tagLine":         "VV",
+				"characterId":     "agent-1",
+				"accountLevel":    57,
+				"competitiveTier": 0,
+				"stats": map[string]any{
+					"score":        1400,
+					"roundsPlayed": 7,
+					"kills":        6,
+					"deaths":       1,
+					"assists":      5,
+				},
+			},
+			{
+				"subject":         "duo-player",
+				"teamId":          "Blue",
+				"partyId":         "party-123",
+				"gameName":        "Duo",
+				"tagLine":         "PAL",
+				"characterId":     "agent-2",
+				"accountLevel":    60,
+				"competitiveTier": 0,
+				"stats": map[string]any{
+					"score":        1200,
+					"roundsPlayed": 7,
+					"kills":        5,
+					"deaths":       2,
+					"assists":      4,
+				},
+			},
+			{
+				"subject":         "solo-player",
+				"teamId":          "Blue",
+				"partyId":         "party-999",
+				"gameName":        "Solo",
+				"tagLine":         "LFG",
+				"characterId":     "agent-3",
+				"accountLevel":    61,
+				"competitiveTier": 0,
+				"stats": map[string]any{
+					"score":        900,
+					"roundsPlayed": 7,
+					"kills":        3,
+					"deaths":       3,
+					"assists":      1,
 				},
 			},
 		},

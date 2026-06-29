@@ -1,0 +1,434 @@
+/* Shared styles for the floating Live Party and Friend Presence popups.
+   Each widget renders a collapsed launcher pill in the bottom-right corner
+   that expands into a popup panel on click. The two widgets stack vertically
+   so they never collide. */
+
+.widget {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.widget > * {
+  pointer-events: auto;
+}
+
+/* Bottom-right anchor for both widgets; FriendPresenceWidget sits above the
+   LivePartyWidget via bottom offset on its container. */
+.partyAnchor {
+  right: 22px;
+  bottom: 22px;
+}
+
+.friendsAnchor {
+  right: 22px;
+  bottom: 110px;
+}
+
+@media (max-width: 720px) {
+  .partyAnchor,
+  .friendsAnchor {
+    right: 14px;
+    bottom: 14px;
+  }
+
+  .friendsAnchor {
+    bottom: 96px;
+  }
+}
+
+/* Launcher pill (collapsed state). Mirrors the in-game VALORANT "tactical"
+   button vibe: dark background, accent border on hover, kicker text. */
+.launcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(9, 10, 12, 0.92);
+  color: #f4f1ec;
+  font-family: "Rajdhani", "Inter", system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.launcher:hover,
+.launcher:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(255, 70, 85, 0.55);
+  background: rgba(15, 16, 19, 0.96);
+  outline: none;
+}
+
+.launcher:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 70, 85, 0.35), 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.launcherDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: #a69b93;
+}
+
+.launcherDotParty {
+  background: #6abf6d;
+  box-shadow: 0 0 0 4px rgba(106, 191, 109, 0.18);
+}
+
+.launcherDotInGame {
+  background: #d4434f;
+  box-shadow: 0 0 0 4px rgba(212, 67, 79, 0.18);
+}
+
+.launcherLabel {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.launcherSubLabel {
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: rgba(244, 241, 236, 0.55);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.launcherCount {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #f4f1ec;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Popup panel (expanded state). Anchored above the launcher. */
+.panel {
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(640px, calc(100vh - 160px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(12, 14, 17, 0.96), rgba(18, 20, 24, 0.98));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+  animation: chatWidgetPop 0.16s ease-out;
+}
+
+@keyframes chatWidgetPop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.panelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.panelTitle {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-size: 1.25rem;
+  line-height: 1.1;
+  color: #f4f1ec;
+}
+
+.panelKicker {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(244, 241, 236, 0.55);
+}
+
+.panelSubLabel {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: rgba(244, 241, 236, 0.7);
+  line-height: 1.4;
+}
+
+.panelClose {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4f1ec;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.panelClose:hover,
+.panelClose:focus-visible {
+  background: rgba(255, 70, 85, 0.18);
+  border-color: rgba(255, 70, 85, 0.55);
+  outline: none;
+}
+
+.panelBody {
+  padding: 14px 18px 18px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.errorBlock {
+  padding: 10px 12px;
+  border: 1px solid rgba(212, 67, 79, 0.35);
+  background: rgba(212, 67, 79, 0.12);
+  color: #ffd6da;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* Party popup specifics. */
+.partyBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 70, 85, 0.45);
+  background: rgba(255, 70, 85, 0.14);
+  color: #ffadb4;
+  font-family: "Rajdhani", "Inter", system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.partyBadgeLocal {
+  border-color: rgba(106, 191, 109, 0.5);
+  background: rgba(106, 191, 109, 0.16);
+  color: #b6e3b8;
+}
+
+.partyMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.partyMetric {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.partyMetric span {
+  display: block;
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(244, 241, 236, 0.5);
+}
+
+.partyMetric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.92rem;
+  color: #f4f1ec;
+  word-break: break-word;
+}
+
+.partyList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.partyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.partyIdentity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.partyAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.partyAvatarFallback {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  flex: 0 0 auto;
+}
+
+.partyName {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.partyName span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.partyNameMeta {
+  display: block;
+  font-size: 0.7rem;
+  color: rgba(244, 241, 236, 0.55);
+  margin-top: 2px;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.partyReady {
+  font-size: 0.66rem;
+  color: rgba(106, 191, 109, 0.9);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
+.partyReadyNot {
+  font-size: 0.66rem;
+  color: rgba(244, 241, 236, 0.45);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
+.emptyState {
+  padding: 14px 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  color: rgba(244, 241, 236, 0.7);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.emptyState strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #f4f1ec;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-size: 0.95rem;
+}
+
+/* Friend Presence popup specifics. */
+.presenceCounters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.presenceCounter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(244, 241, 236, 0.78);
+}
+
+.presenceCounter strong {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-size: 0.95rem;
+  color: #f4f1ec;
+}
+
+.presenceList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.presenceRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.presenceDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.presenceDotOnline {
+  background: #6abf6d;
+}
+
+.presenceDotGame {
+  background: #d4434f;
+}
+
+.presenceDotOffline {
+  background: #a69b93;
+}
+
+.presenceName {
+  font-size: 0.88rem;
+  color: #f4f1ec;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.presenceSub {
+  display: block;
+  font-size: 0.7rem;
+  color: rgba(244, 241, 236, 0.55);
+  margin-top: 2px;
+}

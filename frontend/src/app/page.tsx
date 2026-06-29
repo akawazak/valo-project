@@ -29,6 +29,8 @@ import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
+import LivePartyWidget from '@/features/party/LivePartyWidget';
+import FriendPresenceWidget from '@/features/party/FriendPresenceWidget';
 
 export default function Home() {
     const {
@@ -578,6 +580,8 @@ export default function Home() {
 
             <LiveMatchOverlay />
             <LivePartyStatus />
+            <FriendPresenceWidget />
+            <LivePartyWidget />
         </div>
     );
 }
