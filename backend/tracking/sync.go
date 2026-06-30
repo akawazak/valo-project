@@ -7,8 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-
-	"golang.org/x/sync/errgroup"
+	"time"
 )
 
 // SyncManager is the per-process handle to the Riot sync worker. It
@@ -215,29 +214,36 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		}
 	}
 
-	// Step 4: fetch match-details in parallel, 4-way concurrent.
-	var eg errgroup.Group
-	eg.SetLimit(4)
-	results := make([][]byte, len(newIDs))
-	errs := make([]error, len(newIDs))
-	for i, id := range newIDs {
-		i, id := i, id
-		eg.Go(func() error {
-			url := fmt.Sprintf(
-				"https://pd.%s.a.pvp.net/match-details/v1/matches/%s",
-				shardForRegion(region), id,
-			)
-			b, fetchErr := m.fetchRiot("GET", url, nil)
-			if fetchErr != nil {
-				errs[i] = fetchErr
-				slog.Warn("tracking: getMatchDetails failed", "matchID", id, "err", fetchErr)
-				return nil // never abort
-			}
-			results[i] = b
-			return nil
-		})
+	// Step 4: hydrate a bounded batch sequentially. Riot's match-details
+	// endpoint rate-limits burst fan-out; failed IDs remain uncached and are
+	// retried by the next sync because history is always rechecked from zero.
+	const maxDetailsPerSync = 24
+	if len(newIDs) > maxDetailsPerSync {
+		newIDs = newIDs[:maxDetailsPerSync]
 	}
-	_ = eg.Wait()
+	results := make([][]byte, len(newIDs))
+	for i, id := range newIDs {
+		if i > 0 {
+			time.Sleep(250 * time.Millisecond)
+		}
+		url := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/match-details/v1/matches/%s",
+			shardForRegion(region), id,
+		)
+		b, fetchErr := m.fetchRiot("GET", url, nil)
+		if fetchErr != nil && strings.Contains(fetchErr.Error(), "status 429") {
+			time.Sleep(2 * time.Second)
+			b, fetchErr = m.fetchRiot("GET", url, nil)
+		}
+		if fetchErr != nil {
+			slog.Warn("tracking: getMatchDetails failed", "matchID", id, "err", fetchErr)
+			if strings.Contains(fetchErr.Error(), "status 429") {
+				break
+			}
+			continue
+		}
+		results[i] = b
+	}
 
 	// Step 5: parse player subjects with empty names and resolve them via name-service.
 	var emptyPUUIDs []string

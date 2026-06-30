@@ -63,6 +63,8 @@ type MatchSummary struct {
 	SeasonID         string             `json:"seasonId"`
 	IsRanked         bool               `json:"isRanked"`
 	Win              bool               `json:"win"`
+	BlueRoundsWon    int                `json:"blueRoundsWon"`
+	RedRoundsWon     int                `json:"redRoundsWon"`
 	TierAfter        int                `json:"tierAfter"`
 	RREarned         int                `json:"rrEarned"`
 	LocalPlayer      PlayerStats        `json:"localPlayer"`

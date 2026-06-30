@@ -636,48 +636,34 @@ func RecomputeAggregates(db *sql.DB, puuid string) error {
 // Each row carries the local player's per-match derived stats
 // computed from the cached match_players columns.
 func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]MatchSummary, error) {
+	return ListCachedMatchesFiltered(db, puuid, queue, "", start, end)
+}
+
+// ListCachedMatchesFiltered is ListCachedMatches with an optional act filter.
+func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start, end int) ([]MatchSummary, error) {
 	if puuid == "" {
-		return nil, fmt.Errorf("tracking: ListCachedMatches: puuid is required")
+		return nil, fmt.Errorf("tracking: ListCachedMatchesFiltered: puuid is required")
 	}
 	if end <= start {
 		return []MatchSummary{}, nil
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if queue == "" {
-		rows, err = db.Query(`
-			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
-			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
-			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
-			       mp.roundsPlayed,
-			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
-			FROM matches m
-			JOIN match_players mp ON mp.matchID = m.matchID
-			LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
-			WHERE mp.subject = ?
-			ORDER BY m.gameStartMillis DESC, m.matchID ASC
-			LIMIT ? OFFSET ?
-		`, strings.ToLower(puuid), end-start, start)
-	} else {
-		rows, err = db.Query(`
-			SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
-			       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins,
-			       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
-			       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
-			       mp.roundsPlayed,
-			       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
-			FROM matches m
-			JOIN match_players mp ON mp.matchID = m.matchID
-			LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
-			WHERE mp.subject = ? AND m.queueID = ?
-			ORDER BY m.gameStartMillis DESC, m.matchID ASC
-			LIMIT ? OFFSET ?
-		`, strings.ToLower(puuid), queue, end-start, start)
-	}
+	rows, err := db.Query(`
+		SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
+		       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins, m.blueRoundsWon, m.redRoundsWon,
+		       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
+		       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
+		       mp.roundsPlayed,
+		       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
+		WHERE mp.subject = ?
+		  AND (? = '' OR LOWER(m.queueID) = LOWER(?))
+		  AND (? = '' OR m.seasonId = ?)
+		ORDER BY m.gameStartMillis DESC, m.matchID ASC
+		LIMIT ? OFFSET ?
+	`, strings.ToLower(puuid), queue, queue, seasonID, seasonID, end-start, start)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: ListCachedMatches query: %w", err)
 	}
@@ -693,7 +679,7 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 		)
 		if err := rows.Scan(
 			&s.MatchID, &s.QueueID, &s.MapID, &s.GameMode, &s.GameStartMillis,
-			&s.GameLengthMillis, &s.SeasonID, &isRanked, &blueWins,
+			&s.GameLengthMillis, &s.SeasonID, &isRanked, &blueWins, &s.BlueRoundsWon, &s.RedRoundsWon,
 			&s.LocalPlayer.TeamID, &s.LocalPlayer.PartyID,
 			&s.LocalPlayer.CharacterID, &s.LocalPlayer.Kills, &s.LocalPlayer.Deaths,
 			&s.LocalPlayer.Assists, &s.LocalPlayer.Score,
@@ -1229,7 +1215,25 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		}
 	}
 
-	// Season summary aggregates.
+	summary, err := GetSeasonSummary(db, puuid, out.CurrentSeasonID, "competitive")
+	if err != nil {
+		return nil, err
+	}
+	out.SeasonSummary = summary
+	if summary != nil {
+		out.CurrentRank.NumberOfGames = summary.Matches
+		out.CurrentRank.NumberOfWins = summary.Wins
+	}
+	return out, nil
+}
+
+// GetSeasonSummary aggregates one queue within the selected act. "all"
+// includes every queue; an empty queue defaults to competitive.
+func GetSeasonSummary(db *sql.DB, puuid, seasonID, queue string) (*SeasonSummary, error) {
+	queue = strings.ToLower(strings.TrimSpace(queue))
+	if queue == "" {
+		queue = "competitive"
+	}
 	var (
 		matches int
 		wins    int
@@ -1239,7 +1243,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		hits    int
 		hshots  int
 	)
-	err = db.QueryRow(`
+	err := db.QueryRow(`
 		SELECT
 		    COUNT(*),
 		    COALESCE(SUM(CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
@@ -1252,11 +1256,15 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		    COALESCE(SUM(mp.headshots), 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
-		WHERE mp.subject = ? AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
+		WHERE mp.subject = ?
+		  AND (? = 'all'
+		       OR (? = 'competitive' AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive'))
+		       OR LOWER(m.queueID) = ?)
 		  AND (? = '' OR m.seasonId = ?)
-	`, puuid, out.CurrentSeasonID, out.CurrentSeasonID).Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
+	`, strings.ToLower(puuid), queue, queue, queue, seasonID, seasonID).
+		Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
 	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("tracking: GetOverview summary: %w", err)
+		return nil, fmt.Errorf("tracking: GetSeasonSummary: %w", err)
 	}
 
 	summary := SeasonSummary{
@@ -1266,20 +1274,20 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		AvgKDA:   ratio(kills+assists, deaths),
 		AvgHSPct: pct(hshots, hits),
 	}
-	out.CurrentRank.NumberOfGames = matches
-	out.CurrentRank.NumberOfWins = wins
-
-	// Top agent for the same current-act competitive sample.
-	row = db.QueryRow(`
+	// Top agent for the same current-act and queue sample.
+	row := db.QueryRow(`
 		SELECT mp.characterId
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
-		WHERE mp.subject = ? AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
+		WHERE mp.subject = ?
+		  AND (? = 'all'
+		       OR (? = 'competitive' AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive'))
+		       OR LOWER(m.queueID) = ?)
 		  AND (? = '' OR m.seasonId = ?)
 		GROUP BY mp.characterId
 		ORDER BY COUNT(*) DESC, mp.characterId ASC
 		LIMIT 1
-	`, puuid, out.CurrentSeasonID, out.CurrentSeasonID)
+	`, strings.ToLower(puuid), queue, queue, queue, seasonID, seasonID)
 	var topID string
 	if err := row.Scan(&topID); err == nil && topID != "" {
 		summary.TopAgent = topID
@@ -1287,9 +1295,9 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	}
 
 	if summary.Matches > 0 {
-		out.SeasonSummary = &summary
+		return &summary, nil
 	}
-	return out, nil
+	return nil, nil
 }
 
 // MarkSynced updates the sync_state row for the given puuid, setting

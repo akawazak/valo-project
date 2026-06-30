@@ -205,6 +205,14 @@ func TestListCachedMatchesIncludesQueuedPartyMembers(t *testing.T) {
 	if got := matches[0].PartyMembers[0].GameName; got != "Duo" {
 		t.Fatalf("party member name = %q, want Duo", got)
 	}
+	selected, err := ListCachedMatchesFiltered(db, puuid, "swiftplay", "season-1", 0, 10)
+	if err != nil || len(selected) != 1 {
+		t.Fatalf("selected act matches = %d, err = %v; want 1", len(selected), err)
+	}
+	other, err := ListCachedMatchesFiltered(db, puuid, "", "season-2", 0, 10)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("other act matches = %d, err = %v; want 0", len(other), err)
+	}
 }
 
 func TestGetMatchFromCacheFocusesOnlyRequestedPlayer(t *testing.T) {

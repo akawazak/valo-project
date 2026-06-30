@@ -735,6 +735,13 @@ export interface ProfileSeasonSummary {
     topAgentCharacterId: string;
 }
 
+export interface ProfileSeasonSummaryResponse {
+    puuid: string;
+    region: string;
+    queue: string;
+    summary: ProfileSeasonSummary | null;
+}
+
 export interface ProfileOverview {
     puuid: string;
     region: string;
@@ -858,6 +865,8 @@ export interface ProfileMatchSummary {
     seasonId: string;
     isRanked: boolean;
     win: boolean;
+    blueRoundsWon: number;
+    redRoundsWon: number;
     tierAfter: number;
     rrEarned: number;
     localPlayer: ProfilePlayerStats;
@@ -917,6 +926,20 @@ export async function getProfileOverview(
     return response.json();
 }
 
+export async function getProfileSeasonSummary(
+    queue: string,
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileSeasonSummaryResponse> {
+    const params = new URLSearchParams({ queue });
+    appendProfileParams(params, opts);
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/season-summary?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Failed to fetch season summary.");
+    }
+    return response.json();
+}
+
 export async function getRRHistory(
     seasonId?: string,
     opts: { puuid?: string; region?: string } = {},
@@ -970,12 +993,14 @@ export async function getProfileMatchHistory(
     endIndex = 20,
     queue?: string,
     opts: { puuid?: string; region?: string } = {},
+    seasonId?: string,
 ): Promise<ProfileMatchHistoryResponse> {
     const params = new URLSearchParams({
         startIndex: String(startIndex),
         endIndex: String(endIndex),
     });
     if (queue) params.set("queue", queue);
+    if (seasonId) params.set("seasonId", seasonId);
     appendProfileParams(params, opts);
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/match-history?${params.toString()}`);
     if (!response.ok) {

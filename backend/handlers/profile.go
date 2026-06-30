@@ -485,6 +485,39 @@ func (h *Handler) GetAgentStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetSeasonSummary returns current-act aggregates for one queue.
+func (h *Handler) GetSeasonSummary(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	queue := strings.TrimSpace(r.URL.Query().Get("queue"))
+	if queue == "" {
+		queue = "competitive"
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	overview, err := tracking.GetOverview(db, puuid)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	summary, err := tracking.GetSeasonSummary(db, puuid, overview.CurrentSeasonID, queue)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	h.returnAny(w, struct {
+		Puuid   string                  `json:"puuid"`
+		Region  string                  `json:"region"`
+		Queue   string                  `json:"queue"`
+		Summary *tracking.SeasonSummary `json:"summary"`
+	}{puuid, region, queue, summary})
+}
+
 // GetMapStats — `GET /v1/profile/map-stats` (design doc §2.4).
 func (h *Handler) GetMapStats(w http.ResponseWriter, r *http.Request) {
 	puuid, region, ok := h.requireProfileAuth(w, r)
@@ -524,9 +557,16 @@ func (h *Handler) GetMapStats(w http.ResponseWriter, r *http.Request) {
 // countCachedMatches returns the total row count in `match_players` for the
 // given puuid. Used to populate the `total` field of the
 // match-history response. Matches db.go's `subject` index.
-func countCachedMatches(db *sql.DB, puuid string) (int, error) {
+func countCachedMatches(db *sql.DB, puuid, queue, seasonID string) (int, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM match_players WHERE subject = ?`, strings.ToLower(puuid)).Scan(&n)
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ?
+		  AND (? = '' OR LOWER(m.queueID) = LOWER(?))
+		  AND (? = '' OR m.seasonId = ?)
+	`, strings.ToLower(puuid), queue, queue, seasonID, seasonID).Scan(&n)
 	return n, err
 }
 
@@ -551,18 +591,19 @@ func (h *Handler) GetProfileMatchHistory(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	queue := strings.TrimSpace(r.URL.Query().Get("queue"))
+	seasonID := strings.TrimSpace(r.URL.Query().Get("seasonId"))
 
 	db, err := h.trackingDB()
 	if err != nil {
 		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
 		return
 	}
-	matches, err := tracking.ListCachedMatches(db, puuid, queue, startIndex, endIndex)
+	matches, err := tracking.ListCachedMatchesFiltered(db, puuid, queue, seasonID, startIndex, endIndex)
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
-	total, err := countCachedMatches(db, puuid)
+	total, err := countCachedMatches(db, puuid, queue, seasonID)
 	if err != nil {
 		h.returnError(w, err)
 		return
@@ -575,6 +616,7 @@ func (h *Handler) GetProfileMatchHistory(w http.ResponseWriter, r *http.Request)
 		EndIndex   int                     `json:"endIndex"`
 		Total      int                     `json:"total"`
 		Queue      string                  `json:"queue"`
+		SeasonID   string                  `json:"seasonId"`
 		Matches    []tracking.MatchSummary `json:"matches"`
 	}
 	h.returnAny(w, &matchHistoryResponse{
@@ -584,6 +626,7 @@ func (h *Handler) GetProfileMatchHistory(w http.ResponseWriter, r *http.Request)
 		EndIndex:   endIndex,
 		Total:      total,
 		Queue:      queue,
+		SeasonID:   seasonID,
 		Matches:    matches,
 	})
 }
@@ -797,7 +840,7 @@ func (h *Handler) GetProfileSyncStatus(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
-	total, err := countCachedMatches(db, puuid)
+	total, err := countCachedMatches(db, puuid, "", "")
 	if err != nil {
 		h.returnError(w, err)
 		return

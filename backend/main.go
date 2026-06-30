@@ -106,6 +106,7 @@ func main() {
 	// (see valovault/.mavis/plans/tracking-design.md §2).
 	mux.HandleFunc("GET /v1/profile/overview", h.GetProfileOverview)
 	mux.HandleFunc("GET /v1/profile/rr-history", h.GetRRHistory)
+	mux.HandleFunc("GET /v1/profile/season-summary", h.GetSeasonSummary)
 	mux.HandleFunc("GET /v1/profile/agent-stats", h.GetAgentStats)
 	mux.HandleFunc("GET /v1/profile/map-stats", h.GetMapStats)
 	mux.HandleFunc("GET /v1/profile/match-history", h.GetProfileMatchHistory)

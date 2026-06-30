@@ -9,6 +9,7 @@ import {
     getProfileMatchDetails,
     getProfileMatchHistory,
     getProfileOverview,
+    getProfileSeasonSummary,
     getProfileSyncStatus,
     getRRHistory,
     postProfileSync,
@@ -17,7 +18,9 @@ import {
     type ProfileMatchDetails,
     type ProfileMatchSummary,
     type ProfileOverview,
+    type ProfileRankActSummary,
     type ProfileRRHistory,
+    type ProfileSeasonSummary,
     type ProfileSyncStatus,
 } from "@/services/api";
 import RRHistoryChart from "./RRHistoryChart";
@@ -33,6 +36,7 @@ interface AgentMeta {
     icon: string;
     full?: string;
     role: string;
+    roleIcon: string;
 }
 interface MapMeta {
     name: string;
@@ -66,6 +70,12 @@ const QUEUE_LABEL: Record<string, string> = {
     custom: "Custom",
 };
 const PAGE_SIZES = [10, 20, 50];
+const SEASON_QUEUES = [
+    { value: "competitive", label: "Competitive" },
+    { value: "all", label: "All modes" },
+    { value: "swiftplay", label: "Swiftplay" },
+    { value: "unrated", label: "Unrated" },
+];
 const FALLBACK_RANK_ICON =
     "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/smallicon.png";
 
@@ -210,6 +220,7 @@ async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
                     icon: a.displayIcon || a.killfeedPortrait || "",
                     full: a.fullPortrait || "",
                     role: a.role?.displayName || "Unknown",
+                    roleIcon: a.role?.displayIcon || "",
                 };
             }
             agentCache = m;
@@ -290,6 +301,9 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const region = activeAccount?.region ?? "na";
 
     const [overview, setOverview] = useState<ProfileOverview | null>(null);
+    const [seasonSummary, setSeasonSummary] = useState<ProfileSeasonSummary | null>(null);
+    const [seasonQueue, setSeasonQueue] = useState("competitive");
+    const [selectedActId, setSelectedActId] = useState("");
     const [rrHistory, setRRHistory] = useState<ProfileRRHistory | null>(null);
     const [history, setHistory] = useState<ProfileMatchSummary[]>([]);
     const [total, setTotal] = useState(0);
@@ -309,6 +323,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const [tierAssets, setTierAssets] = useState<Map<number, { smallIcon: string }>>(new Map());
     const [seasons, setSeasons] = useState<Record<string, SeasonMeta>>({});
     const [loading, setLoading] = useState(false);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
@@ -407,6 +422,8 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const refresh = useCallback(async () => {
         if (!puuid) {
             setOverview(null);
+            setSeasonSummary(null);
+            setSelectedActId("");
             setRRHistory(null);
             setHistory([]);
             setTotal(0);
@@ -418,19 +435,21 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         setLoading(true);
         setError("");
         try {
-            // Overview hydrates ranked history from Riot before the RR query reads the cache.
             const ov = await getProfileOverview(opts);
-            const [rr, mh, ag, mp, st] = await Promise.all([
-                getRRHistory(undefined, opts),
-                getProfileMatchHistory(0, pageSize, queue || undefined, opts),
+            const [ag, mp, st] = await Promise.all([
                 getAgentStats(queue || undefined, opts),
                 getMapStats(queue || undefined, opts),
                 getProfileSyncStatus(opts).catch(() => null),
             ]);
             setOverview(ov);
-            setRRHistory(rr);
-            setHistory(mh.matches || []);
-            setTotal(mh.total || 0);
+            setSeasonSummary(ov.seasonSummary);
+            const availableActs = new Set((ov.rankActs || []).map((act) => act.seasonId));
+            if (ov.currentSeasonId) availableActs.add(ov.currentSeasonId);
+            setSelectedActId((current) =>
+                current && availableActs.has(current)
+                    ? current
+                    : ov.currentSeasonId || ov.rankActs?.[0]?.seasonId || "",
+            );
             setAgentStats(ag);
             setMapStats(mp);
             setSyncStatus(st);
@@ -441,16 +460,66 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         } finally {
             setLoading(false);
         }
-    }, [opts, pageSize, puuid, queue]);
+    }, [opts, puuid, queue]);
 
     useEffect(() => {
         setDetails({});
         setExpanded(new Set());
+        setSelectedActId("");
     }, [puuid]);
 
     useEffect(() => {
         void refresh();
     }, [refresh]);
+
+    useEffect(() => {
+        if (!puuid || !selectedActId) {
+            setRRHistory(null);
+            setHistory([]);
+            setTotal(0);
+            return;
+        }
+        let cancelled = false;
+        setHistoryLoading(true);
+        Promise.all([
+            getRRHistory(selectedActId, opts),
+            getProfileMatchHistory(0, pageSize, queue || undefined, opts, selectedActId),
+        ])
+            .then(([rr, matches]) => {
+                if (cancelled) return;
+                setRRHistory(rr);
+                setHistory(matches.matches || []);
+                setTotal(matches.total || 0);
+                setDetails({});
+                setExpanded(new Set());
+            })
+            .catch((err) => {
+                if (!cancelled) setError(cleanError(err));
+            })
+            .finally(() => {
+                if (!cancelled) setHistoryLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [opts, pageSize, puuid, queue, selectedActId]);
+
+    useEffect(() => {
+        if (!puuid) return;
+        let cancelled = false;
+        getProfileSeasonSummary(seasonQueue, opts)
+            .then((response) => {
+                if (!cancelled) setSeasonSummary(response.summary);
+            })
+            .catch((err) => {
+                if (!cancelled && !/404|page not found/i.test(String(err))) {
+                    setError(cleanError(err));
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [opts, puuid, seasonQueue]);
 
     const runSync = useCallback(
         async (manual: boolean) => {
@@ -538,7 +607,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const currentRankLabel = tierLabel(currentTier, overview?.currentRank?.tierName);
     const peakRankLabel = tierLabel(peakTier, overview?.peakRank?.tierName);
     const currentRankIcon = rankIconUrl(currentTier, tierAssets);
-    const summary = overview?.seasonSummary;
+    const summary = seasonSummary;
     const isBusy = loading || syncing || !!syncStatus?.inFlight;
     const topAgentMeta = summary?.topAgentCharacterId ? agents[summary.topAgentCharacterId.toLowerCase()] : undefined;
 
@@ -555,6 +624,21 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         if (!id) return "";
         return seasonLabel(id, seasons);
     })();
+    const rankActs = useMemo<ProfileRankActSummary[]>(() => {
+        if (!overview) return [];
+        const acts = [...(overview.rankActs || [])];
+        if (overview.currentSeasonId && !acts.some((act) => act.seasonId === overview.currentSeasonId)) {
+            acts.unshift({
+                seasonId: overview.currentSeasonId,
+                wins: overview.currentRank.numberOfWins || 0,
+                games: overview.currentRank.numberOfGames || 0,
+                rankedRating: overview.currentRank.rankedRating || 0,
+                peakRank: overview.currentRank.competitiveTier || 0,
+                finalRank: overview.currentRank.competitiveTier || 0,
+            });
+        }
+        return acts;
+    }, [overview]);
 
     const mapLookup = useMemo(() => {
         const out: Record<string, { displayName: string; splash?: string }> = {};
@@ -712,7 +796,24 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                     <div className={s.body}>
                         <>
                                 <div className={s.overviewTop}>
-                                    <Panel title="Season Averages" subtitle="This act">
+                                    <Panel
+                                        title="Season Averages"
+                                        subtitle="This act"
+                                        headerRight={
+                                            <div className={s.seasonQueueTabs} role="group" aria-label="Season average mode">
+                                                {SEASON_QUEUES.map((option) => (
+                                                    <button
+                                                        type="button"
+                                                        key={option.value}
+                                                        className={seasonQueue === option.value ? s.seasonQueueTabActive : ""}
+                                                        onClick={() => setSeasonQueue(option.value)}
+                                                    >
+                                                        {option.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        }
+                                    >
                                         <div className={s.metricGrid}>
                                             <Metric label="Win Rate" value={fmtPct(summary?.winrate)} tone={s.metricAccent} />
                                             <Metric label="K/D Ratio" value={fmtRatio(summary?.avgKda)} tone={kdColor(summary?.avgKda)} />
@@ -730,10 +831,12 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                             </div>
                                         )}
                                         <ActSummaryList
-                                            acts={overview?.rankActs ?? []}
+                                            acts={rankActs}
                                             currentSeasonId={overview?.currentSeasonId ?? ""}
+                                            selectedSeasonId={selectedActId}
                                             tierAssets={tierAssets}
                                             seasons={seasons}
+                                            onSelect={setSelectedActId}
                                         />
                                     </Panel>
                                 </div>
@@ -745,7 +848,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                             ? rrHistory.source === "tier"
                                                 ? `${rrHistory.snapshots.length} ranked tier checkpoints · exact RR unavailable`
                                                 : `${rrHistory.snapshots.length} ranked games tracked`
-                                            : "Exact RR appears when Riot competitive updates are available"
+                                            : `${seasonLabel(selectedActId, seasons)} has no cached ranked progression`
                                     }
                                 >
                                     <RRHistoryChart
@@ -789,13 +892,17 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                                         className={selectedAgentGroup?.label === group.label ? s.performanceGroupTabActive : ""}
                                                         onClick={() => setAgentRole(group.label)}
                                                     >
-                                                        {group.label}<span>{group.items.length}</span>
+                                                        {group.roleIcon && <img src={group.roleIcon} alt="" aria-hidden="true" />}
+                                                        {group.label}
                                                     </button>
                                                 ))}
                                             </div>
                                             {selectedAgentGroup && (
                                                 <section className={s.performanceGroup} key={selectedAgentGroup.label}>
-                                                    <h3>{selectedAgentGroup.label}<span>{selectedAgentGroup.items.length}</span></h3>
+                                                    <h3>
+                                                        {selectedAgentGroup.roleIcon && <img src={selectedAgentGroup.roleIcon} alt="" aria-hidden="true" />}
+                                                        {selectedAgentGroup.label}
+                                                    </h3>
                                                     <div ref={setPerformanceRail} className={s.agentPerformanceRail}>
                                                         {selectedAgentGroup.items.map(({ agent, meta }) => (
                                                             <div key={agent.characterId} className={s.agentPerformanceCard}>
@@ -864,7 +971,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
 
                                 <Panel
                                     title="Match History"
-                                    subtitle={`${total} total`}
+                                    subtitle={`${seasonLabel(selectedActId, seasons)} · ${total} matches`}
                                     headerRight={
                                         <select
                                             className={`${s.select} ${s.pageSizeSelect}`}
@@ -880,7 +987,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                         </select>
                                     }
                                 >
-                                    {loading && history.length === 0 ? (
+                                    {historyLoading && history.length === 0 ? (
                                         <div className={s.placeholder}>Loading cached profile…</div>
                                     ) : history.length === 0 ? (
                                         <div className={s.placeholder}>
@@ -980,7 +1087,14 @@ function groupAgentStats(stats: ProfileAgentStatsResponse["agents"], agents: Rec
     }
     return order
         .filter((role) => groups.has(role))
-        .map((role) => ({ label: role, items: groups.get(role)! }));
+        .map((role) => {
+            const items = groups.get(role)!;
+            return {
+                label: role,
+                roleIcon: items.find(({ meta }) => meta?.roleIcon)?.meta?.roleIcon || "",
+                items,
+            };
+        });
 }
 
 function groupMapStats(
@@ -1035,6 +1149,9 @@ function MatchRow({
     const matchRRLabel = tierLabel(matchTier);
     const rrEarned = match.rrEarned ?? 0;
     const rrSign = rrEarned > 0 ? "+" : "";
+    const blueSide = match.localPlayer.teamId.toLowerCase() === "blue";
+    const ownRounds = blueSide ? match.blueRoundsWon : match.redRoundsWon;
+    const enemyRounds = blueSide ? match.redRoundsWon : match.blueRoundsWon;
 
     const kda = match.localPlayer.kda;
     const hsPct = match.localPlayer.hsPct;
@@ -1052,7 +1169,14 @@ function MatchRow({
         <div className={`${s.matchWrap} ${expanded ? s.matchWrapExpanded : ""}`}>
             <button type="button" className={`${s.matchRow} ${match.win ? s.matchRowWin : s.matchRowLoss}`} onClick={onToggle} aria-expanded={expanded}>
                 <div className={s.matchResultBlock}>
-                    <span className={`${s.matchResultText} ${resultClass}`}>{match.win ? "WIN" : "LOSS"}</span>
+                    <div className={s.matchResultTop}>
+                        <span className={`${s.matchResultText} ${resultClass}`}>{match.win ? "WIN" : "LOSS"}</span>
+                        <span className={s.matchScore}>
+                            <b className={match.win ? s.winText : s.lossText}>{ownRounds}</b>
+                            <i>:</i>
+                            <b>{enemyRounds}</b>
+                        </span>
+                    </div>
                     <span className={s.matchResultMeta}>
                         {queueName} · {fmtLength(match.gameLengthMillis)}
                     </span>
@@ -1353,13 +1477,17 @@ function buildPartyGroups(players: ProfileMatchDetails["players"]) {
 function ActSummaryList({
     acts,
     currentSeasonId,
+    selectedSeasonId,
     tierAssets,
     seasons,
+    onSelect,
 }: {
-    acts: Array<{ seasonId: string; wins: number; games: number; rankedRating: number; peakRank: number; finalRank: number }>;
+    acts: ProfileRankActSummary[];
     currentSeasonId: string;
+    selectedSeasonId: string;
     tierAssets: Map<number, { smallIcon: string }>;
     seasons: Record<string, SeasonMeta>;
+    onSelect: (seasonId: string) => void;
 }) {
     if (!acts.length) {
         return <div className={s.placeholder}>No competitive act data yet.</div>;
@@ -1373,7 +1501,13 @@ function ActSummaryList({
                 const winrate = act.games > 0 ? (act.wins / act.games) * 100 : 0;
                 const rankIcon = rankIconUrl(rank, tierAssets);
                 return (
-                    <div key={act.seasonId} className={s.actRow}>
+                    <button
+                        type="button"
+                        key={act.seasonId}
+                        className={`${s.actRow} ${act.seasonId === selectedSeasonId ? s.actRowSelected : ""}`}
+                        onClick={() => onSelect(act.seasonId)}
+                        aria-pressed={act.seasonId === selectedSeasonId}
+                    >
                         <div className={s.actRowLeft}>
                             {rankIcon ? (
                                 <Image src={rankIcon} alt={tierLabel(rank, "Rank")} width={28} height={28} unoptimized className={s.actIcon} />
@@ -1389,7 +1523,7 @@ function ActSummaryList({
                             <strong>{tierLabel(rank, "Rank")}</strong>
                             <span>{act.rankedRating || 0} RR · Peak {tierLabel(act.peakRank, "Rank")}</span>
                         </div>
-                    </div>
+                    </button>
                 );
             })}
         </div>

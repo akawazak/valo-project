@@ -95,6 +95,46 @@ func TestRankCheckpointsFromCachedMatchesUsesTierWithoutInventingRR(t *testing.T
 	}
 }
 
+func TestSeasonSummaryFiltersQueue(t *testing.T) {
+	db, err := OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for i, queue := range []string{"competitive", "swiftplay"} {
+		matchID := fmt.Sprintf("summary-%d", i)
+		_, err = db.Exec(`INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId, blueWins, rawJsonPath, cachedAt, accountPuuid)
+			VALUES (?, ?, 'map', 'mode', ?, ?, 'act-1', 1, '', ?, 'viewer')`,
+			matchID, queue, boolToInt(queue == "competitive"), i+1, i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec(`INSERT INTO match_players
+			(matchID, subject, teamId, characterId, kills, deaths, assists, headshots, bodyshots)
+			VALUES (?, 'viewer', 'Blue', ?, 10, 5, 2, 3, 7)`, matchID, "agent-"+queue)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	swift, err := GetSeasonSummary(db, "viewer", "act-1", "swiftplay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := GetSeasonSummary(db, "viewer", "act-1", "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if swift == nil || swift.Matches != 1 || swift.TopAgent != "agent-swiftplay" {
+		t.Fatalf("swiftplay summary = %+v", swift)
+	}
+	if all == nil || all.Matches != 2 {
+		t.Fatalf("all-mode summary = %+v", all)
+	}
+}
+
 func TestRankActsCacheRoundTrip(t *testing.T) {
 	db, err := OpenTrackingDB(t.TempDir())
 	if err != nil {
