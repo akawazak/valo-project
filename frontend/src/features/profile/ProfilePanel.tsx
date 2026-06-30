@@ -317,12 +317,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
-    const performanceRailRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => setViewedProfile(null), [ownPuuid]);
-
-    useEffect(() => {
-        const rail = performanceRailRef.current;
+    const setPerformanceRail = useCallback((rail: HTMLDivElement | null) => {
         if (!rail) return;
         const handleWheel = (event: WheelEvent) => {
             if (rail.scrollWidth <= rail.clientWidth) return;
@@ -333,7 +328,9 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         };
         rail.addEventListener("wheel", handleWheel, { passive: false });
         return () => rail.removeEventListener("wheel", handleWheel);
-    }, [performanceView, agentRole, mapMode, agentStats, mapStats]);
+    }, []);
+
+    useEffect(() => setViewedProfile(null), [ownPuuid]);
 
     useEffect(() => {
         let cancelled = false;
@@ -785,7 +782,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                             {selectedAgentGroup && (
                                                 <section className={s.performanceGroup} key={selectedAgentGroup.label}>
                                                     <h3>{selectedAgentGroup.label}<span>{selectedAgentGroup.items.length}</span></h3>
-                                                    <div ref={performanceRailRef} className={s.agentPerformanceRail}>
+                                                    <div ref={setPerformanceRail} className={s.agentPerformanceRail}>
                                                         {selectedAgentGroup.items.map(({ agent, meta }) => (
                                                             <div key={agent.characterId} className={s.agentPerformanceCard}>
                                                                 {meta?.icon ? (
@@ -822,7 +819,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         {selectedMapGroup && (
                                             <section className={s.performanceGroup} key={selectedMapGroup.label}>
                                                 <h3>{selectedMapGroup.label}<span>{selectedMapGroup.items.length}</span></h3>
-                                                <div ref={performanceRailRef} className={s.mapStrip}>
+                                                <div ref={setPerformanceRail} className={s.mapStrip}>
                                                     {selectedMapGroup.items.map(({ stat: mStat, meta: mMeta }) => (
                                                         <div
                                                             key={mStat.mapID}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -70,9 +71,16 @@ func (h *Handler) GetParty(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
+		slog.Warn("party refresh failed",
+			"source", source,
+			"region", val.Region,
+			"shard", val.Shard,
+			"puuid_length", len(val.Player.Uuid),
+			"reason", riotFailureReason(err))
 		h.returnAny(w, PartyResponse{Phase: "error", Source: source, Error: err.Error()})
 		return
 	}
+	slog.Info("party status refreshed", "source", response.Source, "phase", response.Phase, "members", len(response.Members))
 	h.returnAny(w, response)
 }
 
@@ -215,5 +223,7 @@ func isExpectedNoPartyError(err error) bool {
 	return strings.Contains(text, "resource not found") ||
 		strings.Contains(text, "not found") ||
 		strings.Contains(text, "404") ||
+		(strings.Contains(text, "status 400") &&
+			(strings.Contains(text, "bad_parameter") || strings.Contains(text, "bad parameter used as input"))) ||
 		strings.Contains(text, "player not in party")
 }

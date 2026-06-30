@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -114,25 +115,55 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *
 	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
 	var live playerMMRResponse
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
-		if strings.Contains(err.Error(), "status 404") || strings.Contains(err.Error(), "status 429") {
-			if fallbackErr := hydrateCompetitiveUpdates(db, val, overview, puuid); fallbackErr == nil {
-				return nil
-			}
-			if strings.Contains(err.Error(), "status 429") {
-				return fmt.Errorf("rank refresh is temporarily rate limited by Riot; cached history will remain visible")
-			}
-			return fmt.Errorf("rank history is unavailable from Riot for this account")
+		fallbackErr := hydrateCompetitiveUpdates(db, val, overview, puuid)
+		if fallbackErr == nil {
+			return nil
 		}
-		return fmt.Errorf("rank refresh failed: %w", err)
+		if strings.Contains(err.Error(), "status 429") || strings.Contains(fallbackErr.Error(), "status 429") {
+			return fmt.Errorf("rank refresh is temporarily rate limited by Riot; cached history will remain visible")
+		}
+		slog.Warn("rank history refresh failed",
+			"region", val.Region,
+			"shard", val.Shard,
+			"puuid_length", len(val.Player.Uuid),
+			"player_mmr", riotFailureReason(err),
+			"competitive_updates", riotFailureReason(fallbackErr))
+		return fmt.Errorf("rank history unavailable: player MMR failed (%s); competitive updates failed (%s)",
+			riotFailureReason(err), riotFailureReason(fallbackErr))
 	}
 	if _, ok := live.QueueSkills["competitive"]; !ok {
-		return fmt.Errorf("rank refresh failed: Riot returned no competitive MMR data")
+		if fallbackErr := hydrateCompetitiveUpdates(db, val, overview, puuid); fallbackErr != nil {
+			slog.Warn("rank history missing from player MMR and competitive updates",
+				"region", val.Region,
+				"shard", val.Shard,
+				"puuid_length", len(val.Player.Uuid),
+				"competitive_updates", riotFailureReason(fallbackErr))
+			return fmt.Errorf("rank history unavailable: Riot returned no competitive MMR data; competitive updates failed (%s)",
+				riotFailureReason(fallbackErr))
+		}
+		return nil
 	}
 	mergeLiveMMR(overview, live)
 	if err := tracking.CacheRankActs(db, puuid, overview.RankActs); err != nil {
 		return fmt.Errorf("cache rank history: %w", err)
 	}
 	return nil
+}
+
+func riotFailureReason(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	text := err.Error()
+	for _, status := range []string{"401", "403", "404", "429"} {
+		if strings.Contains(text, "status "+status) {
+			return "HTTP " + status
+		}
+	}
+	if strings.Contains(text, "no competitive updates") {
+		return "no competitive matches returned"
+	}
+	return text
 }
 
 type competitiveUpdatesResponse struct {
@@ -172,14 +203,22 @@ func (response competitiveUpdatesResponse) snapshots(puuid string) []tracking.RR
 }
 
 func hydrateCompetitiveUpdates(db *sql.DB, val *valclient.ValClient, overview *tracking.Overview, puuid string) error {
-	apiURL := fmt.Sprintf(
-		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=200&queue=competitive",
-		val.Shard,
-		puuid,
-	)
 	var response competitiveUpdatesResponse
-	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &response); err != nil {
-		return err
+	const pageSize = 20
+	const maxMatches = 200
+	for start := 0; start < maxMatches; start += pageSize {
+		apiURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=%d&endIndex=%d&queue=competitive",
+			val.Shard,
+			puuid,
+			start,
+			start+pageSize,
+		)
+		var page competitiveUpdatesResponse
+		if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &page); err != nil {
+			return err
+		}
+		response.Matches = append(response.Matches, page.Matches...)
 	}
 	snapshots := response.snapshots(puuid)
 	if len(snapshots) == 0 {
@@ -238,10 +277,12 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	}
 
 	latest := live.LatestCompetitiveUpdate
-	if latest.SeasonID != "" {
-		overview.CurrentSeasonID = latest.SeasonID
+	seasonID := overview.CurrentSeasonID
+	if seasonID == "" {
+		seasonID = latest.SeasonID
+		overview.CurrentSeasonID = seasonID
 	}
-	if latest.TierAfterUpdate > 0 {
+	if latest.SeasonID == seasonID && latest.TierAfterUpdate > 0 {
 		overview.CurrentRank.CompetitiveTier = latest.TierAfterUpdate
 		overview.CurrentRank.RankedRating = latest.RankedRatingAfterUpdate
 	}
@@ -251,7 +292,6 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 		return
 	}
 
-	seasonID := overview.CurrentSeasonID
 	if seasonID == "" && len(comp.SeasonalInfoBySeasonID) == 1 {
 		for id := range comp.SeasonalInfoBySeasonID {
 			seasonID = id
@@ -262,8 +302,9 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	if season, ok := comp.SeasonalInfoBySeasonID[seasonID]; ok {
 		overview.CurrentRank.NumberOfGames = season.NumberOfGames
 		overview.CurrentRank.NumberOfWins = season.NumberOfWins
-		if season.CompetitiveTier > 0 {
-			overview.CurrentRank.CompetitiveTier = season.CompetitiveTier
+		overview.CurrentRank.CompetitiveTier = season.CompetitiveTier
+		if season.CompetitiveTier == 0 {
+			overview.CurrentRank.TierName = "Unranked"
 		}
 		overview.CurrentRank.RankedRating = season.RankedRating
 	}

@@ -397,7 +397,10 @@ export default function Home() {
                     {activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : activeTab === 'profile' ? (
-                        <ProfilePanel onConnectAccount={() => setIsAccountsOpen(true)} />
+                        <ProfilePanel
+                            key={`${activeAccount?.puuid || "none"}:${storefrontRefreshKey}`}
+                            onConnectAccount={() => setIsAccountsOpen(true)}
+                        />
                     ) : (
                         isWorkspaceOpen ? (
                             <ArsenalView

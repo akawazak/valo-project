@@ -115,7 +115,7 @@ func main() {
 	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
 
 	slog.Info("starting server")
-	if err := http.ListenAndServe(":31719", logMiddleware(corsMiddleware(mux))); err != nil {
+	if err := http.ListenAndServe("127.0.0.1:31719", logMiddleware(corsMiddleware(mux))); err != nil {
 		panic(err)
 	}
 }
@@ -142,8 +142,8 @@ func initLogger() {
 
 func logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.String(), "/health") {
-			slog.Info("request received", "path", r.Method+" "+r.URL.String())
+		if r.URL.Path != "/v1/health" {
+			slog.Info("request received", "path", r.Method+" "+r.URL.Path)
 		}
 		next.ServeHTTP(w, r)
 	})

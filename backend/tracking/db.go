@@ -1076,18 +1076,19 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		out.CurrentSeasonID = latestSeason
 	}
 
-	// Query 2: Get the latest competitive tier where the player actually has a rank (tier > 0).
+	// Query 2: Get the latest rank from the current act. Older acts belong in
+	// rank history, not in the current-rank card.
 	_ = db.QueryRow(`
 		SELECT mp.competitiveTier
 		FROM match_players mp
 		JOIN matches m ON m.matchID = mp.matchID
 		WHERE mp.subject = ? AND mp.competitiveTier > 0
+		  AND (? = '' OR m.seasonId = ?)
 		ORDER BY m.gameStartMillis DESC
 		LIMIT 1
-	`, puuid).Scan(&latestTier)
+	`, puuid, latestSeason, latestSeason).Scan(&latestTier)
 
 	out.CurrentRank.CompetitiveTier = latestTier
-	out.CurrentRank.NumberOfGames = 1
 
 	row := db.QueryRow(`
 		SELECT r.tierAfter, r.rrAfter, r.seasonId
@@ -1099,13 +1100,15 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	var latestRRTier, latestRR int
 	var latestRRSeason string
 	if err := row.Scan(&latestRRTier, &latestRR, &latestRRSeason); err == nil {
-		if latestRRTier > 0 {
-			latestTier = latestRRTier
-			out.CurrentRank.CompetitiveTier = latestRRTier
-		}
-		out.CurrentRank.RankedRating = latestRR
-		if latestRRSeason != "" {
+		if out.CurrentSeasonID == "" && latestRRSeason != "" {
 			out.CurrentSeasonID = latestRRSeason
+		}
+		if latestRRSeason == "" || latestRRSeason == out.CurrentSeasonID {
+			if latestRRTier > 0 {
+				latestTier = latestRRTier
+				out.CurrentRank.CompetitiveTier = latestRRTier
+			}
+			out.CurrentRank.RankedRating = latestRR
 		}
 	}
 	// Look up the tier's friendly name from the static assets table.
@@ -1215,7 +1218,8 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
 		WHERE mp.subject = ? AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
-	`, puuid).Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
+		  AND (? = '' OR m.seasonId = ?)
+	`, puuid, out.CurrentSeasonID, out.CurrentSeasonID).Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("tracking: GetOverview summary: %w", err)
 	}
@@ -1230,14 +1234,17 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	out.CurrentRank.NumberOfGames = matches
 	out.CurrentRank.NumberOfWins = wins
 
-	// Top agent.
+	// Top agent for the same current-act competitive sample.
 	row = db.QueryRow(`
-		SELECT characterId
-		FROM agent_stats
-		WHERE puuid = ? AND queue = 'all'
-		ORDER BY matches DESC, characterId ASC
+		SELECT mp.characterId
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ? AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
+		  AND (? = '' OR m.seasonId = ?)
+		GROUP BY mp.characterId
+		ORDER BY COUNT(*) DESC, mp.characterId ASC
 		LIMIT 1
-	`, puuid)
+	`, puuid, out.CurrentSeasonID, out.CurrentSeasonID)
 	var topID string
 	if err := row.Scan(&topID); err == nil && topID != "" {
 		summary.TopAgent = topID

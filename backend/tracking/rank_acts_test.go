@@ -78,3 +78,56 @@ func TestRankActsCacheRoundTrip(t *testing.T) {
 		t.Fatalf("cached acts mismatch: got %#v want %#v", got, want)
 	}
 }
+
+func TestOverviewKeepsOlderRankOutOfCurrentAct(t *testing.T) {
+	db, err := OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, row := range []struct {
+		match, queue, season string
+		started, tier        int
+		ranked               bool
+	}{
+		{"ranked-old", "competitive", "previous-act", 100, 16, true},
+		{"casual-current", "swiftplay", "current-act", 200, 0, false},
+	} {
+		_, err = db.Exec(`INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId, blueWins, rawJsonPath, cachedAt, accountPuuid)
+			VALUES (?, ?, 'map', 'mode', ?, ?, ?, 1, '', ?, 'viewer')`,
+			row.match, row.queue, row.ranked, row.started, row.season, row.started)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec(`INSERT INTO match_players
+			(matchID, subject, teamId, characterId, competitiveTier, kills, deaths, assists)
+			VALUES (?, 'viewer', 'Blue', 'agent', ?, 10, 5, 2)`, row.match, row.tier)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = InsertRRSnapshotIfAbsent(db, RRSnapshot{
+		Puuid: "viewer", MatchID: "ranked-old", SeasonID: "previous-act",
+		TierAfter: 16, RRAfter: 63, MatchStartTime: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	overview, err := GetOverview(db, "viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.CurrentSeasonID != "current-act" ||
+		overview.CurrentRank.CompetitiveTier != 0 ||
+		overview.CurrentRank.RankedRating != 0 ||
+		overview.CurrentRank.NumberOfGames != 0 ||
+		overview.SeasonSummary != nil {
+		t.Fatalf("older rank leaked into current act: season=%q rank=%+v summary=%+v",
+			overview.CurrentSeasonID, overview.CurrentRank, overview.SeasonSummary)
+	}
+	if overview.PeakRank.CompetitiveTier != 16 {
+		t.Fatalf("historical peak was lost: %+v", overview.PeakRank)
+	}
+}

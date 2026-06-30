@@ -2,10 +2,20 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"backend/tracking"
 )
+
+func TestRiotFailureReasonKeepsRankErrorsActionable(t *testing.T) {
+	if got := riotFailureReason(errors.New(`Riot API returned status 404: {"message":"resource not found"}`)); got != "HTTP 404" {
+		t.Fatalf("status reason = %q", got)
+	}
+	if got := riotFailureReason(errors.New("Riot returned no competitive updates")); got != "no competitive matches returned" {
+		t.Fatalf("empty history reason = %q", got)
+	}
+}
 
 func TestMergeLiveMMRUsesDocumentedSeasonFields(t *testing.T) {
 	var live playerMMRResponse
@@ -55,6 +65,44 @@ func TestMergeLiveMMRUsesDocumentedSeasonFields(t *testing.T) {
 	if len(overview.RankActs) != 2 || overview.RankActs[0].SeasonID != "current-act" ||
 		overview.RankActs[1].PeakRank != 17 || overview.RankActs[1].FinalRank != 15 {
 		t.Fatalf("rank acts were not populated correctly: %+v", overview.RankActs)
+	}
+}
+
+func TestMergeLiveMMRDoesNotMakePreviousActCurrent(t *testing.T) {
+	var live playerMMRResponse
+	if err := json.Unmarshal([]byte(`{
+		"LatestCompetitiveUpdate": {
+			"SeasonID": "previous-act",
+			"TierAfterUpdate": 16,
+			"RankedRatingAfterUpdate": 63
+		},
+		"QueueSkills": {
+			"competitive": {
+				"SeasonalInfoBySeasonID": {
+					"previous-act": {
+						"NumberOfWins": 18,
+						"NumberOfGames": 32,
+						"CompetitiveTier": 16,
+						"RankedRating": 63,
+						"WinsByTier": {"16": 5}
+					}
+				}
+			}
+		}
+	}`), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	overview := &tracking.Overview{CurrentSeasonID: "current-unranked"}
+	mergeLiveMMR(overview, live)
+
+	if overview.CurrentSeasonID != "current-unranked" ||
+		overview.CurrentRank.CompetitiveTier != 0 ||
+		overview.CurrentRank.RankedRating != 0 {
+		t.Fatalf("previous act became current: season=%q rank=%+v", overview.CurrentSeasonID, overview.CurrentRank)
+	}
+	if len(overview.RankActs) != 1 || overview.RankActs[0].SeasonID != "previous-act" {
+		t.Fatalf("previous act was not retained in history: %+v", overview.RankActs)
 	}
 }
 
