@@ -216,9 +216,15 @@ func hydrateCompetitiveUpdates(db *sql.DB, val *valclient.ValClient, overview *t
 		)
 		var page competitiveUpdatesResponse
 		if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &page); err != nil {
+			if len(response.Matches) > 0 && isCompetitiveUpdatesEnd(err) {
+				break
+			}
 			return err
 		}
 		response.Matches = append(response.Matches, page.Matches...)
+		if len(page.Matches) < pageSize {
+			break
+		}
 	}
 	snapshots := response.snapshots(puuid)
 	if len(snapshots) == 0 {
@@ -234,7 +240,11 @@ func hydrateCompetitiveUpdates(db *sql.DB, val *valclient.ValClient, overview *t
 	if err != nil {
 		return err
 	}
-	overview.RankActs = tracking.RankActsFromSnapshots(allSnapshots)
+	overview.RankActs = mergeRankActs(
+		tracking.RankActsFromSnapshots(allSnapshots),
+		overview.RankActs,
+		overview.CurrentSeasonID,
+	)
 	overview.LastDeltas = overview.LastDeltas[:0]
 	for i := len(allSnapshots) - 1; i >= 0 && len(overview.LastDeltas) < 5; i-- {
 		overview.LastDeltas = append(overview.LastDeltas, allSnapshots[i])
@@ -252,6 +262,45 @@ func hydrateCompetitiveUpdates(db *sql.DB, val *valclient.ValClient, overview *t
 		}
 	}
 	return nil
+}
+
+func isCompetitiveUpdatesEnd(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToUpper(err.Error())
+	return strings.Contains(message, "BAD_PARAMETER") ||
+		strings.Contains(message, "INVALID_INDICES")
+}
+
+func mergeRankActs(preferred, fallback []tracking.RankActSummary, currentSeasonID string) []tracking.RankActSummary {
+	acts := make([]tracking.RankActSummary, 0, len(preferred)+len(fallback))
+	seen := make(map[string]struct{}, len(preferred)+len(fallback))
+	for _, source := range [][]tracking.RankActSummary{preferred, fallback} {
+		for _, act := range source {
+			if act.SeasonID == "" {
+				continue
+			}
+			if _, exists := seen[act.SeasonID]; exists {
+				continue
+			}
+			seen[act.SeasonID] = struct{}{}
+			acts = append(acts, act)
+		}
+	}
+	sort.SliceStable(acts, func(i, j int) bool {
+		if acts[i].SeasonID == currentSeasonID {
+			return true
+		}
+		if acts[j].SeasonID == currentSeasonID {
+			return false
+		}
+		return acts[i].SeasonID > acts[j].SeasonID
+	})
+	if len(acts) > 8 {
+		acts = acts[:8]
+	}
+	return acts
 }
 
 type playerMMRResponse struct {
@@ -310,7 +359,6 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	}
 
 	acts := make([]tracking.RankActSummary, 0, len(comp.SeasonalInfoBySeasonID))
-	seenActs := make(map[string]struct{}, len(comp.SeasonalInfoBySeasonID))
 	for id, season := range comp.SeasonalInfoBySeasonID {
 		peak := season.CompetitiveTier
 		for tier, wins := range season.WinsByTier {
@@ -331,26 +379,8 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 			PeakRank:     peak,
 			FinalRank:    season.CompetitiveTier,
 		})
-		seenActs[id] = struct{}{}
 	}
-	for _, cached := range overview.RankActs {
-		if _, exists := seenActs[cached.SeasonID]; !exists {
-			acts = append(acts, cached)
-		}
-	}
-
-	sort.SliceStable(acts, func(i, j int) bool {
-		if acts[i].SeasonID == seasonID {
-			return true
-		}
-		if acts[j].SeasonID == seasonID {
-			return false
-		}
-		return acts[i].SeasonID > acts[j].SeasonID
-	})
-	if len(acts) > 8 {
-		acts = acts[:8]
-	}
+	acts = mergeRankActs(acts, overview.RankActs, seasonID)
 	if len(acts) > 0 {
 		overview.RankActs = acts
 	}
@@ -383,17 +413,37 @@ func (h *Handler) GetRRHistory(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
+	source := "rr"
+	if len(snaps) == 0 {
+		snaps, err = tracking.RankCheckpointsFromCachedMatches(db, puuid)
+		if err != nil {
+			h.returnError(w, err)
+			return
+		}
+		if seasonID != "" {
+			filtered := snaps[:0]
+			for _, snapshot := range snaps {
+				if snapshot.SeasonID == seasonID {
+					filtered = append(filtered, snapshot)
+				}
+			}
+			snaps = filtered
+		}
+		source = "tier"
+	}
 
 	type rrHistoryResponse struct {
 		Puuid     string                `json:"puuid"`
 		Region    string                `json:"region"`
 		SeasonID  string                `json:"seasonId"`
+		Source    string                `json:"source"`
 		Snapshots []tracking.RRSnapshot `json:"snapshots"`
 	}
 	h.returnAny(w, &rrHistoryResponse{
 		Puuid:     puuid,
 		Region:    region,
 		SeasonID:  seasonID,
+		Source:    source,
 		Snapshots: snaps,
 	})
 }

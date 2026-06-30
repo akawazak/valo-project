@@ -734,11 +734,17 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                     title="RR Progression"
                                     subtitle={
                                         rrHistory?.snapshots?.length
-                                            ? `${rrHistory.snapshots.length} ranked games tracked`
+                                            ? rrHistory.source === "tier"
+                                                ? `${rrHistory.snapshots.length} ranked tier checkpoints · exact RR unavailable`
+                                                : `${rrHistory.snapshots.length} ranked games tracked`
                                             : "Exact RR appears when Riot competitive updates are available"
                                     }
                                 >
-                                    <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} height={250} />
+                                    <RRHistoryChart
+                                        snapshots={rrHistory?.snapshots ?? []}
+                                        source={rrHistory?.source}
+                                        height={250}
+                                    />
                                 </Panel>
 
                                 <Panel

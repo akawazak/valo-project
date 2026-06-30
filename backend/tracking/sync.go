@@ -28,6 +28,12 @@ type SyncManager struct {
 	onDone   func(puuid string, err error)
 }
 
+type historyItem struct {
+	MatchID       string `json:"MatchID"`
+	GameStartTime int64  `json:"GameStartTime"`
+	QueueID       string `json:"QueueID"`
+}
+
 // NewSyncManager builds a SyncManager. `fetchRiot` is the HTTP callback
 // used to talk to the Riot PVP API. Pass NewRiotFetcher(headers) for
 // production or StaticFetchRiot() for tests. `appDir` is the same
@@ -125,12 +131,6 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		return fmt.Errorf("read sync state: %w", err)
 	}
 
-	type historyItem struct {
-		MatchID       string `json:"MatchID"`
-		GameStartTime int64  `json:"GameStartTime"`
-		QueueID       string `json:"QueueID"`
-	}
-
 	// Step 2: compute the history window and fetch it in Riot's
 	// accepted page size. The endpoint rejects wide windows such as
 	// 0..100 with MATCH_HISTORY_INVALID_INDICES.
@@ -162,6 +162,34 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		history = append(history, histResp.History...)
 		if len(histResp.History) < pageEnd-start {
 			endIndex = pageEnd
+			break
+		}
+	}
+
+	// Ranked games can be buried behind a large all-queue history. Fetch the
+	// documented competitive-only lane and use its Total to recover old acts.
+	const maxCompetitiveMatches = 200
+	for start := 0; start < maxCompetitiveMatches; start += pageSize {
+		pageEnd := start + pageSize
+		historyURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=%d&endIndex=%d&queue=competitive",
+			shardForRegion(region), puuid, start, pageEnd,
+		)
+		body, fetchErr := m.fetchRiot("GET", historyURL, nil)
+		if fetchErr != nil {
+			slog.Warn("tracking: competitive match history fetch failed", "startIndex", start, "err", fetchErr)
+			break
+		}
+		var histResp struct {
+			Total   int           `json:"Total"`
+			History []historyItem `json:"History"`
+		}
+		if err := json.Unmarshal(body, &histResp); err != nil {
+			slog.Warn("tracking: competitive match history parse failed", "startIndex", start, "err", err)
+			break
+		}
+		history = append(history, histResp.History...)
+		if len(histResp.History) < pageSize || (histResp.Total > 0 && pageEnd >= histResp.Total) {
 			break
 		}
 	}
@@ -284,7 +312,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 
 	// Step 7: competitive updates for the current season.
 	compURL := fmt.Sprintf(
-		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=100",
+		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=20&queue=competitive",
 		shardForRegion(region), puuid,
 	)
 	if cbody, ferr := m.fetchRiot("GET", compURL, nil); ferr == nil {

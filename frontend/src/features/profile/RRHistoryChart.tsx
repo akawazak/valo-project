@@ -11,6 +11,7 @@ import type { ProfileRRSnapshot } from "@/services/api";
 interface Props {
     snapshots: ProfileRRSnapshot[];
     height?: number;
+    source?: "rr" | "tier";
 }
 
 const PAD_LEFT = 36;
@@ -32,7 +33,8 @@ function rankPositionLabel(value: number) {
     return `${group}${((tier - 3) % 3) + 1} ${rr}`;
 }
 
-export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
+export default function RRHistoryChart({ snapshots, height = 180, source = "rr" }: Props) {
+    const exactRR = source === "rr";
     const sorted = useMemo(
         () =>
             [...snapshots]
@@ -58,7 +60,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                 <svg width="100%" height={height} viewBox={`0 0 600 ${height}`} preserveAspectRatio="none">
                     <circle cx={300} cy={height / 2} r={5} className="rr-chart-dot" />
                     <text x={310} y={height / 2 + 4} className="rr-chart-point-label">
-                        {rankPositionLabel(rankPosition(only.tierAfter, only.rrAfter))}
+                        {rankPositionLabel(rankPosition(only.tierAfter, exactRR ? only.rrAfter : 0))}
                     </text>
                 </svg>
             </div>
@@ -142,7 +144,7 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                             textAnchor="end"
                             className="rr-chart-axis-label"
                         >
-                            {rankPositionLabel(t.rr)}
+                            {rankPositionLabel(exactRR ? t.rr : Math.round(t.rr / 100) * 100)}
                         </text>
                     </g>
                 ))}
@@ -169,8 +171,12 @@ export default function RRHistoryChart({ snapshots, height = 180 }: Props) {
                         className={`rr-chart-dot ${s.rrEarned >= 0 ? "win" : "loss"}`}
                     >
                         <title>
+                            {exactRR ? <>
                             {new Date(s.matchStartTime).toLocaleString()} · {rankPositionLabel(rankPosition(s.tierBefore, s.rrBefore))}→{rankPositionLabel(rankPosition(s.tierAfter, s.rrAfter))}
                             {" "}({s.rrEarned >= 0 ? "+" : ""}{s.rrEarned} RR)
+                            </> : <>
+                                {new Date(s.matchStartTime).toLocaleString()} · tier checkpoint · {rankPositionLabel(s.tierAfter * 100)}
+                            </>}
                         </title>
                     </circle>
                 ))}

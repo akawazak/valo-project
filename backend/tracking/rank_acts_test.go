@@ -1,6 +1,9 @@
 package tracking
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestRankActsFromSnapshotsBuildsNewestActFirst(t *testing.T) {
 	acts := RankActsFromSnapshots([]RRSnapshot{
@@ -53,6 +56,42 @@ func TestRankActsFromCachedMatchesRecoversPeakAndFinalTier(t *testing.T) {
 	}
 	if len(acts) != 2 || acts[0].SeasonID != "act-new" || acts[1].PeakRank != 18 || acts[1].FinalRank != 17 {
 		t.Fatalf("unexpected cached acts: %#v", acts)
+	}
+}
+
+func TestRankCheckpointsFromCachedMatchesUsesTierWithoutInventingRR(t *testing.T) {
+	db, err := OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for i, tier := range []int{14, 15} {
+		matchID := fmt.Sprintf("ranked-%d", i)
+		_, err = db.Exec(`INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId, blueWins, rawJsonPath, cachedAt, accountPuuid)
+			VALUES (?, 'competitive', 'map', 'mode', 1, ?, 'act-1', 1, '', ?, 'viewer')`, matchID, i+1, i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec(`INSERT INTO match_players (matchID, subject, teamId, characterId, competitiveTier)
+			VALUES (?, 'viewer', 'Blue', 'agent', ?)`, matchID, tier)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	points, err := RankCheckpointsFromCachedMatches(db, "VIEWER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 2 || points[0].TierAfter != 14 || points[1].TierBefore != 14 || points[1].TierAfter != 15 {
+		t.Fatalf("unexpected checkpoints: %+v", points)
+	}
+	for _, point := range points {
+		if point.RRBefore != 0 || point.RRAfter != 0 || point.RREarned != 0 {
+			t.Fatalf("tier fallback invented RR: %+v", point)
+		}
 	}
 }
 

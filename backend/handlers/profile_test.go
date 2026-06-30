@@ -133,3 +133,24 @@ func TestCompetitiveUpdatesBecomeRRSnapshots(t *testing.T) {
 		t.Fatalf("unexpected snapshot: %#v", got)
 	}
 }
+
+func TestMergeRankActsPreservesCachedActsMissingFromRecentUpdates(t *testing.T) {
+	recent := []tracking.RankActSummary{
+		{SeasonID: "current-act", PeakRank: 18, FinalRank: 18},
+	}
+	cached := []tracking.RankActSummary{
+		{SeasonID: "current-act", PeakRank: 17, FinalRank: 17},
+		{SeasonID: "previous-act", PeakRank: 15, FinalRank: 15},
+	}
+
+	got := mergeRankActs(recent, cached, "current-act")
+	if len(got) != 2 {
+		t.Fatalf("acts = %+v, want current and previous", got)
+	}
+	if got[0].SeasonID != "current-act" || got[0].PeakRank != 18 {
+		t.Fatalf("preferred current act was not retained: %+v", got[0])
+	}
+	if got[1].SeasonID != "previous-act" || got[1].PeakRank != 15 {
+		t.Fatalf("cached previous act was lost: %+v", got[1])
+	}
+}

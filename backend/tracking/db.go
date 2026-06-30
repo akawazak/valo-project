@@ -948,6 +948,42 @@ func RankActsFromCachedMatches(db *sql.DB, puuid string) ([]RankActSummary, erro
 	return acts, nil
 }
 
+// RankCheckpointsFromCachedMatches provides tier-only progression when Riot
+// does not expose exact RR for the requested player.
+func RankCheckpointsFromCachedMatches(db *sql.DB, puuid string) ([]RRSnapshot, error) {
+	rows, err := db.Query(`
+		SELECT m.matchID, m.seasonId, mp.competitiveTier, m.gameStartMillis
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ?
+		  AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
+		  AND mp.competitiveTier > 0
+		  AND m.seasonId != ''
+		ORDER BY m.gameStartMillis ASC
+	`, strings.ToLower(puuid))
+	if err != nil {
+		return nil, fmt.Errorf("tracking: cached rank checkpoints query: %w", err)
+	}
+	defer rows.Close()
+
+	var checkpoints []RRSnapshot
+	previousTier := map[string]int{}
+	for rows.Next() {
+		var point RRSnapshot
+		if err := rows.Scan(&point.MatchID, &point.SeasonID, &point.TierAfter, &point.MatchStartTime); err != nil {
+			return nil, fmt.Errorf("tracking: cached rank checkpoints scan: %w", err)
+		}
+		point.Puuid = strings.ToLower(puuid)
+		point.TierBefore = previousTier[point.SeasonID]
+		if point.TierBefore == 0 {
+			point.TierBefore = point.TierAfter
+		}
+		previousTier[point.SeasonID] = point.TierAfter
+		checkpoints = append(checkpoints, point)
+	}
+	return checkpoints, rows.Err()
+}
+
 // GetAgentStats returns per-agent aggregate rows for the given puuid,
 // sorted by matches DESC. queue == "" means "all".
 func GetAgentStats(db *sql.DB, puuid, queue string) ([]AgentStat, error) {

@@ -29,6 +29,7 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 				return nil, fmt.Errorf("unexpected history page: %s", apiURL)
 			}
 			return json.Marshal(map[string]any{
+				"Total": 1,
 				"History": []map[string]any{
 					{"MatchID": "match-1", "GameStartTime": int64(1700000000000), "QueueID": "competitive"},
 				},
@@ -110,8 +111,64 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 	if state.LastHistoryEndIndex != 20 {
 		t.Fatalf("last history end index = %d, want 20", state.LastHistoryEndIndex)
 	}
-	if len(requested) != 3 {
-		t.Fatalf("requested urls = %d, want 3: %#v", len(requested), requested)
+	if len(requested) != 4 {
+		t.Fatalf("requested urls = %d, want 4: %#v", len(requested), requested)
+	}
+}
+
+func TestSyncManagerRecoversRankedMatchBuriedOutsideGeneralHistory(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const puuid = "rank-history-player"
+	fetch := func(method, apiURL string, body []byte) ([]byte, error) {
+		switch {
+		case strings.Contains(apiURL, "/match-history/v1/history/") && strings.Contains(apiURL, "queue=competitive"):
+			return json.Marshal(map[string]any{
+				"Total": 1,
+				"History": []map[string]any{
+					{"MatchID": "old-ranked", "GameStartTime": int64(1700000000000), "QueueID": "competitive"},
+				},
+			})
+		case strings.Contains(apiURL, "/match-history/v1/history/"):
+			return json.Marshal(map[string]any{
+				"Total": 1,
+				"History": []map[string]any{
+					{"MatchID": "recent-swiftplay", "GameStartTime": int64(1800000000000), "QueueID": "swiftplay"},
+				},
+			})
+		case strings.Contains(apiURL, "/match-details/v1/matches/old-ranked"):
+			fixture := matchFixture(puuid)
+			fixture["matchInfo"].(map[string]any)["matchId"] = "old-ranked"
+			return json.Marshal(fixture)
+		case strings.Contains(apiURL, "/match-details/v1/matches/recent-swiftplay"):
+			fixture := matchFixture(puuid)
+			info := fixture["matchInfo"].(map[string]any)
+			info["matchId"] = "recent-swiftplay"
+			info["queueID"] = "swiftplay"
+			info["isRanked"] = false
+			return json.Marshal(fixture)
+		case strings.Contains(apiURL, "/competitiveupdates"):
+			return json.Marshal(map[string]any{"Matches": []any{}})
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", method, apiURL)
+		}
+	}
+
+	manager := NewSyncManager(db, fetch, appDir)
+	if err := manager.runOnce(puuid, "eu", false); err != nil {
+		t.Fatal(err)
+	}
+	acts, err := RankActsFromCachedMatches(db, puuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acts) != 1 || acts[0].SeasonID != "season-1" || acts[0].PeakRank != 15 {
+		t.Fatalf("recovered acts = %+v", acts)
 	}
 }
 

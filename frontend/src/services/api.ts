@@ -757,6 +757,7 @@ export interface ProfileRRHistory {
     puuid: string;
     region: string;
     seasonId: string;
+    source: "rr" | "tier";
     snapshots: ProfileRRSnapshot[];
 }
 
