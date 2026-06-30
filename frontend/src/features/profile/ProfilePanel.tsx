@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useData } from "@/context/DataContext";
-import type { Agent } from "@/lib/types";
 import {
     getAgentStats,
     getMapStats,
@@ -32,6 +31,7 @@ interface AgentMeta {
     name: string;
     icon: string;
     full?: string;
+    role: string;
 }
 interface MapMeta {
     name: string;
@@ -208,6 +208,7 @@ async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
                     name: a.displayName,
                     icon: a.displayIcon || a.killfeedPortrait || "",
                     full: a.fullPortrait || "",
+                    role: a.role?.displayName || "Unknown",
                 };
             }
             agentCache = m;
@@ -295,6 +296,9 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     const [queue, setQueue] = useState("");
     const [agentStats, setAgentStats] = useState<ProfileAgentStatsResponse | null>(null);
     const [mapStats, setMapStats] = useState<ProfileMapStatsResponse | null>(null);
+    const [performanceView, setPerformanceView] = useState<"agents" | "maps">("agents");
+    const [agentRole, setAgentRole] = useState("Duelist");
+    const [mapMode, setMapMode] = useState("Standard maps");
     const [syncStatus, setSyncStatus] = useState<ProfileSyncStatus | null>(null);
     const [details, setDetails] = useState<Record<string, ProfileMatchDetails>>({});
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -313,8 +317,23 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
+    const performanceRailRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => setViewedProfile(null), [ownPuuid]);
+
+    useEffect(() => {
+        const rail = performanceRailRef.current;
+        if (!rail) return;
+        const handleWheel = (event: WheelEvent) => {
+            if (rail.scrollWidth <= rail.clientWidth) return;
+            const delta = Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+            if (!delta) return;
+            event.preventDefault();
+            rail.scrollLeft += delta;
+        };
+        rail.addEventListener("wheel", handleWheel, { passive: false });
+        return () => rail.removeEventListener("wheel", handleWheel);
+    }, [performanceView, agentRole, mapMode, agentStats, mapStats]);
 
     useEffect(() => {
         let cancelled = false;
@@ -532,14 +551,6 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         return seasonLabel(id, seasons);
     })();
 
-    const agentLookup = useMemo(() => {
-        const out: Record<string, Agent> = {};
-        for (const [id, meta] of Object.entries(agents)) {
-            out[id] = { uuid: id, displayName: meta.name, displayIcon: meta.icon, isBaseContent: false };
-        }
-        return out;
-    }, [agents]);
-
     const mapLookup = useMemo(() => {
         const out: Record<string, { displayName: string; splash?: string }> = {};
         for (const [id, meta] of Object.entries(maps)) {
@@ -547,6 +558,16 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
         }
         return out;
     }, [maps]);
+    const agentPerformanceGroups = useMemo(
+        () => groupAgentStats(agentStats?.agents ?? [], agents),
+        [agentStats, agents],
+    );
+    const mapPerformanceGroups = useMemo(
+        () => groupMapStats(mapStats?.maps ?? [], mapLookup),
+        [mapStats, mapLookup],
+    );
+    const selectedAgentGroup = agentPerformanceGroups.find((group) => group.label === agentRole) || agentPerformanceGroups[0];
+    const selectedMapGroup = mapPerformanceGroups.find((group) => group.label === mapMode) || mapPerformanceGroups[0];
 
     const cardData = identity?.playerCardId ? playerCards[identity.playerCardId.toLowerCase()] : null;
     const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
@@ -697,55 +718,10 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                         </div>
                                     </Panel>
 
-                                    <Panel title="Agent Pool" subtitle="Most played">
-                                        <div className={s.agentMiniList}>
-                                            {agentStats?.agents?.slice(0, 5).map((agent) => {
-                                                const aMeta = agentLookup[agent.characterId.toLowerCase()];
-                                                return (
-                                                    <div key={agent.characterId} className={s.agentMini}>
-                                                        {aMeta?.displayIcon && (
-                                                            <img
-                                                                src={aMeta.displayIcon}
-                                                                alt=""
-                                                                className={s.agentMiniIcon}
-                                                            />
-                                                        )}
-                                                        <span className={s.agentMiniName}>
-                                                            {aMeta?.displayName || "Agent"}
-                                                        </span>
-                                                        <span
-                                                            className={`${s.agentMiniWr} ${
-                                                                agent.winrate >= 50 ? s.winText : s.lossText
-                                                            }`}
-                                                        >
-                                                            {fmtPct(agent.winrate)}
-                                                        </span>
-                                                    </div>
-                                                );
-                                            })}
-                                            {!agentStats?.agents?.length && (
-                                                <div className={s.placeholder}>No agent stats cached.</div>
-                                            )}
-                                        </div>
-                                    </Panel>
-                                </div>
-
-                                <div className={s.progressionGrid}>
-                                    <Panel
-                                        title="RR Progression"
-                                        subtitle={
-                                            rrHistory?.snapshots?.length
-                                                ? `${rrHistory.snapshots.length} ranked games tracked`
-                                                : "Sync competitive games to build the graph"
-                                        }
-                                    >
-                                        <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} height={240} />
-                                    </Panel>
                                     <Panel title="Act History" subtitle="Peak and final rank by act">
-                                        {overview?.rankError && (
+                                        {overview?.rankError && !overview.rankActs?.length && (
                                             <div className={s.rankNotice}>
-                                                {overview.rankActs?.length ? "Showing cached history. " : "Live history unavailable. "}
-                                                {cleanError(overview.rankError)}
+                                                Live history unavailable. {cleanError(overview.rankError)}
                                             </div>
                                         )}
                                         <ActSummaryList
@@ -757,38 +733,122 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                     </Panel>
                                 </div>
 
-                                <Panel title="Map Performance" subtitle="Win rate by map">
-                                    <div className={s.mapStrip}>
-                                        {mapStats?.maps?.slice(0, 8).map((mStat) => {
-                                            const mMeta = mapLookup[mStat.mapID.toLowerCase()];
-                                            const splash = mMeta?.splash;
-                                            return (
-                                                <div
-                                                    key={mStat.mapID}
-                                                    className={s.mapCard}
-                                                    style={splash ? { backgroundImage: `url(${splash})` } : undefined}
-                                                >
-                                                    <div className={s.mapCardScrim} />
-                                                    <div className={s.mapCardBody}>
-                                                        <span className={s.mapCardName}>
-                                                            {mMeta?.displayName || mStat.mapID.slice(0, 6)}
-                                                        </span>
-                                                        <span
-                                                            className={`${s.mapCardWr} ${
-                                                                mStat.winrate >= 50 ? s.winText : s.lossText
-                                                            }`}
-                                                        >
-                                                            {fmtPct(mStat.winrate)}
-                                                        </span>
-                                                        <span className={s.mapCardGames}>{mStat.matches} games</span>
+                                <Panel
+                                    title="RR Progression"
+                                    subtitle={
+                                        rrHistory?.snapshots?.length
+                                            ? `${rrHistory.snapshots.length} ranked games tracked`
+                                            : "Exact RR appears when Riot competitive updates are available"
+                                    }
+                                >
+                                    <RRHistoryChart snapshots={rrHistory?.snapshots ?? []} height={250} />
+                                </Panel>
+
+                                <Panel
+                                    title="Performance"
+                                    subtitle={performanceView === "agents"
+                                        ? `${agentStats?.agents?.length || 0} agents with cached matches`
+                                        : `${mapStats?.maps?.length || 0} maps with cached matches`}
+                                    headerRight={
+                                        <div className={s.performanceToggle} role="group" aria-label="Performance view">
+                                            <button
+                                                type="button"
+                                                className={performanceView === "agents" ? s.performanceToggleActive : ""}
+                                                onClick={() => setPerformanceView("agents")}
+                                            >
+                                                Agents
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={performanceView === "maps" ? s.performanceToggleActive : ""}
+                                                onClick={() => setPerformanceView("maps")}
+                                            >
+                                                Maps
+                                            </button>
+                                        </div>
+                                    }
+                                >
+                                    {performanceView === "agents" ? (
+                                        <div className={s.performanceGroups}>
+                                            <div className={s.performanceGroupTabs}>
+                                                {agentPerformanceGroups.map((group) => (
+                                                    <button
+                                                        type="button"
+                                                        key={group.label}
+                                                        className={selectedAgentGroup?.label === group.label ? s.performanceGroupTabActive : ""}
+                                                        onClick={() => setAgentRole(group.label)}
+                                                    >
+                                                        {group.label}<span>{group.items.length}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {selectedAgentGroup && (
+                                                <section className={s.performanceGroup} key={selectedAgentGroup.label}>
+                                                    <h3>{selectedAgentGroup.label}<span>{selectedAgentGroup.items.length}</span></h3>
+                                                    <div ref={performanceRailRef} className={s.agentPerformanceRail}>
+                                                        {selectedAgentGroup.items.map(({ agent, meta }) => (
+                                                            <div key={agent.characterId} className={s.agentPerformanceCard}>
+                                                                {meta?.icon ? (
+                                                                    <img src={meta.icon} alt="" className={s.agentPerformanceIcon} />
+                                                                ) : <span className={s.agentPerformanceIcon} />}
+                                                                <div className={s.agentPerformanceIdentity}>
+                                                                    <strong>{meta?.name || "Agent"}</strong>
+                                                                    <small>{agent.matches} matches · {agent.wins} wins</small>
+                                                                </div>
+                                                                <PerformanceStat label="WR" value={fmtPct(agent.winrate)} tone={agent.winrate >= 50 ? s.winText : s.lossText} />
+                                                                <PerformanceStat label="K/D" value={fmtRatio(agent.kd)} tone={kdColor(agent.kd)} />
+                                                                <PerformanceStat label="HS" value={fmtPct(agent.hsPct)} tone={hsColor(agent.hsPct)} />
+                                                            </div>
+                                                        ))}
                                                     </div>
+                                                </section>
+                                            )}
+                                            {!agentStats?.agents?.length && <div className={s.placeholder}>No agent stats cached.</div>}
+                                        </div>
+                                    ) : (
+                                    <div className={s.performanceGroups}>
+                                        <div className={s.performanceGroupTabs}>
+                                            {mapPerformanceGroups.map((group) => (
+                                                <button
+                                                    type="button"
+                                                    key={group.label}
+                                                    className={selectedMapGroup?.label === group.label ? s.performanceGroupTabActive : ""}
+                                                    onClick={() => setMapMode(group.label)}
+                                                >
+                                                    {group.label}<span>{group.items.length}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {selectedMapGroup && (
+                                            <section className={s.performanceGroup} key={selectedMapGroup.label}>
+                                                <h3>{selectedMapGroup.label}<span>{selectedMapGroup.items.length}</span></h3>
+                                                <div ref={performanceRailRef} className={s.mapStrip}>
+                                                    {selectedMapGroup.items.map(({ stat: mStat, meta: mMeta }) => (
+                                                        <div
+                                                            key={mStat.mapID}
+                                                            className={s.mapCard}
+                                                            style={mMeta?.splash ? { backgroundImage: `url(${mMeta.splash})` } : undefined}
+                                                        >
+                                                            <div className={s.mapCardScrim} />
+                                                            <div className={s.mapCardBody}>
+                                                                <span className={s.mapCardName}>{mMeta?.displayName || mStat.mapID.slice(0, 6)}</span>
+                                                                <span className={`${s.mapCardWr} ${mStat.winrate >= 50 ? s.winText : s.lossText}`}>
+                                                                    {fmtPct(mStat.winrate)}
+                                                                </span>
+                                                                <span className={s.mapCardGames}>
+                                                                    {mStat.matches} games · {mStat.wins}W {Math.max(0, mStat.matches - mStat.wins)}L
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
-                                            );
-                                        })}
+                                            </section>
+                                        )}
                                         {!mapStats?.maps?.length && (
                                             <div className={s.placeholder}>No map stats cached.</div>
                                         )}
                                     </div>
+                                    )}
                                 </Panel>
 
                                 <Panel
@@ -886,6 +946,47 @@ function Metric({
             <span className={`${s.metricValue} ${tone}`}>{value}</span>
         </div>
     );
+}
+
+function PerformanceStat({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
+    return (
+        <span className={s.performanceStat}>
+            <small>{label}</small>
+            <strong className={tone}>{value}</strong>
+        </span>
+    );
+}
+
+function groupAgentStats(stats: ProfileAgentStatsResponse["agents"], agents: Record<string, AgentMeta>) {
+    const order = ["Duelist", "Initiator", "Controller", "Sentinel", "Unknown"];
+    const groups = new Map<string, Array<{ agent: ProfileAgentStatsResponse["agents"][number]; meta?: AgentMeta }>>();
+    for (const agent of stats) {
+        const meta = agents[agent.characterId.toLowerCase()];
+        const role = meta?.role || "Unknown";
+        const items = groups.get(role) || [];
+        items.push({ agent, meta });
+        groups.set(role, items);
+    }
+    return order
+        .filter((role) => groups.has(role))
+        .map((role) => ({ label: role, items: groups.get(role)! }));
+}
+
+function groupMapStats(
+    stats: ProfileMapStatsResponse["maps"],
+    maps: Record<string, { displayName: string; splash?: string }>,
+) {
+    const tdmNames = /^(District|Kasbah|Piazza|Drift|Glitch|Skirmish|Summit)/i;
+    const standard: Array<{ stat: ProfileMapStatsResponse["maps"][number]; meta?: { displayName: string; splash?: string } }> = [];
+    const deathmatch: typeof standard = [];
+    for (const stat of stats) {
+        const meta = maps[stat.mapID.toLowerCase()];
+        (tdmNames.test(meta?.displayName || "") ? deathmatch : standard).push({ stat, meta });
+    }
+    return [
+        { label: "Standard maps", items: standard },
+        { label: "Team Deathmatch", items: deathmatch },
+    ].filter((group) => group.items.length > 0);
 }
 
 /* ── Match row with expandable scoreboard ── */
@@ -1080,6 +1181,7 @@ function Scoreboard({
     const red = detail.players.filter((p) => p.teamId === "Red");
     const sortPlayers = (rows: typeof detail.players) =>
         [...rows].sort((a, b) => Number(b.isLocal) - Number(a.isLocal) || b.score - a.score || b.kills - a.kills);
+    const partyGroups = buildPartyGroups(detail.players);
 
     const mvpPlayer = useMemo(() => {
         if (!detail.players.length) return null;
@@ -1100,6 +1202,7 @@ function Scoreboard({
                 mvpPlayer={mvpPlayer}
                 tierAssets={tierAssets}
                 onViewProfile={onViewProfile}
+                partyGroups={partyGroups}
             />
             <ScoreTeam
                 title="Red"
@@ -1110,6 +1213,7 @@ function Scoreboard({
                 mvpPlayer={mvpPlayer}
                 tierAssets={tierAssets}
                 onViewProfile={onViewProfile}
+                partyGroups={partyGroups}
             />
         </div>
     );
@@ -1124,6 +1228,7 @@ function ScoreTeam({
     mvpPlayer,
     tierAssets,
     onViewProfile,
+    partyGroups,
 }: {
     title: string;
     won: boolean;
@@ -1133,6 +1238,7 @@ function ScoreTeam({
     mvpPlayer: ProfileMatchDetails["players"][number] | null;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+    partyGroups: Map<string, { label: string; size: number }>;
 }) {
     return (
         <div className={s.scoreTeam}>
@@ -1159,6 +1265,7 @@ function ScoreTeam({
                                 : meta?.name || "Player";
                         const isMvp = mvpPlayer && mvpPlayer.characterId === p.characterId && mvpPlayer.teamId === p.teamId;
                         const rankIcon = rankIconUrl(p.competitiveTier, tierAssets);
+                        const party = p.partyId ? partyGroups.get(p.partyId) : undefined;
                         return (
                             <tr key={`${p.characterId}-${idx}`} className={p.isLocal ? s.scoreLocal : ""}>
                                 <td>
@@ -1184,6 +1291,7 @@ function ScoreTeam({
                                                     </button>
                                                 ) : name}
                                                 {p.isLocal && <span className={s.viewingBadge}>VIEWING</span>}
+                                                {party && <span className={s.scorePartyBadge}>{party.label} · {party.size}</span>}
                                                 {isMvp && <span className={s.mvpBadge}>MVP</span>}
                                             </span>
                                             <small>{meta?.name || "Agent"}</small>
@@ -1206,6 +1314,21 @@ function ScoreTeam({
             </table>
         </div>
     );
+}
+
+function buildPartyGroups(players: ProfileMatchDetails["players"]) {
+    const counts = new Map<string, number>();
+    for (const player of players) {
+        if (player.partyId) counts.set(player.partyId, (counts.get(player.partyId) || 0) + 1);
+    }
+    const groups = new Map<string, { label: string; size: number }>();
+    let index = 0;
+    for (const [partyId, size] of counts) {
+        if (size < 2) continue;
+        groups.set(partyId, { label: `PARTY ${String.fromCharCode(65 + index)}`, size });
+        index++;
+    }
+    return groups;
 }
 
 function ActSummaryList({

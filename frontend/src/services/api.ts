@@ -1275,7 +1275,7 @@ export interface SocialPresence {
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/social?remoteOnly=true', undefined, { forceRemoteAuth: true });
+        const response = await fetchWithAuth(LOCAL_URL + '/social', undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };

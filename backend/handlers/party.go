@@ -62,27 +62,47 @@ func (h *Handler) GetParty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, err := getCurrentParty(val)
-	if err != nil {
-		if isExpectedNoPartyError(err) {
-			h.returnAny(w, PartyResponse{Phase: "none", Source: source})
-			return
+	response, err := h.fetchPartyResponse(val, source)
+	if err != nil && source == "remote" {
+		if local := h.localClientForPuuid(val.Player.Uuid); local != nil {
+			source = "local"
+			response, err = h.fetchPartyResponse(local, "local")
 		}
+	}
+	if err != nil {
 		h.returnAny(w, PartyResponse{Phase: "error", Source: source, Error: err.Error()})
 		return
 	}
+	h.returnAny(w, response)
+}
+
+func (h *Handler) fetchPartyResponse(val *valclient.ValClient, source string) (PartyResponse, error) {
+	current, err := getCurrentParty(val)
+	if err != nil {
+		if isExpectedNoPartyError(err) {
+			return PartyResponse{Phase: "none", Source: source}, nil
+		}
+		return PartyResponse{}, err
+	}
 	if current == nil || current.CurrentPartyID == "" {
-		h.returnAny(w, PartyResponse{Phase: "none", Source: source})
-		return
+		return PartyResponse{Phase: "none", Source: source}, nil
 	}
 
 	details, err := getPartyDetails(val, current.CurrentPartyID)
 	if err != nil {
-		h.returnAny(w, PartyResponse{Phase: "error", PartyID: current.CurrentPartyID, Source: source, Error: err.Error()})
-		return
+		return PartyResponse{}, err
 	}
 
-	h.returnAny(w, h.buildPartyResponse(val, source, details))
+	return h.buildPartyResponse(val, source, details), nil
+}
+
+func (h *Handler) localClientForPuuid(puuid string) *valclient.ValClient {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.Val != nil && h.Val.Player != nil && strings.EqualFold(h.Val.Player.Uuid, puuid) {
+		return h.Val
+	}
+	return nil
 }
 
 func (h *Handler) getPartyClient(r *http.Request) (*valclient.ValClient, string, error) {

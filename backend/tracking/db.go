@@ -78,6 +78,19 @@ CREATE TABLE IF NOT EXISTS rr_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_rr_snapshots_season_time ON rr_snapshots(seasonId, matchStartTime);
 
+CREATE TABLE IF NOT EXISTS rank_acts_cache (
+    puuid        TEXT    NOT NULL,
+    seasonId     TEXT    NOT NULL,
+    wins         INTEGER NOT NULL DEFAULT 0,
+    games        INTEGER NOT NULL DEFAULT 0,
+    rankedRating INTEGER NOT NULL DEFAULT 0,
+    peakRank     INTEGER NOT NULL DEFAULT 0,
+    finalRank    INTEGER NOT NULL DEFAULT 0,
+    ordinal      INTEGER NOT NULL DEFAULT 0,
+    cachedAt     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (puuid, seasonId)
+);
+
 CREATE TABLE IF NOT EXISTS agent_stats (
     puuid            TEXT    NOT NULL,
     characterId      TEXT    NOT NULL,
@@ -824,6 +837,117 @@ func RankActsFromSnapshots(snapshots []RRSnapshot) []RankActSummary {
 	return acts
 }
 
+func CacheRankActs(db *sql.DB, puuid string, acts []RankActSummary) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for index, act := range acts {
+		if act.SeasonID == "" {
+			continue
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO rank_acts_cache
+			    (puuid, seasonId, wins, games, rankedRating, peakRank, finalRank, ordinal, cachedAt)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(puuid, seasonId) DO UPDATE SET
+			    wins=excluded.wins, games=excluded.games, rankedRating=excluded.rankedRating,
+			    peakRank=excluded.peakRank, finalRank=excluded.finalRank,
+			    ordinal=excluded.ordinal, cachedAt=excluded.cachedAt
+		`, strings.ToLower(puuid), act.SeasonID, act.Wins, act.Games, act.RankedRating,
+			act.PeakRank, act.FinalRank, index, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func GetCachedRankActs(db *sql.DB, puuid string) ([]RankActSummary, error) {
+	rows, err := db.Query(`
+		SELECT seasonId, wins, games, rankedRating, peakRank, finalRank
+		FROM rank_acts_cache WHERE puuid = ? ORDER BY ordinal ASC LIMIT 8
+	`, strings.ToLower(puuid))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var acts []RankActSummary
+	for rows.Next() {
+		var act RankActSummary
+		if err := rows.Scan(&act.SeasonID, &act.Wins, &act.Games, &act.RankedRating, &act.PeakRank, &act.FinalRank); err != nil {
+			return nil, err
+		}
+		acts = append(acts, act)
+	}
+	return acts, rows.Err()
+}
+
+// RankActsFromCachedMatches reconstructs act cards from already-cached
+// competitive match details when Riot's MMR endpoints are unavailable. It
+// deliberately leaves RR at zero: match details prove tier, not exact RR.
+func RankActsFromCachedMatches(db *sql.DB, puuid string) ([]RankActSummary, error) {
+	rows, err := db.Query(`
+		SELECT m.seasonId, mp.competitiveTier, m.gameStartMillis,
+		       CASE WHEN (m.blueWins = 1 AND mp.teamId = 'Blue')
+		              OR (m.blueWins = 0 AND mp.teamId = 'Red') THEN 1 ELSE 0 END
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ?
+		  AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
+		  AND mp.competitiveTier > 0
+		  AND m.seasonId != ''
+		ORDER BY m.gameStartMillis ASC
+	`, strings.ToLower(puuid))
+	if err != nil {
+		return nil, fmt.Errorf("tracking: cached rank acts query: %w", err)
+	}
+	defer rows.Close()
+
+	type actState struct {
+		summary RankActSummary
+		lastAt  int64
+	}
+	bySeason := map[string]*actState{}
+	for rows.Next() {
+		var seasonID string
+		var tier, win int
+		var startedAt int64
+		if err := rows.Scan(&seasonID, &tier, &startedAt, &win); err != nil {
+			return nil, fmt.Errorf("tracking: cached rank acts scan: %w", err)
+		}
+		state := bySeason[seasonID]
+		if state == nil {
+			state = &actState{summary: RankActSummary{SeasonID: seasonID}}
+			bySeason[seasonID] = state
+		}
+		state.summary.Games++
+		state.summary.Wins += win
+		state.summary.PeakRank = max(state.summary.PeakRank, tier)
+		if startedAt >= state.lastAt {
+			state.lastAt = startedAt
+			state.summary.FinalRank = tier
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: cached rank acts rows: %w", err)
+	}
+
+	states := make([]*actState, 0, len(bySeason))
+	for _, state := range bySeason {
+		states = append(states, state)
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].lastAt > states[j].lastAt })
+	acts := make([]RankActSummary, 0, min(8, len(states)))
+	for _, state := range states {
+		acts = append(acts, state.summary)
+		if len(acts) == 8 {
+			break
+		}
+	}
+	return acts, nil
+}
+
 // GetAgentStats returns per-agent aggregate rows for the given puuid,
 // sorted by matches DESC. queue == "" means "all".
 func GetAgentStats(db *sql.DB, puuid, queue string) ([]AgentStat, error) {
@@ -1037,6 +1161,29 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		return nil, fmt.Errorf("tracking: GetOverview act history: %w", err)
 	}
 	out.RankActs = RankActsFromSnapshots(allSnapshots)
+	persistedActs, err := GetCachedRankActs(db, puuid)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: GetOverview persisted act history: %w", err)
+	}
+	seenActs := make(map[string]struct{}, len(out.RankActs))
+	for _, act := range out.RankActs {
+		seenActs[act.SeasonID] = struct{}{}
+	}
+	for _, act := range persistedActs {
+		if _, exists := seenActs[act.SeasonID]; !exists {
+			out.RankActs = append(out.RankActs, act)
+			seenActs[act.SeasonID] = struct{}{}
+		}
+	}
+	cachedActs, err := RankActsFromCachedMatches(db, puuid)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: GetOverview cached act history: %w", err)
+	}
+	for _, act := range cachedActs {
+		if _, exists := seenActs[act.SeasonID]; !exists {
+			out.RankActs = append(out.RankActs, act)
+		}
+	}
 	for _, act := range out.RankActs {
 		if act.PeakRank > out.PeakRank.CompetitiveTier {
 			out.PeakRank.CompetitiveTier = act.PeakRank
@@ -1067,7 +1214,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		    COALESCE(SUM(mp.headshots), 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
-		WHERE mp.subject = ? AND m.isRanked = 1
+		WHERE mp.subject = ? AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
 	`, puuid).Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("tracking: GetOverview summary: %w", err)
@@ -1323,7 +1470,7 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 			QueueID:          r.MatchInfo.QueueID,
 			MapID:            r.MatchInfo.MapID,
 			GameMode:         r.MatchInfo.GameMode,
-			IsRanked:         r.MatchInfo.IsRanked,
+			IsRanked:         r.MatchInfo.IsRanked || strings.EqualFold(r.MatchInfo.QueueID, "competitive"),
 			GameStartMillis:  r.MatchInfo.GameStartMillis,
 			SeasonID:         r.MatchInfo.SeasonID,
 			GameLengthMillis: r.MatchInfo.GameLengthMillis,

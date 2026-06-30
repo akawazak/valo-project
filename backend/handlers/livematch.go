@@ -80,7 +80,18 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		h.returnAny(w, LiveMatchResponse{Phase: "none", Error: errString(err)})
 		return
 	}
+	response := h.fetchLiveMatch(val, source)
+	if response.Phase == "none" && source == "remote" && val.Player != nil {
+		if local := h.localClientForPuuid(val.Player.Uuid); local != nil {
+			if fallback := h.fetchLiveMatch(local, "local"); fallback.Phase != "none" || response.Error != "" {
+				response = fallback
+			}
+		}
+	}
+	h.returnAny(w, response)
+}
 
+func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMatchResponse {
 	// 1. Try Pregame first
 	prePlayer, err := val.GetPreGamePlayer()
 	if err == nil && prePlayer != nil {
@@ -90,8 +101,7 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
-			h.returnAny(w, response)
-			return
+			return response
 		}
 	}
 	pregameErr := err
@@ -105,18 +115,17 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
-			h.returnAny(w, response)
-			return
+			return response
 		}
 	}
 	coregameErr := err
 
 	// 3. None
-	h.returnAny(w, LiveMatchResponse{
+	return LiveMatchResponse{
 		Phase:  "none",
 		Source: source,
 		Error:  fmt.Sprintf("pregame: %s; coregame: %s", errString(pregameErr), errString(coregameErr)),
-	})
+	}
 }
 
 // markCurrentParty labels only the signed-in player's own party. Live match
@@ -188,17 +197,6 @@ func (h *Handler) getLiveMatchClient(r *http.Request) (*valclient.ValClient, str
 		return nil, "", err
 	}
 
-	h.mu.RLock()
-	localVal := h.Val
-	h.mu.RUnlock()
-	if localVal != nil {
-		if !hasRemoteAuth || localVal.Player != nil && localVal.Player.Uuid == remoteAuth.Puuid {
-			if _, helpErr := localVal.GetHelp(); helpErr == nil {
-				return localVal, "local", nil
-			}
-		}
-	}
-
 	if hasRemoteAuth {
 		shard := getShardFromRegion(remoteAuth.Region)
 		region := remoteAuth.Region
@@ -211,6 +209,15 @@ func (h *Handler) getLiveMatchClient(r *http.Request) (*valclient.ValClient, str
 			Player: &valclient.ValClientPlayer{Uuid: remoteAuth.Puuid},
 			Header: buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
 		}, "remote", nil
+	}
+
+	h.mu.RLock()
+	localVal := h.Val
+	h.mu.RUnlock()
+	if localVal != nil {
+		if _, helpErr := localVal.GetHelp(); helpErr == nil {
+			return localVal, "local", nil
+		}
 	}
 
 	return nil, "", fmt.Errorf("authentication required: please log in first")
@@ -233,32 +240,6 @@ func (h *Handler) getPlayerNameCached(val *valclient.ValClient, puuid string) st
 		return resolved
 	}
 	return "Player"
-}
-
-func (h *Handler) getPlayerMmrCached(val *valclient.ValClient, puuid string) (int, int) {
-	h.mmrMu.RLock()
-	cached, ok := h.mmrCache[puuid]
-	h.mmrMu.RUnlock()
-	if ok {
-		return cached.Tier, cached.RR
-	}
-
-	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
-	var live struct {
-		LatestCompetitiveUpdate struct {
-			TierAfterUpdate         int `json:"TierAfterUpdate"`
-			RankedRatingAfterUpdate int `json:"RankedRatingAfterUpdate"`
-		} `json:"LatestCompetitiveUpdate"`
-	}
-	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err == nil {
-		tier := live.LatestCompetitiveUpdate.TierAfterUpdate
-		rr := live.LatestCompetitiveUpdate.RankedRatingAfterUpdate
-		h.mmrMu.Lock()
-		h.mmrCache[puuid] = CachedMMR{Tier: tier, RR: rr}
-		h.mmrMu.Unlock()
-		return tier, rr
-	}
-	return 0, 0
 }
 
 func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclient.GetPreGameMatchResponse) LiveMatchResponse {
@@ -290,12 +271,13 @@ func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclien
 				}
 
 				lp := &LivePlayer{
-					Puuid:          pStruct.Subject,
-					AgentID:        pStruct.CharacterID,
-					SelectionState: selection,
-					AccountLevel:   pStruct.PlayerIdentity.AccountLevel,
-					CardID:         pStruct.PlayerIdentity.PlayerCardID,
-					IsLocal:        pStruct.Subject == val.Player.Uuid,
+					Puuid:           pStruct.Subject,
+					AgentID:         pStruct.CharacterID,
+					SelectionState:  selection,
+					AccountLevel:    pStruct.PlayerIdentity.AccountLevel,
+					CardID:          pStruct.PlayerIdentity.PlayerCardID,
+					IsLocal:         pStruct.Subject == val.Player.Uuid,
+					CompetitiveTier: pStruct.CompetitiveTier,
 				}
 
 				if pStruct.PlayerIdentity.Incognito {
@@ -303,11 +285,6 @@ func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclien
 				} else {
 					lp.Name = h.getPlayerNameCached(val, pStruct.Subject)
 				}
-
-				// Get MMR
-				tier, rr := h.getPlayerMmrCached(val, pStruct.Subject)
-				lp.CompetitiveTier = tier
-				lp.RankedRating = rr
 
 				mu.Lock()
 				resp.AllyTeam[index] = lp
@@ -412,11 +389,6 @@ func (h *Handler) buildCoregameResponse(val *valclient.ValClient, match *CoreGam
 			} else {
 				lp.Name = h.getPlayerNameCached(val, playerInfo.Subject)
 			}
-
-			// Get MMR
-			tier, rr := h.getPlayerMmrCached(val, playerInfo.Subject)
-			lp.CompetitiveTier = tier
-			lp.RankedRating = rr
 
 			mu.Lock()
 			if playerInfo.TeamID == localTeam {

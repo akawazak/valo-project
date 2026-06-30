@@ -40,8 +40,6 @@ type Handler struct {
 
 	namesCache map[string]string
 	namesMu    sync.RWMutex
-	mmrCache   map[string]CachedMMR
-	mmrMu      sync.RWMutex
 
 	// playerStatsCache stores per-(puuid, agent) agent-specific stats
 	// (matches, wins, winrate, kd, kda) computed from Riot's match
@@ -52,11 +50,6 @@ type Handler struct {
 	// false} so we don't hammer Riot on every poll.
 	playerStatsCache map[string]CachedPlayerStats
 	playerStatsMu    sync.RWMutex
-}
-
-type CachedMMR struct {
-	Tier int
-	RR   int
 }
 
 // CachedPlayerStats is the per-(puuid, agent) agent-specific record.
@@ -76,7 +69,6 @@ func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
 		Val:              Val,
 		namesCache:       make(map[string]string),
-		mmrCache:         make(map[string]CachedMMR),
 		playerStatsCache: make(map[string]CachedPlayerStats),
 	}
 }

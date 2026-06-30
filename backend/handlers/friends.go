@@ -487,6 +487,10 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 				if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
 					p.State = firstString(mpd, "sessionLoopState", "SessionLoopState")
 					p.QueueID = firstString(mpd, "queueId", "QueueID")
+					p.CardID = firstString(mpd, "playerCardId", "PlayerCardID")
+				}
+				if p.CardID == "" {
+					p.CardID = firstString(private, "playerCardId", "PlayerCardID")
 				}
 			}
 		}

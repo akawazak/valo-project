@@ -114,9 +114,12 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *
 	apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, puuid)
 	var live playerMMRResponse
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &live); err != nil {
-		if strings.Contains(err.Error(), "status 404") {
+		if strings.Contains(err.Error(), "status 404") || strings.Contains(err.Error(), "status 429") {
 			if fallbackErr := hydrateCompetitiveUpdates(db, val, overview, puuid); fallbackErr == nil {
 				return nil
+			}
+			if strings.Contains(err.Error(), "status 429") {
+				return fmt.Errorf("rank refresh is temporarily rate limited by Riot; cached history will remain visible")
 			}
 			return fmt.Errorf("rank history is unavailable from Riot for this account")
 		}
@@ -126,6 +129,9 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *
 		return fmt.Errorf("rank refresh failed: Riot returned no competitive MMR data")
 	}
 	mergeLiveMMR(overview, live)
+	if err := tracking.CacheRankActs(db, puuid, overview.RankActs); err != nil {
+		return fmt.Errorf("cache rank history: %w", err)
+	}
 	return nil
 }
 

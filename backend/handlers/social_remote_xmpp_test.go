@@ -2,12 +2,25 @@ package handlers
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestNormalizeChatPresenceKeepsPlayerCard(t *testing.T) {
+	private := base64.StdEncoding.EncodeToString([]byte(`{"matchPresenceData":{"sessionLoopState":"MENUS","playerCardId":"card-123"}}`))
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid:   "friend",
+		Product: "valorant",
+		Private: private,
+	}, nil)
+	if presence.CardID != "card-123" {
+		t.Fatalf("player card was dropped from presence: %#v", presence)
+	}
+}
 
 func TestXMPPSessionPreservesRecentConnectionError(t *testing.T) {
 	session := &xmppSocialSession{
