@@ -67,6 +67,7 @@ export default function Home() {
     // Core Layout State
     const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('profile');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
+    const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
     
     // Modals
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -400,6 +401,7 @@ export default function Home() {
                         <ProfilePanel
                             key={`${activeAccount?.puuid || "none"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
+                            requestedProfile={profileTarget}
                         />
                     ) : (
                         isWorkspaceOpen ? (
@@ -579,7 +581,11 @@ export default function Home() {
                 onClose={() => handleResolveLocalAccount(false)}
             />
 
-            <LiveMatchOverlay />
+            <LiveMatchOverlay onViewProfile={(profile) => {
+                setProfileTarget(profile);
+                setActiveTab('profile');
+                setIsWorkspaceOpen(false);
+            }} />
             <LivePartyStatus />
         </div>
     );

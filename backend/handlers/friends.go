@@ -484,13 +484,13 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 		if decoded, err := base64.StdEncoding.DecodeString(rawPrivate); err == nil {
 			var private map[string]any
 			if json.Unmarshal(decoded, &private) == nil {
+				p.State = firstString(private, "sessionLoopState", "SessionLoopState")
+				p.QueueID = firstString(private, "queueId", "QueueID")
+				p.CardID = firstString(private, "playerCardId", "PlayerCardID")
 				if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
-					p.State = firstString(mpd, "sessionLoopState", "SessionLoopState")
-					p.QueueID = firstString(mpd, "queueId", "QueueID")
-					p.CardID = firstString(mpd, "playerCardId", "PlayerCardID")
-				}
-				if p.CardID == "" {
-					p.CardID = firstString(private, "playerCardId", "PlayerCardID")
+					p.State = firstNonEmpty(firstString(mpd, "sessionLoopState", "SessionLoopState"), p.State)
+					p.QueueID = firstNonEmpty(firstString(mpd, "queueId", "QueueID"), p.QueueID)
+					p.CardID = firstNonEmpty(firstString(mpd, "playerCardId", "PlayerCardID"), p.CardID)
 				}
 			}
 		}

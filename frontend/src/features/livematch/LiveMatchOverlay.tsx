@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { Weapon } from '@/lib/types';
@@ -29,7 +29,11 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
     });
 }
 
-export default function LiveMatchOverlay() {
+interface Props {
+    onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+}
+
+export default function LiveMatchOverlay({ onViewProfile }: Props) {
     const { activeAccount, weapons } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
@@ -228,6 +232,7 @@ export default function LiveMatchOverlay() {
     const sortedAllies = stablePlayerSort(match.allyTeam);
     const sortedEnemies = stablePlayerSort(match.enemyTeam);
     const partySizes = partyGroupSizes([...sortedAllies, ...sortedEnemies]);
+    const partyColors = partyGroupColors(partySizes);
 
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
@@ -269,6 +274,7 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
+                                partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -289,6 +295,7 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
+                                partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -302,6 +309,7 @@ export default function LiveMatchOverlay() {
                     tier={tierCache[selectedPlayer.competitiveTier]}
                     weapons={weapons}
                     onClose={() => setSelectedPlayer(null)}
+                    onViewProfile={onViewProfile}
                 />
             )}
         </div>
@@ -321,17 +329,31 @@ function partyGroupSizes(players: LivePlayer[]) {
     return sizes;
 }
 
+function partyGroupColors(sizes: Map<string, number>) {
+    const colors = ["#31d8b2", "#e9a84b", "#b47cff", "#55a9ff", "#ff6f91"];
+    const groups = new Map<string, string>();
+    let index = 0;
+    for (const [group, size] of sizes) {
+        if (size < 2) continue;
+        groups.set(group, colors[index % colors.length]);
+        index++;
+    }
+    return groups;
+}
+
 function PlayerCard({
     player,
     agent,
     tier,
     partySize,
+    partyColor,
     onSelect,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
     partySize?: number;
+    partyColor?: string;
     onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
@@ -343,7 +365,8 @@ function PlayerCard({
     return (
         <button
             type="button"
-            className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''}`}
+            className={`live-player-card ${player.isLocal ? 'local-user' : ''} ${isLocked ? 'state-locked' : ''} ${partyColor ? 'has-party-strip' : ''}`}
+            style={partyColor ? { "--party-color": partyColor } as CSSProperties : undefined}
             onClick={() => onSelect(player)}
             aria-label={`Open details for ${displayName}`}
         >
@@ -408,12 +431,14 @@ function LivePlayerModal({
     tier,
     weapons,
     onClose,
+    onViewProfile,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
     weapons: Weapon[];
     onClose: () => void;
+    onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const [stats, setStats] = useState<LivePlayerStats | null>(null);
     const [loadoutIds, setLoadoutIds] = useState<string[] | null>(null);
@@ -494,6 +519,8 @@ function LivePlayerModal({
             : "Not selected";
     const losses = stats?.loaded ? Math.max(0, stats.matches - stats.wins) : 0;
     const displayName = privatePlayerLabel(player, agent?.name);
+    const [gameName, tagLine = ""] = player.name.split("#");
+    const canViewProfile = Boolean(player.puuid && gameName && !["Agent", "Enemy"].includes(gameName));
 
     return (
         <div className="live-player-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -521,12 +548,31 @@ function LivePlayerModal({
                     <div className="live-player-modal-title">
                         <span className="live-player-modal-kicker">{player.isLocal ? "Your player" : "Live player"}</span>
                         <h2>{displayName}</h2>
-                        <p>{agent?.name || "Agent unavailable"} · {selection}</p>
+                        <p>
+                            {agent?.name || "Agent unavailable"} · {selection}
+                            <span className="live-player-modal-rank">
+                                {tier?.icon && <img src={tier.icon} alt="" aria-hidden="true" />}
+                                {rankName}{player.rankedRating > 0 ? ` · ${player.rankedRating} RR` : ""}
+                            </span>
+                        </p>
                     </div>
                 </div>
 
                 <div className="live-player-modal-grid">
-                    <InfoTile label="Rank" value={rankName} detail={player.rankedRating > 0 ? `${player.rankedRating} RR` : "RR unavailable"} icon={tier?.icon} />
+                    <button
+                        type="button"
+                        className="live-player-info-tile live-player-loadout-tile"
+                        disabled={!canViewProfile}
+                        onClick={() => {
+                            if (!canViewProfile) return;
+                            onClose();
+                            onViewProfile?.({ puuid: player.puuid, gameName, tagLine });
+                        }}
+                    >
+                        <span>Player profile</span>
+                        <strong>{canViewProfile ? "Check Profile" : "Profile Hidden"}</strong>
+                        <small>{canViewProfile ? "Open full match and rank history" : "Riot hid this identity"}</small>
+                    </button>
                     <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
                     <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
                     <button type="button" className="live-player-info-tile live-player-loadout-tile" onClick={() => setShowLoadout((open) => !open)}>

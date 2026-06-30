@@ -207,6 +207,34 @@ func TestListCachedMatchesIncludesQueuedPartyMembers(t *testing.T) {
 	}
 }
 
+func TestGetMatchFromCacheFocusesOnlyRequestedPlayer(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	raw, err := json.Marshal(matchFixtureWithParty("first-account"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InsertMatchDetails(db, appDir, "party-match", "first-account", raw, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	match, err := GetMatchFromCache(db, "party-match", "duo-player")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, player := range match.Players {
+		wantLocal := player.Subject == "duo-player"
+		if player.IsLocal != wantLocal {
+			t.Fatalf("player %q local=%v, want %v", player.Subject, player.IsLocal, wantLocal)
+		}
+	}
+}
+
 func matchFixture(puuid string) map[string]any {
 	return map[string]any{
 		"matchInfo": map[string]any{

@@ -1065,57 +1065,61 @@
     color: #a8d7ff;
 }
 
-.matchPartyRow {
+.matchPartyInline {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
-    grid-column: 1 / -1;
+    gap: 7px;
+    min-height: 22px;
 }
 
-.matchPartyLabel {
-    font-size: 0.64rem;
+.matchPartyBadge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 7px;
+    color: #8edcff;
+    background: rgba(48, 151, 199, 0.12);
+    border: 1px solid rgba(81, 182, 226, 0.24);
+    border-radius: 999px;
     font-family: var(--font-mono);
-    color: var(--text-secondary);
+    font-size: 0.56rem;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.08em;
 }
 
-.matchPartyList {
+.matchPartyAvatars {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.matchPartyChip,
-.matchPartyMore {
-    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.04);
-    font-size: 0.67rem;
-    color: var(--text-primary);
+    min-width: 0;
 }
 
 .matchPartyIcon {
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
+    margin-left: -5px;
     border-radius: 50%;
     object-fit: cover;
+    border: 2px solid #091722;
+}
+
+.matchPartyIcon:first-child {
+    margin-left: 0;
 }
 
 .matchPartyDot {
-    width: 8px;
-    height: 8px;
+    width: 12px;
+    height: 12px;
+    margin-left: -3px;
     border-radius: 50%;
     background: var(--accent);
+    border: 2px solid #091722;
 }
 
-.matchPartyMore {
-    color: #9ad4ff;
+.matchPartyAvatars small {
+    margin-left: 7px;
+    color: var(--text-secondary);
+    font-size: 0.6rem;
+    white-space: nowrap;
 }
 
 .matchStats {
@@ -1367,6 +1371,10 @@
     border-bottom: 1px solid rgba(58, 226, 182, 0.3);
 }
 
+.scoreParty td:first-child {
+    box-shadow: inset 4px 0 var(--party-color);
+}
+
 .scoreProfileBtn {
     padding: 0;
     color: inherit;
@@ -1392,9 +1400,9 @@
 
 .scorePartyBadge {
     padding: 2px 5px;
-    color: #94dcff;
-    background: rgba(57, 154, 255, 0.1);
-    border: 1px solid rgba(57, 154, 255, 0.25);
+    color: var(--party-color);
+    background: color-mix(in srgb, var(--party-color) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--party-color) 38%, transparent);
     border-radius: 999px;
     font-family: var(--font-mono);
     font-size: 0.48rem;
@@ -1500,12 +1508,22 @@
     gap: 12px;
 }
 
+.actRowLeft {
+    min-width: 0;
+}
+
+.actRowRight {
+    flex: 0 0 auto;
+    text-align: right;
+}
+
 .actRowLeft strong,
 .actRowRight strong {
     display: block;
     font-size: 0.84rem;
     font-weight: 700;
     color: var(--text-primary);
+    white-space: nowrap;
 }
 
 .actRowLeft span,

@@ -474,10 +474,9 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 		); err != nil {
 			return nil, fmt.Errorf("tracking: scan player: %w", err)
 		}
-		p.IsLocal = isLocal == 1
-		if !p.IsLocal && puuid != "" && strings.EqualFold(p.Subject, puuid) {
-			p.IsLocal = true
-		}
+		// Local/viewing identity is request-scoped. A shared match may have
+		// been cached while syncing another account.
+		p.IsLocal = puuid != "" && strings.EqualFold(p.Subject, puuid)
 		players = append(players, p)
 	}
 	if err := rows.Err(); err != nil {

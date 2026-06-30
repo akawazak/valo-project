@@ -204,7 +204,7 @@ export default function LivePartyStatus() {
                     <div className="live-party-meta">
                         {hasParty && <span>{members.length}/5</span>}
                         <span>{social?.onlineCount || 0} online</span>
-                        {(party?.source || social?.source) && <span>{party?.source || social?.source}</span>}
+                        {(party?.source || social?.source) && <span>Riot session</span>}
                         {stale && <span>stale</span>}
                     </div>
                     <button
@@ -346,7 +346,13 @@ function FriendPresenceList({
                     const state = presenceState(presence);
                     const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
                     return (
-                    <div className={`live-party-friend-row is-${state}`} key={presence.puuid || `${presence.name}-${index}`}>
+                    <div
+                        className={`live-party-friend-row is-${state}${card?.wide ? " has-card-art" : ""}`}
+                        style={card?.wide ? {
+                            backgroundImage: `linear-gradient(90deg, rgba(4, 18, 29, .93) 0%, rgba(4, 18, 29, .76) 58%, rgba(4, 18, 29, .9) 100%), url(${card.wide})`,
+                        } : undefined}
+                        key={presence.puuid || `${presence.name}-${index}`}
+                    >
                         <span className="live-party-friend-avatar" aria-hidden="true">
                             {card?.small ? <img src={card.small} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
                             <i className="live-party-friend-dot" />

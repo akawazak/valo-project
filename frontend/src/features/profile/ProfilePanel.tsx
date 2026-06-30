@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Image from "next/image";
 import { useData } from "@/context/DataContext";
 import {
@@ -25,6 +25,7 @@ import s from "./ProfilePanel.module.css";
 
 interface Props {
     onConnectAccount?: () => void;
+    requestedProfile?: { puuid: string; gameName: string; tagLine: string } | null;
 }
 
 interface AgentMeta {
@@ -281,7 +282,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     return tierPromise;
 }
 
-export default function ProfilePanel({ onConnectAccount }: Props) {
+export default function ProfilePanel({ onConnectAccount, requestedProfile }: Props) {
     const { activeAccount } = useData();
     const [viewedProfile, setViewedProfile] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
     const ownPuuid = activeAccount?.puuid ?? "";
@@ -317,6 +318,10 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
+    const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
+        setViewedProfile(profile);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    }, []);
     const setPerformanceRail = useCallback((rail: HTMLDivElement | null) => {
         if (!rail) return;
         const handleWheel = (event: WheelEvent) => {
@@ -331,6 +336,9 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
     }, []);
 
     useEffect(() => setViewedProfile(null), [ownPuuid]);
+    useEffect(() => {
+        if (requestedProfile?.puuid) viewProfile(requestedProfile);
+    }, [requestedProfile, viewProfile]);
 
     useEffect(() => {
         let cancelled = false;
@@ -893,7 +901,7 @@ export default function ProfilePanel({ onConnectAccount }: Props) {
                                                     maps={maps}
                                                     tierAssets={tierAssets}
                                                     onToggle={() => toggleDetails(match.matchId)}
-                                                    onViewProfile={setViewedProfile}
+                                                    onViewProfile={viewProfile}
                                                 />
                                             ))}
                                         </div>
@@ -1035,6 +1043,10 @@ function MatchRow({
     const kdaText = `${match.localPlayer.kills}/${match.localPlayer.deaths}/${match.localPlayer.assists}`;
     const partyMembers = (match.partyMembers || []).filter((member) => member.subject !== match.localPlayer.subject);
     const partyPreview = partyMembers.slice(0, 3);
+    const partyLabel = ["SOLO", "DUO", "TRIO", "4-STACK", "5-STACK"][Math.min(4, partyMembers.length)];
+    const partyNames = partyMembers
+        .map((member) => member.gameName ? `${member.gameName}${member.tagLine ? `#${member.tagLine}` : ""}` : "Hidden player")
+        .join(", ");
 
     return (
         <div className={`${s.matchWrap} ${expanded ? s.matchWrapExpanded : ""}`}>
@@ -1060,35 +1072,30 @@ function MatchRow({
                         <div className={s.matchAgentMeta}>
                             <div className={s.matchAgentName}>{agentName}</div>
                             <div className={s.matchMapName}>{mapName}</div>
-                        </div>
-                    </div>
-
-                    {partyMembers.length > 0 && (
-                        <div className={s.matchPartyRow}>
-                            <span className={s.matchPartyLabel}>Queued with</span>
-                            <div className={s.matchPartyList}>
-                                {partyPreview.map((member) => {
-                                    const memberMeta = agents[member.characterId?.toLowerCase?.() || ""];
-                                    const memberLabel = member.gameName
-                                        ? `${member.gameName}${member.tagLine ? `#${member.tagLine}` : ""}`
-                                        : member.subject.slice(0, 8);
-                                    return (
-                                        <span key={member.subject} className={s.matchPartyChip}>
-                                            {memberMeta?.icon ? (
-                                                <Image src={memberMeta.icon} alt={memberLabel} width={18} height={18} unoptimized className={s.matchPartyIcon} />
-                                            ) : (
-                                                <span className={s.matchPartyDot} aria-hidden="true" />
-                                            )}
-                                            {memberLabel}
-                                        </span>
-                                    );
-                                })}
-                                {partyMembers.length > partyPreview.length && (
-                                    <span className={s.matchPartyMore}>+{partyMembers.length - partyPreview.length}</span>
+                            <div className={s.matchPartyInline} title={partyNames || "No queued teammates detected"}>
+                                <span className={s.matchPartyBadge}>{partyLabel}</span>
+                                {partyPreview.length > 0 && (
+                                    <span className={s.matchPartyAvatars} aria-label={`Queued with ${partyNames}`}>
+                                        {partyPreview.map((member) => {
+                                            const memberMeta = agents[member.characterId?.toLowerCase?.() || ""];
+                                            return memberMeta?.icon ? (
+                                                <Image
+                                                    key={member.subject}
+                                                    src={memberMeta.icon}
+                                                    alt=""
+                                                    width={20}
+                                                    height={20}
+                                                    unoptimized
+                                                    className={s.matchPartyIcon}
+                                                />
+                                            ) : <span key={member.subject} className={s.matchPartyDot} aria-hidden="true" />;
+                                        })}
+                                        <small>{partyMembers.length} queued teammate{partyMembers.length === 1 ? "" : "s"}</small>
+                                    </span>
                                 )}
                             </div>
                         </div>
-                    )}
+                    </div>
 
                     <div className={s.matchStats}>
                         <div className={s.matchStat}>
@@ -1241,7 +1248,7 @@ function ScoreTeam({
     mvpPlayer: ProfileMatchDetails["players"][number] | null;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
-    partyGroups: Map<string, { label: string; size: number }>;
+    partyGroups: Map<string, { label: string; size: number; color: string }>;
 }) {
     return (
         <div className={s.scoreTeam}>
@@ -1270,7 +1277,11 @@ function ScoreTeam({
                         const rankIcon = rankIconUrl(p.competitiveTier, tierAssets);
                         const party = p.partyId ? partyGroups.get(p.partyId) : undefined;
                         return (
-                            <tr key={`${p.characterId}-${idx}`} className={p.isLocal ? s.scoreLocal : ""}>
+                            <tr
+                                key={`${p.characterId}-${idx}`}
+                                className={`${p.isLocal ? s.scoreLocal : ""} ${party ? s.scoreParty : ""}`}
+                                style={party ? { "--party-color": party.color } as CSSProperties : undefined}
+                            >
                                 <td>
                                     <span className={s.scorePlayer}>
                                         {meta?.icon ? (
@@ -1320,15 +1331,20 @@ function ScoreTeam({
 }
 
 function buildPartyGroups(players: ProfileMatchDetails["players"]) {
+    const colors = ["#31d8b2", "#e9a84b", "#b47cff", "#55a9ff", "#ff6f91"];
     const counts = new Map<string, number>();
     for (const player of players) {
         if (player.partyId) counts.set(player.partyId, (counts.get(player.partyId) || 0) + 1);
     }
-    const groups = new Map<string, { label: string; size: number }>();
+    const groups = new Map<string, { label: string; size: number; color: string }>();
     let index = 0;
     for (const [partyId, size] of counts) {
         if (size < 2) continue;
-        groups.set(partyId, { label: `PARTY ${String.fromCharCode(65 + index)}`, size });
+        groups.set(partyId, {
+            label: `PARTY ${String.fromCharCode(65 + index)}`,
+            size,
+            color: colors[index % colors.length],
+        });
         index++;
     }
     return groups;

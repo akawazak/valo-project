@@ -22,6 +22,22 @@ func TestNormalizeChatPresenceKeepsPlayerCard(t *testing.T) {
 	}
 }
 
+func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
+	private := base64.StdEncoding.EncodeToString([]byte(`{
+		"sessionLoopState":"INGAME",
+		"queueId":"competitive",
+		"playerCardId":"card-top-level"
+	}`))
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid:   "friend",
+		Product: "valorant",
+		Private: private,
+	}, nil)
+	if presence.State != "INGAME" || presence.QueueID != "competitive" || presence.CardID != "card-top-level" {
+		t.Fatalf("top-level presence fields were dropped: %#v", presence)
+	}
+}
+
 func TestXMPPSessionPreservesRecentConnectionError(t *testing.T) {
 	session := &xmppSocialSession{
 		state:       "error",
