@@ -30,3 +30,19 @@ func TestNormalizeLoadoutPlayersUsesDocumentedNestedLoadout(t *testing.T) {
 		t.Fatalf("unexpected item ids: %#v", got[0].SkinIDs)
 	}
 }
+
+func TestNormalizeLoadoutPlayersUsesDocumentedPregameLoadout(t *testing.T) {
+	got := normalizeLoadoutPlayers(map[string]any{
+		"Loadouts": []any{map[string]any{
+			"Subject": "player-2",
+			"Items": map[string]any{
+				"weapon-2": map[string]any{"ID": "skin-level-2"},
+			},
+		}},
+	})
+
+	if len(got) != 1 || got[0].Puuid != "player-2" || got[0].GunCount != 1 ||
+		len(got[0].SkinIDs) != 1 || got[0].SkinIDs[0] != "skin-level-2" {
+		t.Fatalf("unexpected pregame loadout: %#v", got)
+	}
+}

@@ -136,6 +136,9 @@ func normalizeLoadoutPlayers(raw map[string]any) []LiveLoadoutPlayer {
 		if loadout == nil {
 			loadout, _ = m["loadout"].(map[string]any)
 		}
+		if loadout == nil {
+			loadout = m
+		}
 		items := firstMap(loadout, "Items", "items")
 		skins := uniqueStrings(collectStringFields(items, "ID"))
 		players = append(players, LiveLoadoutPlayer{
