@@ -83,6 +83,7 @@ export default function LivePartyStatus() {
                 latestPartyRef.current = null;
                 setParty(data);
                 setStale(false);
+                setRefreshKey((key) => key + 1);
                 return;
             }
 
@@ -94,6 +95,7 @@ export default function LivePartyStatus() {
                     setParty(data);
                     setStale(false);
                 }
+                setRefreshKey((key) => key + 1);
                 return;
             }
 
@@ -111,11 +113,17 @@ export default function LivePartyStatus() {
             setRefreshKey((key) => key + 1);
         };
 
-        poll();
-        const interval = window.setInterval(poll, POLL_MS);
+        let timer = 0;
+        const schedule = () => {
+            timer = window.setTimeout(async () => {
+                await poll();
+                if (active) schedule();
+            }, document.hidden ? 20_000 : POLL_MS);
+        };
+        void poll().finally(schedule);
         return () => {
             active = false;
-            window.clearInterval(interval);
+            window.clearTimeout(timer);
         };
     }, [activeAccount, isBackendOnline]);
 
@@ -162,7 +170,9 @@ export default function LivePartyStatus() {
         };
     }, []);
 
-    const presences = visiblePresences(social);
+    const presences = sortedPresences(social);
+    const onlineCount = presences.filter((presence) => presenceState(presence) !== "offline").length;
+    const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
@@ -182,7 +192,7 @@ export default function LivePartyStatus() {
             <PartyPill
                 local={local}
                 party={party!}
-                friendCount={presences.length}
+                friendCount={onlineCount}
                 card={cardCache[local.cardId?.toLowerCase()]}
                 tier={tierCache[local.competitiveTier]}
                 onOpen={() => setExpanded(true)}
@@ -202,9 +212,9 @@ export default function LivePartyStatus() {
                 </div>
                 <div className="live-party-header-actions">
                     <div className="live-party-meta">
-                        {hasParty && <span>{members.length}/5</span>}
-                        <span>{social?.onlineCount || 0} online</span>
-                        {(party?.source || social?.source) && <span>Riot session</span>}
+                        {(party?.source || social?.source) && (
+                            <span>{(party?.source || social?.source) === "local" ? "Riot Client" : "Riot session"}</span>
+                        )}
                         {stale && <span>stale</span>}
                     </div>
                     <button
@@ -217,6 +227,14 @@ export default function LivePartyStatus() {
                         <span aria-hidden="true">–</span>
                     </button>
                 </div>
+            </div>
+            <div className="live-party-overview">
+                <PresenceStat
+                    label={hasParty ? "Party" : "Friends"}
+                    value={hasParty ? `${members.length}/5` : String(social?.friendCount || presences.length)}
+                />
+                <PresenceStat label="Online" value={String(onlineCount)} />
+                <PresenceStat label="In match" value={String(inGameCount)} accent />
             </div>
             {hasParty && (
                 <div className="live-party-members">
@@ -233,6 +251,15 @@ export default function LivePartyStatus() {
             {!hasParty && <PartyEmptyState party={party} />}
             <FriendPresenceList social={social} presences={presences} cardCache={cardCache} />
         </aside>
+    );
+}
+
+function PresenceStat({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+    return (
+        <div className={`live-party-overview-stat${accent ? " is-accent" : ""}`}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+        </div>
     );
 }
 
@@ -274,7 +301,7 @@ function PartyPill({
                 <span className="live-party-pill-title">{local.name}</span>
                 <span className="live-party-pill-sub">
                     {tier?.name ? tier.name : "Unranked"} - {party.members?.length || 0}/5
-                    {friendCount > 0 ? ` - ${friendCount} friends` : ""}
+                    {friendCount > 0 ? ` - ${friendCount} online` : ""}
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">›</span>
@@ -291,6 +318,8 @@ function FriendsPill({
     presences: SocialPresence[];
     onOpen: () => void;
 }) {
+    const onlineCount = presences.filter((presence) => presenceState(presence) !== "offline").length;
+    const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     return (
         <button
             type="button"
@@ -300,13 +329,13 @@ function FriendsPill({
             title="Open friends"
         >
             <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
-                <span className="live-party-pill-avatar-letter">{social?.onlineCount || 0}</span>
+                <span className="live-party-pill-avatar-letter">{onlineCount}</span>
             </span>
             <span className="live-party-pill-body">
                 <span className="live-party-pill-kicker">Party & Friends</span>
                 <span className="live-party-pill-title">{socialTitle(social, presences)}</span>
                 <span className="live-party-pill-sub">
-                    {social?.inGameCount || 0} in match - {social?.friendCount || presences.length} total
+                    {inGameCount} in match - {social?.friendCount || presences.length} total
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">&gt;</span>
@@ -323,6 +352,10 @@ function FriendPresenceList({
     presences: SocialPresence[];
     cardCache: Record<string, CardMeta>;
 }) {
+    const [showOffline, setShowOffline] = useState(false);
+    const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
+    const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
+
     if (!presences.length) {
         return (
             <div className="live-party-friends">
@@ -337,37 +370,81 @@ function FriendPresenceList({
             <div className="live-party-section-heading">
                 <div className="live-party-section-title">Friends</div>
                 <div className="live-party-section-counts">
-                    <span>{social?.inGameCount || 0} in match</span>
-                    <span>{social?.onlineCount || presences.length} online</span>
+                    <span>{activePresences.length} active</span>
                 </div>
             </div>
-            <div className="live-party-friend-list">
-                {presences.map((presence, index) => {
-                    const state = presenceState(presence);
-                    const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
-                    return (
-                    <div
-                        className={`live-party-friend-row is-${state}${card?.wide ? " has-card-art" : ""}`}
-                        style={card?.wide ? {
-                            backgroundImage: `linear-gradient(90deg, rgba(4, 18, 29, .93) 0%, rgba(4, 18, 29, .76) 58%, rgba(4, 18, 29, .9) 100%), url(${card.wide})`,
-                        } : undefined}
-                        key={presence.puuid || `${presence.name}-${index}`}
-                    >
-                        <span className="live-party-friend-avatar" aria-hidden="true">
-                            {card?.small ? <img src={card.small} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
-                            <i className="live-party-friend-dot" />
-                        </span>
-                        <span className="live-party-friend-main">
-                            <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
-                            <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
-                        </span>
-                        <span className="live-party-friend-state">
-                            {state === "game" ? "In match" : state === "online" ? "Online" : "Offline"}
-                        </span>
+            <div className="live-party-friend-scroll">
+                <div className="live-party-friend-list">
+                    {activePresences.map((presence, index) => (
+                        <FriendPresenceRow
+                            key={presence.puuid || `${presence.name}-${index}`}
+                            presence={presence}
+                            cardCache={cardCache}
+                        />
+                    ))}
+                    {activePresences.length === 0 && (
+                        <div className="live-party-friend-empty">No friends are active right now.</div>
+                    )}
+                </div>
+                {offlinePresences.length > 0 && (
+                    <div className="live-party-offline-group">
+                        <button
+                            type="button"
+                            className="live-party-offline-toggle"
+                            onClick={() => setShowOffline((current) => !current)}
+                            aria-expanded={showOffline}
+                        >
+                            <span>
+                                <strong>Offline</strong>
+                                <small>{offlinePresences.length} friends</small>
+                            </span>
+                            <span aria-hidden="true">{showOffline ? "−" : "+"}</span>
+                        </button>
+                        {showOffline && (
+                            <div className="live-party-friend-list is-offline-list">
+                                {offlinePresences.map((presence, index) => (
+                                    <FriendPresenceRow
+                                        key={presence.puuid || `${presence.name}-offline-${index}`}
+                                        presence={presence}
+                                        cardCache={cardCache}
+                                    />
+                                ))}
+                            </div>
+                        )}
                     </div>
-                    );
-                })}
+                )}
             </div>
+        </div>
+    );
+}
+
+function FriendPresenceRow({
+    presence,
+    cardCache,
+}: {
+    presence: SocialPresence;
+    cardCache: Record<string, CardMeta>;
+}) {
+    const state = presenceState(presence);
+    const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
+    return (
+        <div
+            className={`live-party-friend-row is-${state}${card?.wide ? " has-card-art" : ""}`}
+            style={card?.wide ? {
+                backgroundImage: `linear-gradient(90deg, rgba(4, 18, 29, .93) 0%, rgba(4, 18, 29, .76) 58%, rgba(4, 18, 29, .9) 100%), url(${card.wide})`,
+            } : undefined}
+        >
+            <span className="live-party-friend-avatar" aria-hidden="true">
+                {card?.small ? <img src={card.small} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
+                <i className="live-party-friend-dot" />
+            </span>
+            <span className="live-party-friend-main">
+                <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
+                <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
+            </span>
+            <span className="live-party-friend-state">
+                {state === "game" ? "In match" : state === "online" ? "Online" : "Offline"}
+            </span>
         </div>
     );
 }
@@ -388,7 +465,7 @@ function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
 function socialTitle(social: SocialStatusResponse | null, presences: SocialPresence[]) {
     if (!social) return "Connecting presence";
     if (social.status === "unavailable") return "Presence unavailable";
-    return `${social.onlineCount || presences.length} online`;
+    return `${presences.filter((presence) => presenceState(presence) !== "offline").length} online`;
 }
 
 function socialEmptyLabel(social: SocialStatusResponse | null) {
@@ -397,11 +474,10 @@ function socialEmptyLabel(social: SocialStatusResponse | null) {
     return "No friends are online right now.";
 }
 
-function visiblePresences(social: SocialStatusResponse | null) {
+function sortedPresences(social: SocialStatusResponse | null) {
     return (social?.presences || [])
         .filter((presence) => !!(presence.name || presence.product || presence.state || presence.queueId))
-        .sort((a, b) => presencePriority(a) - presencePriority(b) || (a.name || "").localeCompare(b.name || ""))
-        .slice(0, 8);
+        .sort((a, b) => presencePriority(a) - presencePriority(b) || (a.name || "").localeCompare(b.name || ""));
 }
 
 function presenceState(presence: SocialPresence): "game" | "online" | "offline" {

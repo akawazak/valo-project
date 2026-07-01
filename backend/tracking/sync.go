@@ -195,6 +195,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 
 	// Step 3: dedupe against cache.
 	var newIDs []string
+	var refreshIDs []string
 	seenIDs := map[string]struct{}{}
 	for _, h := range history {
 		if h.MatchID == "" {
@@ -209,10 +210,13 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 			slog.Warn("tracking: IsMatchCached error", "matchID", h.MatchID, "err", err)
 			continue
 		}
-		if refreshCached || !cached {
+		if !cached {
 			newIDs = append(newIDs, h.MatchID)
+		} else if refreshCached {
+			refreshIDs = append(refreshIDs, h.MatchID)
 		}
 	}
+	newIDs = append(newIDs, refreshIDs...)
 
 	// Step 4: hydrate a bounded batch sequentially. Riot's match-details
 	// endpoint rate-limits burst fan-out; failed IDs remain uncached and are

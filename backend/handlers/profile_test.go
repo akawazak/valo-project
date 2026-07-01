@@ -139,7 +139,7 @@ func TestMergeRankActsPreservesCachedActsMissingFromRecentUpdates(t *testing.T) 
 		{SeasonID: "current-act", PeakRank: 18, FinalRank: 18},
 	}
 	cached := []tracking.RankActSummary{
-		{SeasonID: "current-act", PeakRank: 17, FinalRank: 17},
+		{SeasonID: "current-act", Wins: 10, Games: 18, RankedRating: 0, PeakRank: 17, FinalRank: 17},
 		{SeasonID: "previous-act", PeakRank: 15, FinalRank: 15},
 	}
 
@@ -149,6 +149,9 @@ func TestMergeRankActsPreservesCachedActsMissingFromRecentUpdates(t *testing.T) 
 	}
 	if got[0].SeasonID != "current-act" || got[0].PeakRank != 18 {
 		t.Fatalf("preferred current act was not retained: %+v", got[0])
+	}
+	if got[0].Games != 18 || got[0].Wins != 10 {
+		t.Fatalf("richer cached counts were not merged: %+v", got[0])
 	}
 	if got[1].SeasonID != "previous-act" || got[1].PeakRank != 15 {
 		t.Fatalf("cached previous act was lost: %+v", got[1])

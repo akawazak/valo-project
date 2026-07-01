@@ -1,8 +1,0 @@
-# test log
-getenv GOTMPDIR
-stat C:\Users\ahais\AppData\Local\Temp\TestSyncManagerStartFetchesAndCachesMatch3054272257\001\valovault
-stat C:\Users\ahais\AppData\Local\Temp\TestSyncManagerStartFetchesAndCachesMatch3054272257\001
-stat C:\Users\ahais\AppData\Local\Temp\TestSyncManagerStartFetchesAndCachesMatch3054272257\001\valovault\raw_matches
-stat C:\Users\ahais\AppData\Local\Temp\TestSyncManagerStartFetchesAndCachesMatch3054272257\001\valovault
-open C:\Users\ahais\AppData\Local\Temp\TestSyncManagerStartFetchesAndCachesMatch3054272257\001\valovault\raw_matches\match-1.json
-open C:\Users\ahais\AppData\Local\Temp

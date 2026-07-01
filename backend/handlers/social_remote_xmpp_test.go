@@ -52,6 +52,23 @@ func TestXMPPSessionPreservesRecentConnectionError(t *testing.T) {
 	}
 }
 
+func TestXMPPSnapshotCountsAvailableAwayPresenceOnline(t *testing.T) {
+	session := &xmppSocialSession{
+		state: "live",
+		roster: map[string]xmppRosterItem{
+			"friend": {PUUID: "friend", GameName: "Friend", GameTag: "EUW"},
+		},
+		presences: map[string]chatPresenceEntry{
+			"friend": {Puuid: "friend", State: "away"},
+		},
+	}
+
+	snapshot := session.snapshot()
+	if snapshot.OnlineCount != 1 || len(snapshot.Presences) != 1 {
+		t.Fatalf("available presence was not counted online: %#v", snapshot)
+	}
+}
+
 func TestRemoteOnlySocialRequiresOAuthHeaders(t *testing.T) {
 	request := httptest.NewRequest("GET", "/v1/social?remoteOnly=true", nil)
 	response := httptest.NewRecorder()

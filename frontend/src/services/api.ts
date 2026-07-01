@@ -697,6 +697,7 @@ export interface ProfilePeakRank {
     competitiveTier: number;
     tierName: string;
     seasonId: string;
+    reachedAt?: number;
 }
 
 export interface ProfileAccountSummary {
@@ -739,6 +740,7 @@ export interface ProfileSeasonSummaryResponse {
     puuid: string;
     region: string;
     queue: string;
+    seasonId: string;
     summary: ProfileSeasonSummary | null;
 }
 
@@ -929,8 +931,10 @@ export async function getProfileOverview(
 export async function getProfileSeasonSummary(
     queue: string,
     opts: { puuid?: string; region?: string } = {},
+    seasonId?: string,
 ): Promise<ProfileSeasonSummaryResponse> {
     const params = new URLSearchParams({ queue });
+    if (seasonId) params.set("seasonId", seasonId);
     appendProfileParams(params, opts);
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/season-summary?${params.toString()}`);
     if (!response.ok) {

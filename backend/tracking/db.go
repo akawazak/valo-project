@@ -282,13 +282,6 @@ func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
 	return nil
 }
 
-// RawMatchesDir returns the on-disk directory where InsertMatchDetails
-// persists raw Riot JSON. Exposed so tests and the sync worker can
-// mirror the same path the API responses point at.
-func RawMatchesDir(appConfigDir string) string {
-	return filepath.Join(appConfigDir, "valovault", "raw_matches")
-}
-
 // IsMatchCached reports whether the given matchID already has a row
 // in `matches` (regardless of age). Used by the sync worker to skip
 // Riot detail fetches for matches we already have.
@@ -301,15 +294,11 @@ func IsMatchCached(db *sql.DB, matchID string) (bool, error) {
 	return n > 0, nil
 }
 
-// InsertMatchDetails persists a raw Riot MatchDetailsResponse to
-// <appConfigDir>/valovault/raw_matches/<matchID>.json AND inserts/updates
-// the `matches` and `match_players` rows parsed from it.
-//
-// The raw JSON is written to disk BEFORE the DB transaction so a
-// partial disk failure doesn't leave us with DB rows pointing at a
-// missing file. Insertion is atomic per (match, players) tuple.
-// Existing rows for the same matchID are overwritten.
-func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []byte, resolvedNames map[string]struct{ Name, Tag string }) error {
+// InsertMatchDetails parses a Riot MatchDetailsResponse and atomically
+// inserts/updates the normalized match and player rows. The raw response is
+// intentionally not duplicated on disk; every field used by the app is served
+// from these tables.
+func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte, resolvedNames map[string]struct{ Name, Tag string }) error {
 	if matchID == "" {
 		return fmt.Errorf("tracking: InsertMatchDetails: matchID is required")
 	}
@@ -320,23 +309,11 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 		return fmt.Errorf("tracking: InsertMatchDetails: raw is empty")
 	}
 
-	// 1. Persist raw JSON to disk.
-	rawDir := RawMatchesDir(appConfigDir)
-	if err := os.MkdirAll(rawDir, 0o755); err != nil {
-		return fmt.Errorf("tracking: mkdir raw_matches: %w", err)
-	}
-	rawPath := filepath.Join(rawDir, matchID+".json")
-	if err := os.WriteFile(rawPath, raw, 0o644); err != nil {
-		return fmt.Errorf("tracking: write raw json: %w", err)
-	}
-
-	// 2. Parse the raw JSON.
 	parsed, err := parseMatchDetails(raw, puuid, resolvedNames)
 	if err != nil {
 		return fmt.Errorf("tracking: parse match details: %w", err)
 	}
 
-	// 3. INSERT OR REPLACE both tables in a single transaction.
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("tracking: begin tx: %w", err)
@@ -365,7 +342,7 @@ func InsertMatchDetails(db *sql.DB, appConfigDir, matchID, puuid string, raw []b
 		boolToInt(parsed.Match.BlueWins),
 		parsed.Match.BlueRoundsWon,
 		parsed.Match.RedRoundsWon,
-		rawPath,
+		"",
 		cachedAt,
 		puuid,
 	)
@@ -648,6 +625,23 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 		return []MatchSummary{}, nil
 	}
 
+	seasonIDs := ResolveSeasonIDs(seasonID)
+	var seasonClause string
+	var seasonArgs []any
+	if len(seasonIDs) == 0 {
+		seasonClause = "? = ''"
+		seasonArgs = []any{seasonID}
+	} else {
+		// Accept both short code and UUID for the same act.
+		placeholders := strings.Repeat("?,", len(seasonIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		seasonClause = "m.seasonId IN (" + placeholders + ")"
+		seasonArgs = make([]any, 0, len(seasonIDs))
+		for _, id := range seasonIDs {
+			seasonArgs = append(seasonArgs, id)
+		}
+	}
+
 	rows, err := db.Query(`
 		SELECT m.matchID, m.queueID, m.mapID, m.gameMode, m.gameStartMillis,
 		       m.gameLengthMillis, m.seasonId, m.isRanked, m.blueWins, m.blueRoundsWon, m.redRoundsWon,
@@ -660,10 +654,10 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 		LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
 		WHERE mp.subject = ?
 		  AND (? = '' OR LOWER(m.queueID) = LOWER(?))
-		  AND (? = '' OR m.seasonId = ?)
+		  AND `+seasonClause+`
 		ORDER BY m.gameStartMillis DESC, m.matchID ASC
 		LIMIT ? OFFSET ?
-	`, strings.ToLower(puuid), queue, queue, seasonID, seasonID, end-start, start)
+	`, append([]any{strings.ToLower(puuid), queue, queue}, append(seasonArgs, end-start, start)...)...)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: ListCachedMatches query: %w", err)
 	}
@@ -740,7 +734,8 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 		rows *sql.Rows
 		err  error
 	)
-	if seasonID == "" {
+	seasonIDs := ResolveSeasonIDs(seasonID)
+	if len(seasonIDs) == 0 {
 		rows, err = db.Query(`
 			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
 			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
@@ -749,13 +744,21 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
 		`, strings.ToLower(puuid))
 	} else {
+		// Accept both the short Riot code (e7a3) and the UUID
+		// (4401f9fd-...) so the frontend can query in UUID form.
+		placeholders := strings.Repeat("?,", len(seasonIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := []any{strings.ToLower(puuid)}
+		for _, id := range seasonIDs {
+			args = append(args, id)
+		}
 		rows, err = db.Query(`
 			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
 			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
 			FROM rr_snapshots r
-			WHERE r.puuid = ? AND r.seasonId = ?
+			WHERE r.puuid = ? AND r.seasonId IN (`+placeholders+`)
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
-		`, strings.ToLower(puuid), seasonID)
+		`, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetRRSnapshots query: %w", err)
@@ -817,6 +820,47 @@ func RankActsFromSnapshots(snapshots []RRSnapshot) []RankActSummary {
 		acts = append(acts, state.summary)
 		if len(acts) == 8 {
 			break
+		}
+	}
+	return acts
+}
+
+// MergeRankActEvidence combines partial act history without letting a recent,
+// truncated Riot response erase richer data already preserved locally.
+// Source order is significant: earlier sources retain authoritative final-rank
+// and RR values, while later sources may contribute fuller game/win counts and
+// a higher proven peak.
+func MergeRankActEvidence(sources ...[]RankActSummary) []RankActSummary {
+	acts := make([]RankActSummary, 0)
+	indexBySeason := make(map[string]int)
+	for _, source := range sources {
+		for _, incoming := range source {
+			if strings.TrimSpace(incoming.SeasonID) == "" {
+				continue
+			}
+			key := NormalizeSeasonID(incoming.SeasonID)
+			index, exists := indexBySeason[key]
+			if !exists {
+				incoming.SeasonID = key
+				indexBySeason[key] = len(acts)
+				acts = append(acts, incoming)
+				continue
+			}
+
+			current := &acts[index]
+			if incoming.Games > current.Games {
+				current.Games = incoming.Games
+				current.Wins = incoming.Wins
+			}
+			if incoming.PeakRank > current.PeakRank {
+				current.PeakRank = incoming.PeakRank
+			}
+			if current.FinalRank == 0 && incoming.FinalRank > 0 {
+				current.FinalRank = incoming.FinalRank
+			}
+			if current.RankedRating == 0 && incoming.RankedRating > 0 {
+				current.RankedRating = incoming.RankedRating
+			}
 		}
 	}
 	return acts
@@ -1184,36 +1228,23 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview act history: %w", err)
 	}
-	out.RankActs = RankActsFromSnapshots(allSnapshots)
+	snapshotActs := RankActsFromSnapshots(allSnapshots)
 	persistedActs, err := GetCachedRankActs(db, puuid)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview persisted act history: %w", err)
-	}
-	seenActs := make(map[string]struct{}, len(out.RankActs))
-	for _, act := range out.RankActs {
-		seenActs[act.SeasonID] = struct{}{}
-	}
-	for _, act := range persistedActs {
-		if _, exists := seenActs[act.SeasonID]; !exists {
-			out.RankActs = append(out.RankActs, act)
-			seenActs[act.SeasonID] = struct{}{}
-		}
 	}
 	cachedActs, err := RankActsFromCachedMatches(db, puuid)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetOverview cached act history: %w", err)
 	}
-	for _, act := range cachedActs {
-		if _, exists := seenActs[act.SeasonID]; !exists {
-			out.RankActs = append(out.RankActs, act)
-		}
-	}
+	out.RankActs = MergeRankActEvidence(snapshotActs, persistedActs, cachedActs)
 	for _, act := range out.RankActs {
 		if act.PeakRank > out.PeakRank.CompetitiveTier {
 			out.PeakRank.CompetitiveTier = act.PeakRank
 			out.PeakRank.SeasonID = act.SeasonID
 		}
 	}
+	HydratePeakRankEvidence(db, puuid, &out.PeakRank)
 
 	summary, err := GetSeasonSummary(db, puuid, out.CurrentSeasonID, "competitive")
 	if err != nil {
@@ -1225,6 +1256,34 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		out.CurrentRank.NumberOfWins = summary.Wins
 	}
 	return out, nil
+}
+
+// HydratePeakRankEvidence adds the exact promotion timestamp only when an RR
+// update proves the account crossed into its recorded peak tier. A match that
+// merely observes the tier is not enough to claim when it was first reached.
+func HydratePeakRankEvidence(db *sql.DB, puuid string, peak *PeakRank) {
+	if db == nil || peak == nil || peak.CompetitiveTier <= 0 {
+		return
+	}
+	peak.ReachedAt = 0
+	var seasonID string
+	var reachedAt int64
+	err := db.QueryRow(`
+		SELECT seasonId, matchStartTime
+		FROM rr_snapshots
+		WHERE puuid = ?
+		  AND tierAfter = ?
+		  AND tierBefore < tierAfter
+		ORDER BY matchStartTime ASC, matchID ASC
+		LIMIT 1
+	`, strings.ToLower(puuid), peak.CompetitiveTier).Scan(&seasonID, &reachedAt)
+	if err != nil {
+		return
+	}
+	peak.ReachedAt = reachedAt
+	if seasonID != "" {
+		peak.SeasonID = seasonID
+	}
 }
 
 // GetSeasonSummary aggregates one queue within the selected act. "all"
@@ -1243,6 +1302,24 @@ func GetSeasonSummary(db *sql.DB, puuid, seasonID, queue string) (*SeasonSummary
 		hits    int
 		hshots  int
 	)
+	seasonIDs := ResolveSeasonIDs(seasonID)
+	var seasonClause string
+	var seasonArgs []any
+	if len(seasonIDs) == 0 {
+		seasonClause = "? = ''"
+		seasonArgs = []any{seasonID}
+	} else {
+		// Accept both short code and UUID for the same act.
+		placeholders := strings.Repeat("?,", len(seasonIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		seasonClause = "m.seasonId IN (" + placeholders + ")"
+		seasonArgs = make([]any, 0, len(seasonIDs))
+		for _, id := range seasonIDs {
+			seasonArgs = append(seasonArgs, id)
+		}
+	}
+
+	args := append([]any{strings.ToLower(puuid), queue, queue, queue}, seasonArgs...)
 	err := db.QueryRow(`
 		SELECT
 		    COUNT(*),
@@ -1260,8 +1337,8 @@ func GetSeasonSummary(db *sql.DB, puuid, seasonID, queue string) (*SeasonSummary
 		  AND (? = 'all'
 		       OR (? = 'competitive' AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive'))
 		       OR LOWER(m.queueID) = ?)
-		  AND (? = '' OR m.seasonId = ?)
-	`, strings.ToLower(puuid), queue, queue, queue, seasonID, seasonID).
+		  AND `+seasonClause+`
+	`, args...).
 		Scan(&matches, &wins, &kills, &deaths, &assists, &hits, &hshots)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("tracking: GetSeasonSummary: %w", err)

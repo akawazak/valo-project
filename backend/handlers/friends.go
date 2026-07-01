@@ -63,6 +63,15 @@ type lockfileCache struct {
 
 var riotLockfileCache = &lockfileCache{}
 
+var localChatHTTPClient = &http.Client{
+	Timeout: 4 * time.Second,
+	Transport: &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+	},
+}
+
 type riotClientConfigResponse struct {
 	Chat struct {
 		Affinities map[string]string `json:"affinities"`
@@ -231,16 +240,9 @@ func (h *Handler) fetchLocalSocialStatus() (SocialStatusResponse, error) {
 	}
 
 	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("riot:%s", password)))
-	client := &http.Client{
-		Timeout: 4 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
 	// 1) Friends list.
 	friendsURL := fmt.Sprintf("https://127.0.0.1:%s/chat/v4/friends", port)
-	friends, err := doLocalChatRequest(client, friendsURL, auth, func(body []byte) (localFriendsResponse, error) {
+	friends, err := doLocalChatRequest(localChatHTTPClient, friendsURL, auth, func(body []byte) (localFriendsResponse, error) {
 		var out localFriendsResponse
 		err := json.Unmarshal(body, &out)
 		return out, err
@@ -251,7 +253,7 @@ func (h *Handler) fetchLocalSocialStatus() (SocialStatusResponse, error) {
 
 	// 2) Presences (may include the local player; we'll filter).
 	presencesURL := fmt.Sprintf("https://127.0.0.1:%s/chat/v4/presences", port)
-	presences, err := doLocalChatRequest(client, presencesURL, auth, func(body []byte) (localPresencesResponse, error) {
+	presences, err := doLocalChatRequest(localChatHTTPClient, presencesURL, auth, func(body []byte) (localPresencesResponse, error) {
 		var out localPresencesResponse
 		err := json.Unmarshal(body, &out)
 		return out, err

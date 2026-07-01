@@ -70,12 +70,24 @@ func (h *Handler) GetParty(w http.ResponseWriter, r *http.Request) {
 			response, err = h.fetchPartyResponse(local, "local")
 		}
 	}
+	// Some valid OAuth sessions can query party state but still report no
+	// party. When the same account is actively running in the Riot client,
+	// verify that result locally before declaring the player solo.
+	if err == nil && source == "remote" && response.Phase == "none" {
+		if local := h.localClientForPuuid(val.Player.Uuid); local != nil {
+			if localResponse, localErr := h.fetchPartyResponse(local, "local"); localErr == nil && localResponse.Phase != "none" {
+				response = localResponse
+				source = "local"
+			}
+		}
+	}
 	if err != nil {
 		slog.Warn("party refresh failed",
 			"source", source,
 			"region", val.Region,
 			"shard", val.Shard,
 			"puuid_length", len(val.Player.Uuid),
+			"client_version", val.Header.Get("X-Riot-ClientVersion"),
 			"reason", riotFailureReason(err))
 		h.returnAny(w, PartyResponse{Phase: "error", Source: source, Error: err.Error()})
 		return

@@ -90,6 +90,14 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
+	// Riot's live APIs emit short codes ("e7a3"); valorant-api.com returns
+	// full UUIDs ("4401f9fd-..."). Normalize both CurrentSeasonID and every
+	// act's SeasonID so the frontend's metadata lookup actually matches.
+	overview.CurrentSeasonID = tracking.NormalizeSeasonID(overview.CurrentSeasonID)
+	overview.PeakRank.SeasonID = tracking.NormalizeSeasonID(overview.PeakRank.SeasonID)
+	for i := range overview.RankActs {
+		overview.RankActs[i].SeasonID = tracking.NormalizeSeasonID(overview.RankActs[i].SeasonID)
+	}
 	if len(overview.RankActs) > 0 || len(overview.LastDeltas) > 0 {
 		overview.RankSource = "cache"
 	}
@@ -99,6 +107,8 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 		overview.RankSource = "live"
 		overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
 	}
+	tracking.HydratePeakRankEvidence(db, puuid, &overview.PeakRank)
+	overview.PeakRank.SeasonID = tracking.NormalizeSeasonID(overview.PeakRank.SeasonID)
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
@@ -126,6 +136,7 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *
 			"region", val.Region,
 			"shard", val.Shard,
 			"puuid_length", len(val.Player.Uuid),
+			"client_version", val.Header.Get("X-Riot-ClientVersion"),
 			"player_mmr", riotFailureReason(err),
 			"competitive_updates", riotFailureReason(fallbackErr))
 		return fmt.Errorf("rank history unavailable: player MMR failed (%s); competitive updates failed (%s)",
@@ -274,20 +285,8 @@ func isCompetitiveUpdatesEnd(err error) bool {
 }
 
 func mergeRankActs(preferred, fallback []tracking.RankActSummary, currentSeasonID string) []tracking.RankActSummary {
-	acts := make([]tracking.RankActSummary, 0, len(preferred)+len(fallback))
-	seen := make(map[string]struct{}, len(preferred)+len(fallback))
-	for _, source := range [][]tracking.RankActSummary{preferred, fallback} {
-		for _, act := range source {
-			if act.SeasonID == "" {
-				continue
-			}
-			if _, exists := seen[act.SeasonID]; exists {
-				continue
-			}
-			seen[act.SeasonID] = struct{}{}
-			acts = append(acts, act)
-		}
-	}
+	acts := tracking.MergeRankActEvidence(preferred, fallback)
+	currentSeasonID = tracking.NormalizeSeasonID(currentSeasonID)
 	sort.SliceStable(acts, func(i, j int) bool {
 		if acts[i].SeasonID == currentSeasonID {
 			return true
@@ -328,10 +327,12 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	latest := live.LatestCompetitiveUpdate
 	seasonID := overview.CurrentSeasonID
 	if seasonID == "" {
-		seasonID = latest.SeasonID
+		// Riot's LatestCompetitiveUpdate.SeasonID is a short code; promote to
+		// the UUID form so the SeasonalInfoBySeasonID lookup below matches.
+		seasonID = tracking.NormalizeSeasonID(latest.SeasonID)
 		overview.CurrentSeasonID = seasonID
 	}
-	if latest.SeasonID == seasonID && latest.TierAfterUpdate > 0 {
+	if latest.SeasonID != "" && tracking.NormalizeSeasonID(latest.SeasonID) == seasonID && latest.TierAfterUpdate > 0 {
 		overview.CurrentRank.CompetitiveTier = latest.TierAfterUpdate
 		overview.CurrentRank.RankedRating = latest.RankedRatingAfterUpdate
 	}
@@ -401,7 +402,9 @@ func (h *Handler) GetRRHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	seasonID := strings.TrimSpace(r.URL.Query().Get("seasonId"))
+	// Accept either the short Riot code or the UUID form so the frontend
+	// can use either depending on what it has on hand.
+	seasonID := tracking.NormalizeSeasonID(strings.TrimSpace(r.URL.Query().Get("seasonId")))
 
 	db, err := h.trackingDB()
 	if err != nil {
@@ -423,7 +426,7 @@ func (h *Handler) GetRRHistory(w http.ResponseWriter, r *http.Request) {
 		if seasonID != "" {
 			filtered := snaps[:0]
 			for _, snapshot := range snaps {
-				if snapshot.SeasonID == seasonID {
+				if snapshot.SeasonID == seasonID || snapshot.SeasonID == strings.TrimSpace(r.URL.Query().Get("seasonId")) {
 					filtered = append(filtered, snapshot)
 				}
 			}
@@ -495,6 +498,7 @@ func (h *Handler) GetSeasonSummary(w http.ResponseWriter, r *http.Request) {
 	if queue == "" {
 		queue = "competitive"
 	}
+	seasonID := strings.TrimSpace(r.URL.Query().Get("seasonId"))
 	db, err := h.trackingDB()
 	if err != nil {
 		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
@@ -505,17 +509,21 @@ func (h *Handler) GetSeasonSummary(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
-	summary, err := tracking.GetSeasonSummary(db, puuid, overview.CurrentSeasonID, queue)
+	if seasonID == "" {
+		seasonID = overview.CurrentSeasonID
+	}
+	summary, err := tracking.GetSeasonSummary(db, puuid, seasonID, queue)
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
 	h.returnAny(w, struct {
-		Puuid   string                  `json:"puuid"`
-		Region  string                  `json:"region"`
-		Queue   string                  `json:"queue"`
-		Summary *tracking.SeasonSummary `json:"summary"`
-	}{puuid, region, queue, summary})
+		Puuid    string                  `json:"puuid"`
+		Region   string                  `json:"region"`
+		Queue    string                  `json:"queue"`
+		SeasonID string                  `json:"seasonId"`
+		Summary  *tracking.SeasonSummary `json:"summary"`
+	}{puuid, region, queue, seasonID, summary})
 }
 
 // GetMapStats — `GET /v1/profile/map-stats` (design doc §2.4).
@@ -559,14 +567,30 @@ func (h *Handler) GetMapStats(w http.ResponseWriter, r *http.Request) {
 // match-history response. Matches db.go's `subject` index.
 func countCachedMatches(db *sql.DB, puuid, queue, seasonID string) (int, error) {
 	var n int
+	seasonIDs := tracking.ResolveSeasonIDs(seasonID)
+	var seasonClause string
+	var seasonArgs []any
+	if len(seasonIDs) == 0 {
+		seasonClause = "? = ''"
+		seasonArgs = []any{seasonID}
+	} else {
+		placeholders := strings.Repeat("?,", len(seasonIDs))
+		placeholders = placeholders[:len(placeholders)-1]
+		seasonClause = "m.seasonId IN (" + placeholders + ")"
+		seasonArgs = make([]any, 0, len(seasonIDs))
+		for _, id := range seasonIDs {
+			seasonArgs = append(seasonArgs, id)
+		}
+	}
+	args := append([]any{strings.ToLower(puuid), queue, queue}, seasonArgs...)
 	err := db.QueryRow(`
 		SELECT COUNT(*)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
 		WHERE mp.subject = ?
 		  AND (? = '' OR LOWER(m.queueID) = LOWER(?))
-		  AND (? = '' OR m.seasonId = ?)
-	`, strings.ToLower(puuid), queue, queue, seasonID, seasonID).Scan(&n)
+		  AND `+seasonClause+`
+	`, args...).Scan(&n)
 	return n, err
 }
 

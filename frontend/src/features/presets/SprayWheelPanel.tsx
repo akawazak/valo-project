@@ -113,7 +113,7 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
 
             {activeSlot && createPortal(
                 <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleCloseModal()}>
-                    <div className="unified-modal-container" style={{ maxWidth: '780px', height: 'min(80vh, 560px)' }}>
+                    <div className="unified-modal-container spray-picker-modal">
                         {/* Header */}
                         <div className="unified-modal-header">
                             <div className="unified-modal-title-wrap">
@@ -126,10 +126,10 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                         </div>
 
                         {/* Split Content */}
-                        <div className="unified-modal-content" style={{ gridTemplateColumns: '260px 1fr' }}>
+                        <div className="unified-modal-content spray-picker-modal-content">
                             {/* Left Pane: Preview and Clear Actions */}
-                            <div className="unified-modal-left" style={{ padding: '1.25rem' }}>
-                                <div className="unified-modal-preview-box" style={{ aspectRatio: '1 / 1' }}>
+                            <div className="unified-modal-left spray-picker-modal-left">
+                                <div className="unified-modal-preview-box spray-picker-modal-preview">
                                     <div className="unified-modal-card-tier-line" style={{ backgroundColor: 'var(--accent)' }} />
                                     {slotSprayMap[activeSlot.id] ? (
                                         <img
@@ -139,7 +139,7 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                                             style={{ maxHeight: '70%', maxWidth: '70%', objectFit: 'contain' }}
                                         />
                                     ) : (
-                                        <div style={{ fontSize: '3rem', opacity: 0.15 }}>🚫</div>
+                                        <div className="spray-picker-empty" aria-label="Empty spray slot">—</div>
                                     )}
                                 </div>
 
@@ -149,7 +149,7 @@ export default function SprayWheelPanel({ currentSprays, onUpdateSprays }: Spray
                                 </div>
 
                                 {slotSprayMap[activeSlot.id] && (
-                                    <div style={{ marginTop: 'auto', paddingTop: '1.25rem', width: '100%' }}>
+                                    <div className="spray-picker-clear-action">
                                         <button
                                             type="button"
                                             className="btn-tactical btn-tactical-ghost"

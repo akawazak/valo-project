@@ -298,9 +298,9 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 			})
 			continue
 		}
-		if productIsActive(entry.Product) || strings.EqualFold(entry.State, "online") {
-			onlineCount++
-		}
+		// Entries only remain in this map while XMPP reports them available.
+		// "away" and Riot Client presences may omit product metadata.
+		onlineCount++
 		normalized := normalizeChatPresence(entry, map[string]string{
 			puuid: firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid)),
 		})

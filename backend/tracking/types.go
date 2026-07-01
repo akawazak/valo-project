@@ -150,6 +150,7 @@ type PeakRank struct {
 	CompetitiveTier int    `json:"competitiveTier"`
 	TierName        string `json:"tierName"`
 	SeasonID        string `json:"seasonId"`
+	ReachedAt       int64  `json:"reachedAt,omitempty"`
 }
 
 // AccountSummary is the level + xp payload.

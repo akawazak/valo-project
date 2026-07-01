@@ -379,7 +379,7 @@
 
 .overviewTop {
     display: grid;
-    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    grid-template-columns: minmax(500px, 1.35fr) minmax(340px, 0.85fr);
     gap: 18px;
 }
 
@@ -527,6 +527,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 12px;
     padding: 16px 20px 12px;
     border-bottom: 1px solid var(--border);
@@ -535,6 +536,7 @@
 
 .panelTitleRow {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 10px;
     min-width: 0;
@@ -584,7 +586,7 @@
 /* ── Metric grid ── */
 .metricGrid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 1px;
     background: var(--border);
     border-radius: var(--radius-md);
@@ -1537,91 +1539,81 @@
     font-family: var(--font-mono);
 }
 
-/* ── Act history ── */
-.actList {
+/* ── Career peak ── */
+.peakCard {
+    min-height: 138px;
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    align-items: center;
+    gap: 14px 18px;
+    padding: clamp(14px, 2vw, 22px);
+    border: 1px solid rgba(var(--accent-rgb), 0.18);
+    border-radius: var(--radius-md);
+    background:
+        radial-gradient(circle at 12% 38%, rgba(var(--accent-rgb), 0.18), transparent 32%),
+        linear-gradient(115deg, var(--bg-elevated), var(--bg-surface));
+}
+
+.peakEmblem {
+    width: 82px;
+    height: 82px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(var(--accent-rgb), 0.2), rgba(var(--accent-rgb), 0.04) 62%, transparent 64%);
+    filter: drop-shadow(0 10px 18px rgba(var(--accent-rgb), 0.18));
+}
+
+.peakEmblem img {
+    width: 70px;
+    height: 70px;
+    object-fit: contain;
+}
+
+.peakCopy {
+    min-width: 0;
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 5px;
 }
 
-.rankNotice {
-    margin-bottom: 8px;
-    padding: 9px 10px;
-    border: 1px solid rgba(83, 180, 230, 0.28);
-    background: rgba(35, 125, 175, 0.1);
-    color: var(--text-secondary);
-    font-size: 0.72rem;
-    line-height: 1.45;
-}
-
-.actRow {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 12px 8px;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius-sm);
-    transition: background 0.15s ease;
-}
-
-.actRow:hover {
-    background: var(--surface-hover);
-}
-
-.actRowSelected {
-    border-color: rgba(var(--accent-rgb), 0.34);
-    background: rgba(var(--accent-rgb), 0.09);
-    box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.actRowLeft,
-.actRowRight {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.actRowLeft {
-    min-width: 0;
-}
-
-.actRowRight {
-    flex: 0 0 auto;
-    text-align: right;
-}
-
-.actRowLeft strong,
-.actRowRight strong {
-    display: block;
-    font-size: 0.84rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    white-space: nowrap;
-}
-
-.actRowLeft span,
-.actRowRight span {
-    font-size: 0.7rem;
+.peakEyebrow,
+.peakAct span {
     color: var(--text-secondary);
     font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
-.actIcon {
-    width: 28px;
-    height: 28px;
-    object-fit: contain;
-    flex: 0 0 auto;
+.peakCopy strong {
+    color: var(--text-primary);
+    font-size: clamp(1.55rem, 2.4vw, 2.35rem);
+    line-height: 1;
+    letter-spacing: -0.04em;
 }
 
-.actIconPlaceholder {
-    border-radius: 50%;
-    background: var(--bg-overlay);
+.peakCopy > span:last-child {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.peakAct {
+    grid-column: 1 / -1;
+    max-width: none;
+    padding-top: 11px;
+    border-top: 1px solid var(--border);
+}
+
+.peakAct strong {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.35;
 }
 
 /* ── Stat colour tiers ── */
@@ -1719,25 +1711,21 @@
     .shell {
         padding: 18px 16px 40px;
     }
-    .rail {
-        grid-template-columns: 1fr;
-    }
-    .railAvatar {
-        left: 50%;
-        bottom: -38px;
-        transform: translateX(-50%);
-        width: 104px;
-        height: 104px;
-    }
-    .railBody {
-        text-align: center;
-        padding: 50px 18px 20px;
-    }
     .railName {
         font-size: 1.4rem;
     }
     .metricGrid {
         grid-template-columns: repeat(2, 1fr);
+    }
+    .peakCard {
+        flex-wrap: wrap;
+    }
+    .peakAct {
+        width: 100%;
+        max-width: none;
+        padding: 12px 0 0;
+        border-top: 1px solid var(--border);
+        border-left: 0;
     }
     .matchRow {
         grid-template-columns: 1fr;
@@ -1754,5 +1742,22 @@
     }
     .tabs {
         overflow-x: auto;
+    }
+}
+
+@media (max-width: 640px) {
+    .rail {
+        grid-template-columns: 1fr;
+    }
+    .railAvatar {
+        left: 50%;
+        bottom: -38px;
+        transform: translateX(-50%);
+        width: 104px;
+        height: 104px;
+    }
+    .railBody {
+        text-align: center;
+        padding: 50px 18px 20px;
     }
 }

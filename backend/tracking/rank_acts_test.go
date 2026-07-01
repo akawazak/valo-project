@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 )
 
@@ -158,6 +159,28 @@ func TestRankActsCacheRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMergeRankActEvidencePreservesAuthorityAndAddsCompleteness(t *testing.T) {
+	recent := []RankActSummary{{
+		SeasonID: "v26a3", Games: 5, Wins: 4, RankedRating: 14, PeakRank: 21, FinalRank: 21,
+	}}
+	persisted := []RankActSummary{{
+		SeasonID: "ce2783e8-44fc-dd48-3da3-33b5ba6c4a22",
+		Games:    18, Wins: 10, RankedRating: 0, PeakRank: 20, FinalRank: 20,
+	}}
+
+	got := MergeRankActEvidence(recent, persisted)
+	if len(got) != 1 {
+		t.Fatalf("merged acts = %+v, want one act", got)
+	}
+	act := got[0]
+	if act.Games != 18 || act.Wins != 10 {
+		t.Fatalf("richer counts were not retained: %+v", act)
+	}
+	if act.RankedRating != 14 || act.FinalRank != 21 || act.PeakRank != 21 {
+		t.Fatalf("authoritative recent rank state was overwritten: %+v", act)
+	}
+}
+
 func TestOverviewKeepsOlderRankOutOfCurrentAct(t *testing.T) {
 	db, err := OpenTrackingDB(t.TempDir())
 	if err != nil {
@@ -208,5 +231,30 @@ func TestOverviewKeepsOlderRankOutOfCurrentAct(t *testing.T) {
 	}
 	if overview.PeakRank.CompetitiveTier != 16 {
 		t.Fatalf("historical peak was lost: %+v", overview.PeakRank)
+	}
+	if overview.PeakRank.ReachedAt != 100 || overview.PeakRank.SeasonID != "previous-act" {
+		t.Fatalf("peak promotion evidence = %+v, want previous-act at 100", overview.PeakRank)
+	}
+}
+
+func TestHydratePeakRankEvidenceDoesNotInventDateFromObservedTier(t *testing.T) {
+	db, err := OpenTrackingDB(filepath.Join(t.TempDir(), "tracking.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	peak := PeakRank{CompetitiveTier: 18, SeasonID: "known-act", ReachedAt: 999}
+	if _, err = db.Exec(`
+		INSERT INTO rr_snapshots
+			(puuid, matchID, seasonId, tierBefore, tierAfter, matchStartTime)
+		VALUES ('viewer', 'observed', 'known-act', 18, 18, 123)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	HydratePeakRankEvidence(db, "viewer", &peak)
+	if peak.ReachedAt != 0 || peak.SeasonID != "known-act" {
+		t.Fatalf("unproven date should be omitted: %+v", peak)
 	}
 }

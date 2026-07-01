@@ -18,7 +18,6 @@ import {
     type ProfileMatchDetails,
     type ProfileMatchSummary,
     type ProfileOverview,
-    type ProfileRankActSummary,
     type ProfileRRHistory,
     type ProfileSeasonSummary,
     type ProfileSyncStatus,
@@ -43,10 +42,12 @@ interface MapMeta {
     splash: string;
 }
 interface SeasonMeta {
+    uuid: string;
     name: string;
     parentUuid: string;
+    startTime: number;
+    isAct: boolean;
 }
-
 const RANK_GROUPS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
 const QUEUE_OPTIONS: Array<{ value: string; label: string }> = [
     { value: "", label: "All queues" },
@@ -100,11 +101,22 @@ function tierLabel(tier: number, fallback?: string): string {
 function rankIconUrl(tier: number, tierAssets: Map<number, { smallIcon: string }>): string | null {
     return tierAssets.get(tier)?.smallIcon || FALLBACK_RANK_ICON;
 }
-
 function seasonLabel(id: string, seasons: Record<string, SeasonMeta>): string {
-    const season = seasons[id.toLowerCase()];
-    if (!season) return id.slice(0, 8).toUpperCase();
-    const parent = seasons[season.parentUuid.toLowerCase()];
+    const key = (id || "").toLowerCase();
+    const season = seasons[key];
+    if (!season) {
+        // Show something more helpful than just an uppercase blob if the
+        // short code doesn't match — Riot codes like "e7a3" can be expanded
+        // by hand to "E7 A3" so the user knows it's a real act.
+        if (/^e?\d{1,2}a\d{1,2}$/.test(key)) {
+            return key.toUpperCase();
+        }
+        if (/^v\d{1,2}a\d{1,2}$/.test(key)) {
+            return key.toUpperCase();
+        }
+        return id;
+    }
+    const parent = season.parentUuid ? seasons[season.parentUuid.toLowerCase()] : undefined;
     return parent ? `${parent.name} · ${season.name}` : season.name;
 }
 
@@ -303,7 +315,6 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const [overview, setOverview] = useState<ProfileOverview | null>(null);
     const [seasonSummary, setSeasonSummary] = useState<ProfileSeasonSummary | null>(null);
     const [seasonQueue, setSeasonQueue] = useState("competitive");
-    const [selectedActId, setSelectedActId] = useState("");
     const [rrHistory, setRRHistory] = useState<ProfileRRHistory | null>(null);
     const [history, setHistory] = useState<ProfileMatchSummary[]>([]);
     const [total, setTotal] = useState(0);
@@ -333,6 +344,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
+    const historyRequestRef = useRef(0);
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
         setViewedProfile(profile);
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -391,17 +403,33 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                 setPlayerTitles(titles);
             })
             .catch((e) => console.warn("Failed to load player titles metadata", e));
-        fetch("https://valorant-api.com/v1/seasons")
+fetch("https://valorant-api.com/v1/seasons")
             .then((res) => res.json())
             .then((d) => {
                 if (cancelled) return;
                 const next: Record<string, SeasonMeta> = {};
+                // Build short-code aliases from `assetPath`
+                // (e.g. `Season_Episode7_Act3_DataAsset` → `e7a3`) so the
+                // UI can resolve Riot's compact SeasonID even when the
+                // backend hasn't normalised it (older builds, cached rows,
+                // locally-sourced data).
+                const shortRe = /Season_Episode([Vv]?\d+(?:-\d+)?)_Act(\d+)_DataAsset/;
                 for (const season of d.data || []) {
                     if (!season.uuid) continue;
-                    next[season.uuid.toLowerCase()] = {
+                    const meta: SeasonMeta = {
+                        uuid: season.uuid,
                         name: season.displayName || "Act",
                         parentUuid: season.parentUuid || "",
+                        startTime: Date.parse(season.startTime || "") || 0,
+                        isAct: Boolean(season.parentUuid),
                     };
+                    next[season.uuid.toLowerCase()] = meta;
+                    const match = season.assetPath?.match(shortRe);
+                    if (match) {
+                        const epRaw = match[1].toLowerCase().replace(/-/g, "");
+                        const shortCode = `${epRaw}a${match[2]}`.toLowerCase();
+                        next[shortCode] = meta;
+                    }
                 }
                 setSeasons(next);
             })
@@ -418,12 +446,32 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     }, []);
 
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
+    const loadHistory = useCallback(async () => {
+        const request = ++historyRequestRef.current;
+        if (!puuid) {
+            setHistory([]);
+            setTotal(0);
+            return;
+        }
+        setHistoryLoading(true);
+        try {
+            const matches = await getProfileMatchHistory(0, pageSize, queue || undefined, opts);
+            if (request !== historyRequestRef.current) return;
+            setHistory(matches.matches || []);
+            setTotal(matches.total || 0);
+            setDetails({});
+            setExpanded(new Set());
+        } catch (err) {
+            if (request === historyRequestRef.current) setError(cleanError(err));
+        } finally {
+            if (request === historyRequestRef.current) setHistoryLoading(false);
+        }
+    }, [opts, pageSize, puuid, queue]);
 
     const refresh = useCallback(async () => {
         if (!puuid) {
             setOverview(null);
             setSeasonSummary(null);
-            setSelectedActId("");
             setRRHistory(null);
             setHistory([]);
             setTotal(0);
@@ -443,13 +491,6 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
             ]);
             setOverview(ov);
             setSeasonSummary(ov.seasonSummary);
-            const availableActs = new Set((ov.rankActs || []).map((act) => act.seasonId));
-            if (ov.currentSeasonId) availableActs.add(ov.currentSeasonId);
-            setSelectedActId((current) =>
-                current && availableActs.has(current)
-                    ? current
-                    : ov.currentSeasonId || ov.rankActs?.[0]?.seasonId || "",
-            );
             setAgentStats(ag);
             setMapStats(mp);
             setSyncStatus(st);
@@ -465,7 +506,8 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     useEffect(() => {
         setDetails({});
         setExpanded(new Set());
-        setSelectedActId("");
+        setHistory([]);
+        setTotal(0);
     }, [puuid]);
 
     useEffect(() => {
@@ -473,41 +515,36 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     }, [refresh]);
 
     useEffect(() => {
-        if (!puuid || !selectedActId) {
+        void loadHistory();
+        return () => {
+            historyRequestRef.current += 1;
+        };
+    }, [loadHistory]);
+
+    useEffect(() => {
+        const currentSeasonId = overview?.currentSeasonId;
+        if (!puuid || !currentSeasonId) {
             setRRHistory(null);
-            setHistory([]);
-            setTotal(0);
             return;
         }
         let cancelled = false;
-        setHistoryLoading(true);
-        Promise.all([
-            getRRHistory(selectedActId, opts),
-            getProfileMatchHistory(0, pageSize, queue || undefined, opts, selectedActId),
-        ])
-            .then(([rr, matches]) => {
+        getRRHistory(currentSeasonId, opts)
+            .then((rr) => {
                 if (cancelled) return;
                 setRRHistory(rr);
-                setHistory(matches.matches || []);
-                setTotal(matches.total || 0);
-                setDetails({});
-                setExpanded(new Set());
             })
             .catch((err) => {
                 if (!cancelled) setError(cleanError(err));
-            })
-            .finally(() => {
-                if (!cancelled) setHistoryLoading(false);
             });
         return () => {
             cancelled = true;
         };
-    }, [opts, pageSize, puuid, queue, selectedActId]);
+    }, [opts, overview?.currentSeasonId, puuid]);
 
     useEffect(() => {
         if (!puuid) return;
         let cancelled = false;
-        getProfileSeasonSummary(seasonQueue, opts)
+        getProfileSeasonSummary(seasonQueue, opts, overview?.currentSeasonId)
             .then((response) => {
                 if (!cancelled) setSeasonSummary(response.summary);
             })
@@ -519,7 +556,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         return () => {
             cancelled = true;
         };
-    }, [opts, puuid, seasonQueue]);
+    }, [opts, overview?.currentSeasonId, puuid, seasonQueue]);
 
     const runSync = useCallback(
         async (manual: boolean) => {
@@ -544,6 +581,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                     pollMisses = 0;
                     setSyncStatus(st);
                     finalStatus = st;
+                    if (i === 0 || i % 3 === 2) await loadHistory();
                     if (!st.inFlight) break;
                 }
                 if (finalStatus?.lastError) {
@@ -552,13 +590,14 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                     showToast("Profile synced.");
                 }
                 await refresh();
+                await loadHistory();
             } catch (err) {
                 setError(cleanError(err));
             } finally {
                 setSyncing(false);
             }
         },
-        [opts, puuid, refresh, showToast],
+        [loadHistory, opts, puuid, refresh, showToast],
     );
 
     // Auto-sync on first visit if nothing is cached yet.
@@ -608,8 +647,12 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const peakRankLabel = tierLabel(peakTier, overview?.peakRank?.tierName);
     const currentRankIcon = rankIconUrl(currentTier, tierAssets);
     const summary = seasonSummary;
+    const identitySummary = overview?.seasonSummary;
     const isBusy = loading || syncing || !!syncStatus?.inFlight;
     const topAgentMeta = summary?.topAgentCharacterId ? agents[summary.topAgentCharacterId.toLowerCase()] : undefined;
+    const identityTopAgentMeta = identitySummary?.topAgentCharacterId
+        ? agents[identitySummary.topAgentCharacterId.toLowerCase()]
+        : undefined;
 
     const lastRRDelta = (() => {
         const d = overview?.lastDeltas?.[0];
@@ -624,22 +667,6 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         if (!id) return "";
         return seasonLabel(id, seasons);
     })();
-    const rankActs = useMemo<ProfileRankActSummary[]>(() => {
-        if (!overview) return [];
-        const acts = [...(overview.rankActs || [])];
-        if (overview.currentSeasonId && !acts.some((act) => act.seasonId === overview.currentSeasonId)) {
-            acts.unshift({
-                seasonId: overview.currentSeasonId,
-                wins: overview.currentRank.numberOfWins || 0,
-                games: overview.currentRank.numberOfGames || 0,
-                rankedRating: overview.currentRank.rankedRating || 0,
-                peakRank: overview.currentRank.competitiveTier || 0,
-                finalRank: overview.currentRank.competitiveTier || 0,
-            });
-        }
-        return acts;
-    }, [overview]);
-
     const mapLookup = useMemo(() => {
         const out: Record<string, { displayName: string; splash?: string }> = {};
         for (const [id, meta] of Object.entries(maps)) {
@@ -678,7 +705,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         );
     }
 
-    const heroBg = cardData?.wide || topAgentMeta?.full;
+    const heroBg = cardData?.wide || identityTopAgentMeta?.full;
     const viewedGameName = overview?.gameName || viewedProfile?.gameName || activeAccount?.gameName || "Unknown";
     const viewedTagLine = overview?.tagLine || viewedProfile?.tagLine || activeAccount?.tagLine || "";
 
@@ -686,9 +713,9 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         { label: "Rank", value: currentRankLabel, accent: true },
         { label: "Rating", value: currentTier >= 27 ? "MAX" : `${currentRR} RR` },
         { label: "Peak", value: peakRankLabel },
-        { label: "Win Rate", value: fmtPct(summary?.winrate) },
-        { label: "K/D", value: fmtRatio(summary?.avgKda) },
-        { label: "Matches", value: String(summary?.matches ?? 0) },
+        { label: "Win Rate", value: fmtPct(identitySummary?.winrate) },
+        { label: "K/D", value: fmtRatio(identitySummary?.avgKda) },
+        { label: "Matches", value: String(identitySummary?.matches ?? 0) },
     ];
 
     return (
@@ -706,8 +733,8 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                     >
                         <div className={s.railHeroScrim} />
                         <div className={s.railAvatar}>
-                            {topAgentMeta?.icon ? (
-                                <img src={topAgentMeta.icon} alt={topAgentMeta.name} className={s.railAvatarImg} />
+                            {identityTopAgentMeta?.icon ? (
+                                <img src={identityTopAgentMeta.icon} alt={identityTopAgentMeta.name} className={s.railAvatarImg} />
                             ) : cardData?.icon ? (
                                 <img src={cardData.icon} alt="Player Card" className={s.railAvatarImg} />
                             ) : (
@@ -798,7 +825,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                 <div className={s.overviewTop}>
                                     <Panel
                                         title="Season Averages"
-                                        subtitle="This act"
+                                        subtitle={episodeActLabel || "Current act"}
                                         headerRight={
                                             <div className={s.seasonQueueTabs} role="group" aria-label="Season average mode">
                                                 {SEASON_QUEUES.map((option) => (
@@ -824,20 +851,35 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                         </div>
                                     </Panel>
 
-                                    <Panel title="Act History" subtitle="Peak and final rank by act">
-                                        {overview?.rankError && !overview.rankActs?.length && (
-                                            <div className={s.rankNotice}>
-                                                Live history unavailable. {cleanError(overview.rankError)}
+                                    <Panel title="Career Peak" subtitle="Highest verified competitive tier">
+                                        <div className={s.peakCard}>
+                                            <div className={s.peakEmblem}>
+                                                <Image
+                                                    src={rankIconUrl(peakTier, tierAssets) || FALLBACK_RANK_ICON}
+                                                    alt=""
+                                                    width={78}
+                                                    height={78}
+                                                    unoptimized
+                                                />
                                             </div>
-                                        )}
-                                        <ActSummaryList
-                                            acts={rankActs}
-                                            currentSeasonId={overview?.currentSeasonId ?? ""}
-                                            selectedSeasonId={selectedActId}
-                                            tierAssets={tierAssets}
-                                            seasons={seasons}
-                                            onSelect={setSelectedActId}
-                                        />
+                                            <div className={s.peakCopy}>
+                                                <span className={s.peakEyebrow}>Personal best</span>
+                                                <strong>{peakRankLabel}</strong>
+                                                <span>
+                                                    {overview?.peakRank?.reachedAt
+                                                        ? `Reached ${fmtPeakDate(overview.peakRank.reachedAt)}`
+                                                        : "Peak date unavailable from verified RR updates"}
+                                                </span>
+                                            </div>
+                                            <div className={s.peakAct}>
+                                                <span>Recorded in</span>
+                                                <strong>
+                                                    {overview?.peakRank?.seasonId
+                                                        ? seasonLabel(overview.peakRank.seasonId, seasons)
+                                                        : "Career history"}
+                                                </strong>
+                                            </div>
+                                        </div>
                                     </Panel>
                                 </div>
 
@@ -848,7 +890,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
                                             ? rrHistory.source === "tier"
                                                 ? `${rrHistory.snapshots.length} ranked tier checkpoints · exact RR unavailable`
                                                 : `${rrHistory.snapshots.length} ranked games tracked`
-                                            : `${seasonLabel(selectedActId, seasons)} has no cached ranked progression`
+                                            : `${episodeActLabel || "Current act"} has no cached ranked progression`
                                     }
                                 >
                                     <RRHistoryChart
@@ -971,7 +1013,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
 
                                 <Panel
                                     title="Match History"
-                                    subtitle={`${seasonLabel(selectedActId, seasons)} · ${total} matches`}
+                                    subtitle={`${total} cached matches`}
                                     headerRight={
                                         <select
                                             className={`${s.select} ${s.pageSizeSelect}`}
@@ -1064,6 +1106,15 @@ function Metric({
             <span className={`${s.metricValue} ${tone}`}>{value}</span>
         </div>
     );
+}
+
+function fmtPeakDate(ms?: number): string {
+    if (!ms) return "";
+    return new Date(ms).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+    });
 }
 
 function PerformanceStat({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
@@ -1474,58 +1525,3 @@ function buildPartyGroups(players: ProfileMatchDetails["players"]) {
     return groups;
 }
 
-function ActSummaryList({
-    acts,
-    currentSeasonId,
-    selectedSeasonId,
-    tierAssets,
-    seasons,
-    onSelect,
-}: {
-    acts: ProfileRankActSummary[];
-    currentSeasonId: string;
-    selectedSeasonId: string;
-    tierAssets: Map<number, { smallIcon: string }>;
-    seasons: Record<string, SeasonMeta>;
-    onSelect: (seasonId: string) => void;
-}) {
-    if (!acts.length) {
-        return <div className={s.placeholder}>No competitive act data yet.</div>;
-    }
-    return (
-        <div className={s.actList}>
-            {acts.map((act) => {
-                const name = seasonLabel(act.seasonId, seasons);
-                const label = act.seasonId === currentSeasonId ? `Current · ${name}` : name;
-                const rank = act.finalRank || act.peakRank;
-                const winrate = act.games > 0 ? (act.wins / act.games) * 100 : 0;
-                const rankIcon = rankIconUrl(rank, tierAssets);
-                return (
-                    <button
-                        type="button"
-                        key={act.seasonId}
-                        className={`${s.actRow} ${act.seasonId === selectedSeasonId ? s.actRowSelected : ""}`}
-                        onClick={() => onSelect(act.seasonId)}
-                        aria-pressed={act.seasonId === selectedSeasonId}
-                    >
-                        <div className={s.actRowLeft}>
-                            {rankIcon ? (
-                                <Image src={rankIcon} alt={tierLabel(rank, "Rank")} width={28} height={28} unoptimized className={s.actIcon} />
-                            ) : (
-                                <div className={`${s.actIcon} ${s.actIconPlaceholder}`} />
-                            )}
-                            <div>
-                                <strong>{label}</strong>
-                                <span>{act.games} games · {act.wins} wins · {fmtPct(winrate)}</span>
-                            </div>
-                        </div>
-                        <div className={s.actRowRight}>
-                            <strong>{tierLabel(rank, "Rank")}</strong>
-                            <span>{act.rankedRating || 0} RR · Peak {tierLabel(act.peakRank, "Rank")}</span>
-                        </div>
-                    </button>
-                );
-            })}
-        </div>
-    );
-}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 
 interface AccountManagerModalProps {
@@ -33,6 +33,7 @@ export default function AccountManagerModal({
     const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
     const [bulkProgressCurrent, setBulkProgressCurrent] = useState(0);
     const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
+    const bulkCancelRef = useRef(false);
     const refreshTimeoutMs = 30_000;
 
     if (!isOpen) return null;
@@ -68,11 +69,13 @@ export default function AccountManagerModal({
         e.stopPropagation();
         const expiredAccounts = accounts.filter(isAccountTokenExpired);
         if (isBulkRefreshing || expiredAccounts.length === 0) return;
+        bulkCancelRef.current = false;
         setIsBulkRefreshing(true);
         setBulkProgressTotal(expiredAccounts.length);
         setBulkProgressCurrent(0);
 
         for (let i = 0; i < expiredAccounts.length; i++) {
+            if (bulkCancelRef.current) break;
             const acc = expiredAccounts[i];
             setBulkProgressCurrent(i + 1);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
@@ -88,6 +91,15 @@ export default function AccountManagerModal({
             } finally {
                 setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
             }
+        }
+        setIsBulkRefreshing(false);
+    };
+
+    const handleCancelRefreshAll = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        bulkCancelRef.current = true;
+        for (const acc of accounts) {
+            if (refreshingPuuids[acc.puuid]) onCancelRefresh(acc);
         }
         setIsBulkRefreshing(false);
     };
@@ -113,23 +125,29 @@ export default function AccountManagerModal({
                 <div className="account-manager-body">
                     <div className="account-manager-actions-row">
                         {accounts.length > 0 && accounts.filter(isAccountTokenExpired).length > 0 && (
-                            <button
-                                type="button"
-                                className={`btn-tactical btn-tactical-secondary btn-tactical-sm ${
-                                    isBulkRefreshing ? "refreshing" : ""
-                                }`}
-                                onClick={handleRefreshAllAccounts}
-                                disabled={isBulkRefreshing}
-                            >
-                                {isBulkRefreshing ? (
-                                    <>
-                                        <span>Refreshing ({bulkProgressCurrent}/{bulkProgressTotal})</span>
-                                        <span className="spinner-border spinner-border-sm ms-2" style={{ width: "12px", height: "12px" }} />
-                                    </>
-                                ) : (
-                                    `↻ Refresh Expired (${accounts.filter(isAccountTokenExpired).length})`
+                            <>
+                                <button
+                                    type="button"
+                                    className={`btn-tactical btn-tactical-secondary btn-tactical-sm ${
+                                        isBulkRefreshing ? "refreshing" : ""
+                                    }`}
+                                    onClick={handleRefreshAllAccounts}
+                                    disabled={isBulkRefreshing}
+                                >
+                                    {isBulkRefreshing
+                                        ? `Refreshing (${bulkProgressCurrent}/${bulkProgressTotal})`
+                                        : `↻ Refresh Expired (${accounts.filter(isAccountTokenExpired).length})`}
+                                </button>
+                                {isBulkRefreshing && (
+                                    <button
+                                        type="button"
+                                        className="btn-tactical btn-tactical-danger btn-tactical-sm"
+                                        onClick={handleCancelRefreshAll}
+                                    >
+                                        Cancel refresh
+                                    </button>
                                 )}
-                            </button>
+                            </>
                         )}
                         <button
                             type="button"

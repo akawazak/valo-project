@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,8 +23,18 @@ import (
 const clientPlatform = "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9"
 const riotClientAuthURL = "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
 
-var clientVersionCached string
-var versionOnce sync.Once
+// Current Riot client version (as of 2026-06-30). Hard-coded fallback in
+// case the valorant-api.com version endpoint is unreachable. Stale version
+// strings cause Riot APIs to reject requests with HTTP 400 BAD_PARAMETER,
+// so this fallback is updated regularly and the endpoint is retried on a
+// 30-minute TTL below.
+const fallbackRiotClientVersion = "release-13.00-shipping-32-4990475"
+
+var (
+	versionMu      sync.RWMutex
+	versionCached  = fallbackRiotClientVersion
+	versionFetched time.Time
+)
 
 type remoteAuthHeaders struct {
 	AccessToken       string
@@ -30,6 +44,9 @@ type remoteAuthHeaders struct {
 }
 
 func (h *Handler) SetLocalClient(val *valclient.ValClient) {
+	if val != nil {
+		val.Header.Set("X-Riot-ClientVersion", getRiotClientVersion())
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.Val != nil && h.Val != val {
@@ -38,26 +55,79 @@ func (h *Handler) SetLocalClient(val *valclient.ValClient) {
 	h.Val = val
 }
 
+// getRiotClientVersion returns the X-Riot-ClientVersion header value. It
+// fetches the current version from valorant-api.com (no key required) and
+// caches it for 30 minutes. The previous implementation cached once per
+// process via sync.Once: if the very first fetch failed (network blip at
+// startup, etc.) every subsequent request used a hard-coded 2024 fallback
+// until backend restart, and Riot APIs returned HTTP 400 BAD_PARAMETER
+// because the version was too old.
 func getRiotClientVersion() string {
-	versionOnce.Do(func() {
-		resp, err := http.Get("https://valorant-api.com/v1/version")
-		if err != nil {
-			clientVersionCached = "release-08.10-shipping-23-2512128"
-			return
-		}
-		defer resp.Body.Close()
-		var result struct {
-			Data struct {
-				RiotClientVersion string `json:"riotClientVersion"`
-			} `json:"data"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			clientVersionCached = "release-08.10-shipping-23-2512128"
-			return
-		}
-		clientVersionCached = result.Data.RiotClientVersion
-	})
-	return clientVersionCached
+	versionMu.RLock()
+	if !versionFetched.IsZero() && time.Since(versionFetched) < 30*time.Minute {
+		v := versionCached
+		versionMu.RUnlock()
+		return v
+	}
+	versionMu.RUnlock()
+
+	if v := readLocalRiotClientVersion(); v != "" {
+		versionMu.Lock()
+		versionCached = v
+		versionFetched = time.Now()
+		versionMu.Unlock()
+		return v
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://valorant-api.com/v1/version")
+	if err != nil {
+		slog.Warn("riot client version fetch failed; using fallback",
+			"err", err, "fallback", fallbackRiotClientVersion)
+		versionMu.Lock()
+		// Don't extend the cached timestamp — let the next call retry soon.
+		versionMu.Unlock()
+		return fallbackRiotClientVersion
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data struct {
+			RiotClientVersion string `json:"riotClientVersion"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil ||
+		strings.TrimSpace(result.Data.RiotClientVersion) == "" {
+		slog.Warn("riot client version decode failed; using fallback",
+			"err", err, "fallback", fallbackRiotClientVersion)
+		return fallbackRiotClientVersion
+	}
+
+	versionMu.Lock()
+	versionCached = result.Data.RiotClientVersion
+	versionFetched = time.Now()
+	versionMu.Unlock()
+	return versionCached
+}
+
+func readLocalRiotClientVersion() string {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(localAppData, "VALORANT", "Saved", "Logs", "ShooterGame.log"))
+	if err != nil {
+		return ""
+	}
+	return parseLocalRiotClientVersion(data)
+}
+
+func parseLocalRiotClientVersion(data []byte) string {
+	matches := regexp.MustCompile(`CI server version:\s+(release-\S+)`).FindAllSubmatch(data, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(matches[len(matches)-1][1]))
 }
 
 func (h *Handler) getClient(r *http.Request) (*valclient.ValClient, error) {

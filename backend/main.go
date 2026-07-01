@@ -32,33 +32,41 @@ func main() {
 
 	go func() {
 		slog.Info("waiting for valorant to start locally")
-		localPuuid := ""
+		var local *valclient.ValClient
+		failures := 0
 		for {
-			val, err := valclient.NewClient()
-			if err != nil {
-				if localPuuid != "" {
-					slog.Info("valorant local client disconnected", "err", err)
-					localPuuid = ""
-					h.SetTicker(nil)
-					h.SetLocalClient(nil)
+			if local == nil {
+				val, err := valclient.NewClient()
+				if err == nil {
+					local = val
+					failures = 0
+					slog.Info("valorant started locally", "puuid", val.Player.Uuid)
+					h.SetLocalClient(val)
+
+					ticker := tick.NewTicker(val)
+					h.SetTicker(ticker)
+					go ticker.Start()
 				}
-				time.Sleep(5 * time.Second)
+				time.Sleep(10 * time.Second)
 				continue
 			}
 
-			if val.Player != nil && val.Player.Uuid != localPuuid {
-				slog.Info("valorant started locally", "puuid", val.Player.Uuid)
-				localPuuid = val.Player.Uuid
-				h.SetLocalClient(val)
-
-				ticker := tick.NewTicker(val)
-				h.SetTicker(ticker)
-				go ticker.Start()
+			var auth valclient.AuthenticateResponse
+			if err := local.RunLocalRequest(http.MethodGet, "/entitlements/v1/token", nil, &auth); err != nil {
+				failures++
+				if failures >= 3 {
+					slog.Info("valorant local client disconnected", "err", err)
+					local.Close()
+					local = nil
+					failures = 0
+					h.SetTicker(nil)
+					h.SetLocalClient(nil)
+				}
 			} else {
-				val.Close()
+				failures = 0
 			}
 
-			time.Sleep(5 * time.Second)
+			time.Sleep(10 * time.Second)
 		}
 	}()
 

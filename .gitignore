@@ -2,7 +2,11 @@
 backend/*.exe
 backend/bin/
 backend/tmp/
+backend/.gocache*/
+backend/.codex-gocache/
+backend/backend/
 frontend/src-tauri/binaries/
+frontend/.playwright-cli/
 
 # Logs
 backend/log*.txt
