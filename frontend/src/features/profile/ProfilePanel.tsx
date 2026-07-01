@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 import { useData } from "@/context/DataContext";
 import {
@@ -1247,6 +1248,10 @@ function MatchRow({
     const partyNames = partyMembers
         .map((member) => member.gameName ? `${member.gameName}${member.tagLine ? `#${member.tagLine}` : ""}` : "Hidden player")
         .join(", ");
+    const partyPreviewNames = partyPreview
+        .map((member) => member.gameName || agents[member.characterId?.toLowerCase?.() || ""]?.name || "Hidden")
+        .join(", ");
+    const partyOverflow = partyMembers.length - partyPreview.length;
 
     return (
         <div className={`${s.matchWrap} ${expanded ? s.matchWrapExpanded : ""}`}>
@@ -1297,7 +1302,10 @@ function MatchRow({
                                                 />
                                             ) : <span key={member.subject} className={s.matchPartyDot} aria-hidden="true" />;
                                         })}
-                                        <small>{partyMembers.length} queued teammate{partyMembers.length === 1 ? "" : "s"}</small>
+                                        <small>
+                                            {partyPreviewNames}
+                                            {partyOverflow > 0 ? ` +${partyOverflow}` : ""}
+                                        </small>
                                     </span>
                                 )}
                             </div>
@@ -1356,11 +1364,11 @@ function MatchRow({
                                 {rrEarned}
                             </div>
                         </div>
-                    ) : (
+                    ) : match.isRanked ? (
                         <div className={s.matchTimeCell}>
-                            <span className={s.matchTime}>{match.isRanked ? "No RR change cached" : "Non-ranked match"}</span>
+                            <span className={s.matchTime}>No RR change cached</span>
                         </div>
-                    )}
+                    ) : null}
                 </div>
 
                 <span className={s.matchChevron} aria-hidden="true">
@@ -1368,16 +1376,44 @@ function MatchRow({
                 </span>
             </button>
 
-            {expanded && (
-                <div className={s.matchDetail}>
-                    {loading ? (
-                        <div className={s.placeholder}>Loading scoreboard…</div>
-                    ) : detail ? (
-                        <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} onViewProfile={onViewProfile} />
-                    ) : (
-                        <div className={s.placeholder}>No details cached for this match.</div>
-                    )}
-                </div>
+            {expanded && createPortal(
+                <div className={s.matchModalBackdrop} role="presentation" onMouseDown={onToggle}>
+                    <section
+                        className={s.matchModal}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={`${mapName} match details`}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <header
+                            className={s.matchModalHeader}
+                            style={mapMeta?.splash ? { backgroundImage: `url(${mapMeta.splash})` } : undefined}
+                        >
+                            <div className={s.matchModalHeaderShade} />
+                            <div className={s.matchModalHeading}>
+                                <span className={`${s.matchModalResult} ${resultClass}`}>{match.win ? "Victory" : "Defeat"}</span>
+                                <h2>{mapName}</h2>
+                                <p>{queueName} · {fmtLength(match.gameLengthMillis)} · {fmtDate(match.gameStartMillis)}</p>
+                            </div>
+                            <div className={s.matchModalScore}>
+                                <strong className={match.win ? s.winText : s.lossText}>{ownRounds}</strong>
+                                <span>:</span>
+                                <strong>{enemyRounds}</strong>
+                            </div>
+                            <button type="button" className={s.matchModalClose} onClick={onToggle} aria-label="Close match details">×</button>
+                        </header>
+                        <div className={s.matchModalBody}>
+                            {loading ? (
+                                <div className={s.placeholder}>Loading scoreboard…</div>
+                            ) : detail ? (
+                                <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} onViewProfile={onViewProfile} />
+                            ) : (
+                                <div className={s.placeholder}>No details cached for this match.</div>
+                            )}
+                        </div>
+                    </section>
+                </div>,
+                document.body,
             )}
         </div>
     );
@@ -1466,9 +1502,9 @@ function ScoreTeam({
             <table className={s.scoreTable}>
                 <thead>
                     <tr>
-                        <th>Agent</th>
+                        <th>Player</th>
                         <th>K/D/A</th>
-                        <th>ACS / ADR</th>
+                        <th>ACS</th>
                         <th>HS%</th>
                     </tr>
                 </thead>
@@ -1481,13 +1517,14 @@ function ScoreTeam({
                                 ? "You"
                                 : meta?.name || "Player";
                         const isMvp = mvpPlayer && mvpPlayer.characterId === p.characterId && mvpPlayer.teamId === p.teamId;
-                        const rankIcon = rankIconUrl(p.competitiveTier, tierAssets);
+                        const rankIcon = p.competitiveTier > 0 ? rankIconUrl(p.competitiveTier, tierAssets) : null;
                         const party = p.partyId ? partyGroups.get(p.partyId) : undefined;
                         return (
                             <tr
                                 key={`${p.characterId}-${idx}`}
                                 className={`${p.isLocal ? s.scoreLocal : ""} ${party ? s.scoreParty : ""}`}
                                 style={party ? { "--party-color": party.color } as CSSProperties : undefined}
+                                title={party ? `${party.label} · ${party.size} queued together` : undefined}
                             >
                                 <td>
                                     <span className={s.scorePlayer}>
@@ -1512,7 +1549,6 @@ function ScoreTeam({
                                                     </button>
                                                 ) : name}
                                                 {p.isLocal && <span className={s.viewingBadge}>VIEWING</span>}
-                                                {party && <span className={s.scorePartyBadge}>{party.label} · {party.size}</span>}
                                                 {isMvp && <span className={s.mvpBadge}>MVP</span>}
                                             </span>
                                             <small>{meta?.name || "Agent"}</small>
@@ -1538,7 +1574,7 @@ function ScoreTeam({
 }
 
 function buildPartyGroups(players: ProfileMatchDetails["players"]) {
-    const colors = ["#31d8b2", "#e9a84b", "#b47cff", "#55a9ff", "#ff6f91"];
+    const colors = ["#31d8b2", "#55a9ff", "#b47cff", "#ff6f91", "#7d8cff"];
     const counts = new Map<string, number>();
     for (const player of players) {
         if (player.partyId) counts.set(player.partyId, (counts.get(player.partyId) || 0) + 1);
