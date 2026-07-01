@@ -14,18 +14,18 @@ Releases are published at:
 
 Recommended build:
 
-- `VantaVault.exe`: run directly from anywhere.
+- `VantaVault-portable.exe`: run directly without installation.
 
 Optional installer:
 
-- NSIS setup executable from the latest release.
+- `VantaVault_*_x64-setup.exe`: per-user NSIS installer with auto-update support.
 
 ## Features
 
 - Skin and buddy preset saving.
 - Agent-specific preset assignment.
 - Optional auto-apply flow for selected agents.
-- Riot account connection through official Riot login plus pasted localhost redirect URL.
+- Riot account connection through a Riot-hosted sign-in window.
 - Multi-account switching.
 - Local persistent account storage.
 - Daily Store, Featured Bundle, Night Market, Accessories, VP, and RP display.
@@ -40,7 +40,11 @@ Connected Riot account sessions are mirrored in two places:
 - WebView `localStorage` for fast frontend access.
 - Local backend file storage at the app config directory under `valovault/accounts/accounts.json`.
 
-Riot OAuth access tokens expire. When a stored session expires, the app prompts you to reconnect that account instead of silently failing the storefront.
+Riot access tokens expire quickly. VantaVault quietly renews stored sessions when possible and asks for a one-account sign-in only when Riot no longer accepts that account's reusable session.
+
+Account data includes sensitive session credentials. See [Privacy](PRIVACY.md) and [Terms](TERMS.md) before distributing the app.
+Release verification and unresolved publication gates are tracked in
+[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ## Credits
 
@@ -66,17 +70,11 @@ cd backend
 go run .
 ```
 
-Run frontend dev server:
+Launch the current workspace as a Tauri development app:
 
 ```powershell
 cd frontend
-npm run dev -- --hostname 127.0.0.1 --port 33100
-```
-
-Launch Tauri debug app:
-
-```powershell
-frontend\src-tauri\target\debug\app.exe
+npm run tauri dev
 ```
 
 Build checks:
@@ -115,6 +113,11 @@ TAURI_SIGNING_PRIVATE_KEY
 Create releases by pushing a version tag:
 
 ```powershell
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.5.15
+git push origin v0.5.15
 ```
+
+Before publishing, configure `TAURI_SIGNING_PRIVATE_KEY`, `VT_API_KEY`, and a
+Windows code-signing identity. The release workflow builds from
+`package-lock.json`, runs backend/frontend checks, and scans the published
+installer and portable artifacts.

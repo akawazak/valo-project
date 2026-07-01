@@ -4,7 +4,6 @@ import (
 	"backend/handlers"
 	"backend/settings"
 	"backend/tick"
-	"crypto/tls"
 	"log"
 	"log/slog"
 	"net/http"
@@ -22,9 +21,6 @@ func main() {
 	// forever when the Riot API or local client is unreachable.
 	http.DefaultClient = &http.Client{
 		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
 	}
 	initLogger()
 
@@ -124,7 +120,7 @@ func main() {
 	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
 
 	slog.Info("starting server")
-	if err := http.ListenAndServe("127.0.0.1:31719", logMiddleware(corsMiddleware(mux))); err != nil {
+	if err := http.ListenAndServe("127.0.0.1:31719", corsMiddleware(mux)); err != nil {
 		panic(err)
 	}
 }
@@ -141,7 +137,14 @@ func initLogger() {
 		log.Fatalf("error opening file: %v", err)
 	}
 
-	f, err := os.OpenFile(filepath.Join(logDir, time.Now().Format("2006-01-02")+".log"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	cleanupOldLogs(logDir, time.Now().AddDate(0, 0, -7))
+
+	logPath := filepath.Join(logDir, time.Now().Format("2006-01-02")+".log")
+	flags := os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	if info, err := os.Stat(logPath); err == nil && info.Size() >= 5<<20 {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	f, err := os.OpenFile(logPath, flags, 0666)
 	if err != nil {
 		log.Fatalf("error opening file: %v", err)
 	}
@@ -149,21 +152,30 @@ func initLogger() {
 	log.SetOutput(f)
 }
 
-func logMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/health" {
-			slog.Info("request received", "path", r.Method+" "+r.URL.Path)
+func cleanupOldLogs(dir string, cutoff time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
+			continue
 		}
-		next.ServeHTTP(w, r)
-	})
+		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "tauri://localhost" || origin == "http://tauri.localhost" || origin == "https://tauri.localhost" ||
-			strings.HasPrefix(origin, "http://localhost:") ||
-			strings.HasPrefix(origin, "http://127.0.0.1:") {
+		if origin != "" && !isAllowedOrigin(origin) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		if origin != "" {
+			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region")
@@ -174,4 +186,14 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isAllowedOrigin(origin string) bool {
+	switch strings.TrimSuffix(origin, "/") {
+	case "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost",
+		"http://localhost:3000", "http://127.0.0.1:3000":
+		return true
+	default:
+		return false
+	}
 }

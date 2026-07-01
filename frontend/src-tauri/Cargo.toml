@@ -1,10 +1,10 @@
 [package]
 name = "app"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+version = "0.5.15"
+description = "VantaVault desktop companion for VALORANT loadouts and profile data"
+authors = ["akawazak"]
+license = "MIT"
+repository = "https://github.com/akawazak/valo-project"
 edition = "2021"
 rust-version = "1.77.2"
 

@@ -286,16 +286,23 @@ export async function getPersistedAccounts(): Promise<RiotAccount[]> {
     }
 }
 
-export async function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
-    try {
-        await appFetch(LOCAL_URL + '/accounts', {
+let accountSaveQueue: Promise<void> = Promise.resolve();
+
+export function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
+    const snapshot = JSON.stringify(accounts);
+    accountSaveQueue = accountSaveQueue.then(async () => {
+        const response = await appFetch(LOCAL_URL + '/accounts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(accounts),
+            body: snapshot,
         });
-    } catch (error) {
+        if (!response.ok) {
+            throw new Error(await response.text() || 'Failed to persist Riot accounts.');
+        }
+    }).catch((error) => {
         console.error('Failed to persist Riot accounts:', error);
-    }
+    });
+    return accountSaveQueue;
 }
 
 export interface ApplyLoadoutRequest {

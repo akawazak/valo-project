@@ -21,7 +21,6 @@
         }
       ]
     },
-    "shell:default",
-    "process:default"
+    "process:allow-restart"
   ]
 }

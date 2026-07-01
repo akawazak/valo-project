@@ -25,7 +25,7 @@ fn main() {
     
     println!("cargo:warning=Compiling Go backend sidecar...");
     let status = Command::new("go")
-        .args(&["build", "-buildvcs=false", "-o", temp_binary_path.to_str().unwrap(), "."])
+        .args(["build", "-buildvcs=false", "-o", temp_binary_path.to_str().unwrap(), "."])
         .env("GOCACHE", &go_cache_dir)
         .current_dir(&backend_dir)
         .status();

@@ -20,7 +20,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost http://localhost:31719 https://valorant-api.com https://api.github.com",
+        "font-src": "'self' data:",
+        "img-src": "'self' asset: http://asset.localhost data: blob: https://media.valorant-api.com",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'"
+      }
     }
   },
   "bundle": {

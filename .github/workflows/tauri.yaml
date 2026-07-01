@@ -64,21 +64,25 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
 
-      - name: Disable updater signing if private key is missing
+      - name: Verify backend
+        working-directory: backend
+        run: go test ./...
+
+      - name: Verify frontend
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm audit --omit=dev
+
+      - name: Require updater signing key
         env:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         if: ${{ env.SIGNING_KEY == '' }}
         shell: pwsh
         run: |
-          $configPath = "frontend/src-tauri/tauri.conf.json"
-          $config = Get-Content $configPath -Raw | ConvertFrom-Json
-          if ($config.bundle -and $config.bundle.createUpdaterArtifacts) {
-            $config.bundle.createUpdaterArtifacts = $false
-            $config | ConvertTo-Json -Depth 100 | Out-File $configPath -Encoding utf8
-            Write-Host "Disabled updater signing (no TAURI_SIGNING_PRIVATE_KEY secret set)."
-          }
+          throw "TAURI_SIGNING_PRIVATE_KEY is required for a production release."
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri

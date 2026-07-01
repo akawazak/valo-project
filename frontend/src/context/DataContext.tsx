@@ -82,6 +82,7 @@ async function completeLoginFlow(
 
     const tempSessionId = ctx.sessionId;
     const stableSessionId = `session_${res.puuid}`;
+    const existingAccount = getStoredAccounts().find((account) => account.puuid === res.puuid);
 
     // 2. Close the popup and wait for WebView2 to release its lock on
     //    the cookie DB. Without this, get_ssid_cookie copies will fail.
@@ -108,7 +109,11 @@ async function completeLoginFlow(
 
     // 4. Persist the temp session dir to the stable session dir. This enables
     //    silent reauth, but failing here should not throw away a valid login.
-    if (tempSessionId && tempSessionId !== stableSessionId) {
+    const shouldPersistSession =
+        tempSessionId &&
+        tempSessionId !== stableSessionId &&
+        (hasSsidCookie(ssid) || !existingAccount);
+    if (shouldPersistSession) {
         try {
             await invoke("persist_login_session", {
                 fromSessionId: tempSessionId,
@@ -122,7 +127,7 @@ async function completeLoginFlow(
     // 5. If we got an ssid, try a silent reauth to get fresh tokens.
     //    Failures here are non-fatal — we still have OAuth tokens.
     let finalTokens = res;
-    let finalSsid: string | undefined = ssid;
+    let finalSsid: string | undefined = ssid || existingAccount?.ssid;
     if (hasSsidCookie(ssid)) {
         try {
             const refreshed = await refreshRiotSession(ssid!);
@@ -274,7 +279,7 @@ interface DataContextType {
     handleDeleteAccount: (puuid: string) => void;
     handleAddNewAccount: (acc: RiotAccount) => void;
     refreshAccountsList: () => void;
-    refreshAccountToken: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
+    refreshAccountToken: (acc: RiotAccount, visible?: boolean, allowPopup?: boolean) => Promise<boolean>;
     cancelAccountRefresh: (acc: RiotAccount) => void;
 
     /**
@@ -316,6 +321,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // (e.g. user clicked refresh by mistake). The cancel function closes the
     // login window, releases the lock, and resolves the promise as false.
     const refreshCancelRef = useRef<Map<string, () => void>>(new Map());
+    const backgroundRefreshAttemptedRef = useRef<Set<string>>(new Set());
     // Single-flight login handle. While non-null, no other login OR refresh
     // may open a popup. The resolved value is the freshly-committed account;
     // on error/cancel the promise rejects with a descriptive Error and the
@@ -563,11 +569,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const handleAddNewAccount = useCallback((acc: RiotAccount) => {
         // Always ensure a stable, PUUID-based sessionId so the same cookie
         // directory is used for every future refresh of this account.
+        const stored = getStoredAccounts();
+        const existing = stored.find((account) => account.puuid === acc.puuid);
         const stableAcc: RiotAccount = {
+            ...existing,
             ...acc,
             sessionId: `session_${acc.puuid}`,
+            ssid: hasSsidCookie(acc.ssid) ? acc.ssid : existing?.ssid,
         };
-        const stored = getStoredAccounts();
         const updated = stored.filter(a => a.puuid !== stableAcc.puuid);
         updated.unshift(stableAcc);
         saveStoredAccounts(updated);
@@ -581,7 +590,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setStorefrontRefreshKey(k => k + 1);
     }, [loadUserData]);
 
-    const refreshAccountToken = useCallback(async (acc: RiotAccount, visible: boolean = false): Promise<boolean> => {
+    const refreshAccountToken = useCallback(async (
+        acc: RiotAccount,
+        visible: boolean = false,
+        allowPopup: boolean = true,
+    ): Promise<boolean> => {
         const sessionKey = acc.sessionId || `session_${acc.puuid}`;
         if (loginInFlightRef.current) {
             // A brand-new login is in flight — don't compete with it for the
@@ -607,17 +620,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
             acc.sessionId = sessionId;
         }
 
-        // Step 1: Silent ssid cookie reauth (techchrism endpoint — no popup needed)
-        // ssid lasts ~1 week, all-cookies strategy lasts ~3 weeks
+        let cancelled = false;
+        const reauthController = new AbortController();
+        refreshCancelRef.current.set(sessionKey, () => {
+            cancelled = true;
+            reauthController.abort();
+            releaseLock();
+            void import("@tauri-apps/api/core").then(({ invoke }) =>
+                invoke("close_login_window", { sessionId }).catch(() => {}),
+            );
+        });
+
+        // Step 1: use the stored Riot session to renew the short-lived access
+        // token without opening a popup.
         if (acc.ssid) {
             try {
                 const res = await fetch("http://localhost:31719/v1/auth/ssid-reauth", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ cookies: acc.ssid }),
+                    signal: reauthController.signal,
                 });
+                if (cancelled) return false;
                 if (res.ok) {
                     const data = await res.json();
+                    if (cancelled) return false;
                     if (data.access_token) {
                         if (data.puuid && data.puuid.toLowerCase() !== acc.puuid.toLowerCase()) {
                             throw new Error("Saved Riot session belongs to a different account.");
@@ -651,6 +678,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
             } catch {
                 // Network error → fall through to popup
             }
+        }
+        if (cancelled) return false;
+        if (!allowPopup) {
+            releaseLock();
+            return false;
         }
 
         // Step 2: Fallback — WebView popup (first login or refresh_token expired)
@@ -767,8 +799,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         const raw = hasSsidCookie(capturedCookies)
                             ? capturedCookies
                             : await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
-                        console.debug("get_ssid_cookie: result for session", sessionId, "->", raw);
-
                         const finalAcc = { ...updatedAcc, ssid: raw ?? updatedAcc.ssid };
                         const finalUpdated = getStoredAccounts().map(a => a.puuid === acc.puuid ? finalAcc : a);
                         saveStoredAccounts(finalUpdated);
@@ -960,11 +990,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const refreshMs = Math.max(5_000, msUntil - 90_000); // at least 5s
             timer = window.setTimeout(() => {
                 // Attempt silent refresh; if it fails, leave token expired and UI will surface refresh option
-                void refreshAccountToken(activeAccount, false).catch((err) => console.error('Auto refresh failed:', err));
+                void refreshAccountToken(activeAccount, false, false).catch((err) => console.error('Auto refresh failed:', err));
             }, refreshMs);
         }
         return () => { if (timer) clearTimeout(timer); };
     }, [activeAccount, refreshAccountToken]);
+
+    // Quietly renew expired reusable sessions once per app run. Keeping this
+    // sequential avoids a login burst for users with large account lists.
+    useEffect(() => {
+        const staleAccounts = accounts.filter((account) =>
+            Boolean(account.ssid) &&
+            isAccountExpired(account) &&
+            !backgroundRefreshAttemptedRef.current.has(account.puuid),
+        );
+        if (staleAccounts.length === 0) return;
+
+        staleAccounts.forEach((account) => backgroundRefreshAttemptedRef.current.add(account.puuid));
+        void (async () => {
+            for (const account of staleAccounts) {
+                await refreshAccountToken(account, false, false);
+                await new Promise((resolve) => window.setTimeout(resolve, 250));
+            }
+        })();
+    }, [accounts, refreshAccountToken]);
 
     // Initialize accounts list and load static data on mount
     useEffect(() => {

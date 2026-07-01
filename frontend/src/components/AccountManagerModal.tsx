@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 
 interface AccountManagerModalProps {
@@ -11,7 +11,7 @@ interface AccountManagerModalProps {
     onSwitchAccount: (acc: RiotAccount) => void;
     onRequestDeleteAccount: (puuid: string) => void;
     onAddAccount: () => void;
-    onRefreshAccount: (acc: RiotAccount, visible?: boolean) => Promise<boolean>;
+    onRefreshAccount: (acc: RiotAccount, visible?: boolean, allowPopup?: boolean) => Promise<boolean>;
     onCancelRefresh: (acc: RiotAccount) => void;
     onToggleFavorite: (puuid: string) => void;
 }
@@ -36,11 +36,34 @@ export default function AccountManagerModal({
     const bulkCancelRef = useRef(false);
     const refreshTimeoutMs = 30_000;
 
+    useEffect(() => {
+        if (isOpen) return;
+        bulkCancelRef.current = true;
+        accounts.forEach(onCancelRefresh);
+    }, [accounts, isOpen, onCancelRefresh]);
+
     if (!isOpen) return null;
 
     const isAccountTokenExpired = (acc: RiotAccount) => {
         if (!acc.expiresAt) return true;
         return Date.now() >= acc.expiresAt;
+    };
+
+    const refreshWithTimeout = async (acc: RiotAccount, allowPopup: boolean) => {
+        let timeoutId = 0;
+        try {
+            return await Promise.race([
+                onRefreshAccount(acc, false, allowPopup),
+                new Promise<boolean>((resolve) => {
+                    timeoutId = window.setTimeout(() => {
+                        onCancelRefresh(acc);
+                        resolve(false);
+                    }, refreshTimeoutMs);
+                }),
+            ]);
+        } finally {
+            window.clearTimeout(timeoutId);
+        }
     };
 
     const handleRefreshAccount = async (e: React.MouseEvent, acc: RiotAccount) => {
@@ -52,10 +75,7 @@ export default function AccountManagerModal({
         });
         setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
         try {
-            const refreshed = await Promise.race([
-                onRefreshAccount(acc, false),
-                new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
-            ]);
+            const refreshed = await refreshWithTimeout(acc, true);
             setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
         } catch (err) {
             console.error("Refresh account error:", err);
@@ -80,10 +100,7 @@ export default function AccountManagerModal({
             setBulkProgressCurrent(i + 1);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
-                const refreshed = await Promise.race([
-                    onRefreshAccount(acc, false),
-                    new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), refreshTimeoutMs)),
-                ]);
+                const refreshed = await refreshWithTimeout(acc, false);
                 setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
             } catch (err) {
                 console.error(`Failed to refresh token for ${acc.gameName}:`, err);
@@ -136,7 +153,7 @@ export default function AccountManagerModal({
                                 >
                                     {isBulkRefreshing
                                         ? `Refreshing (${bulkProgressCurrent}/${bulkProgressTotal})`
-                                        : `↻ Refresh Expired (${accounts.filter(isAccountTokenExpired).length})`}
+                                        : `↻ Renew Access (${accounts.filter(isAccountTokenExpired).length})`}
                                 </button>
                                 {isBulkRefreshing && (
                                     <button
@@ -208,12 +225,16 @@ export default function AccountManagerModal({
                                             </div>
                                             <div className="settings-account-pills">
                                                 {isActive && <span className="status-pill active-pill">Active</span>}
-                                                {isExpired && <span className="status-pill expired-pill">Expired</span>}
+                                                {isExpired && (
+                                                    <span className="status-pill expired-pill">
+                                                        {acc.ssid ? "Renewal due" : "Sign-in required"}
+                                                    </span>
+                                                )}
                                                 {refreshResults[acc.puuid] === "success" && (
                                                     <span className="status-pill active-pill">Refreshed</span>
                                                 )}
                                                 {refreshResults[acc.puuid] === "failed" && (
-                                                    <span className="status-pill expired-pill">Refresh failed</span>
+                                                    <span className="status-pill expired-pill">Renewal failed</span>
                                                 )}
                                             </div>
                                         </div>
@@ -237,7 +258,7 @@ export default function AccountManagerModal({
                                                     type="button"
                                                     className="settings-account-action-btn refresh-btn"
                                                     onClick={(e) => handleRefreshAccount(e, acc)}
-                                                    title="Refresh session"
+                                                    title="Renew access"
                                                 >
                                                     ↻
                                                 </button>

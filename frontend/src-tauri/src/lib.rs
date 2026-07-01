@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -44,13 +45,6 @@ struct LoginSessionPayload {
     session_id: String,
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LoginErrorPayload {
-    session_id: String,
-    error: String,
-}
-
 impl AppState {
     fn lock_for_window(&self, label: &str) -> Arc<Mutex<()>> {
         let mut map = self.window_locks.lock().unwrap();
@@ -77,6 +71,7 @@ fn cleanup_stale_sessions(config_dir: &std::path::Path) {
     if !sessions_dir.exists() {
         return;
     }
+    recover_session_swap_artifacts(&sessions_dir);
 
     for entry in std::fs::read_dir(&sessions_dir)
         .into_iter()
@@ -93,8 +88,44 @@ fn cleanup_stale_sessions(config_dir: &std::path::Path) {
             let timestamp_part = &after_prefix[..underscore_pos];
             if timestamp_part.chars().all(|c| c.is_ascii_digit()) && !timestamp_part.is_empty() {
                 let _ = std::fs::remove_dir_all(entry.path());
+                continue;
             }
         }
+        prune_session_cache(&entry.path());
+    }
+}
+
+fn recover_session_swap_artifacts(sessions_dir: &std::path::Path) {
+    for entry in std::fs::read_dir(sessions_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".staging") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        } else if let Some(target_name) = name.strip_suffix(".backup") {
+            let target = sessions_dir.join(target_name);
+            if target.exists() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            } else {
+                let _ = std::fs::rename(entry.path(), target);
+            }
+        }
+    }
+}
+
+fn prune_session_cache(session_dir: &std::path::Path) {
+    for relative in [
+        "EBWebView/Default/Cache",
+        "EBWebView/Default/Code Cache",
+        "EBWebView/Default/GPUCache",
+        "EBWebView/Default/DawnCache",
+        "EBWebView/GrShaderCache",
+        "EBWebView/GraphiteDawnCache",
+        "EBWebView/component_crx_cache",
+    ] {
+        let _ = std::fs::remove_dir_all(session_dir.join(relative));
     }
 }
 
@@ -110,10 +141,7 @@ async fn open_login_window(
     session_id: Option<String>,
     visible: Option<bool>,
 ) -> Result<(), String> {
-    let window_label = format!(
-        "riot_login_{}",
-        session_id.as_deref().unwrap_or("default")
-    );
+    let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
 
     // Serialise per-label: if another caller is already opening/closing
     // the same session, wait for them. This prevents the "label already
@@ -148,8 +176,8 @@ async fn open_login_window(
     } else {
         session_dir.push("default");
     }
-    let cookie_capture_config_dir = config_dir.clone();
     let cookie_capture_session_id = session_id.clone().unwrap_or_else(|| "default".to_string());
+    let redirect_started = Arc::new(AtomicBool::new(false));
 
     // Ensure the directory exists — WebView fails silently if it doesn't
     std::fs::create_dir_all(&session_dir)
@@ -157,7 +185,7 @@ async fn open_login_window(
 
     let is_visible = visible.unwrap_or(true);
 
-let window = tauri::webview::WebviewWindowBuilder::new(
+    let window = tauri::webview::WebviewWindowBuilder::new(
         &app_handle,
         &window_label,
         tauri::WebviewUrl::External(
@@ -170,7 +198,7 @@ let window = tauri::webview::WebviewWindowBuilder::new(
     .data_directory(session_dir)
     // Disable third-party-cookie blocking so the Riot OAuth session cookie
     // is persisted to SQLite and can be read back via get_ssid_cookie.
-    .additional_browser_args("--disable-features=BlockThirdPartyCookies")
+    .additional_browser_args("--disable-features=BlockThirdPartyCookies --disk-cache-size=5242880")
     .on_navigation(move |url: &url::Url| {
         let host = url.host_str().unwrap_or("");
         let path = url.path();
@@ -178,63 +206,63 @@ let window = tauri::webview::WebviewWindowBuilder::new(
         // which parses as `host == "localhost" || (host == "127.0.0.1" && path == "/redirect")`
         // — a precedence bug that would emit the redirect event for ANY
         // localhost URL. Fixed here.
-        let is_oauth_redirect =
-            (host == "localhost" || host == "127.0.0.1") && path == "/redirect";
+        let is_oauth_redirect = (host == "localhost" || host == "127.0.0.1") && path == "/redirect";
         if is_oauth_redirect {
-            let redirect_url_str = url.as_str().to_string();
-            let redirect_session_id = cookie_capture_session_id.clone();
-            let _ = cloned_handle.emit(
-                "riot-login-redirect-v2",
-                LoginRedirectPayload {
-                    session_id: redirect_session_id,
-                    url: redirect_url_str.clone(),
-                },
-            );
-            let _ = cloned_handle.emit("riot-login-redirect", redirect_url_str);
+            if redirect_started.swap(true, Ordering::SeqCst) {
+                return false;
+            }
 
-            // Spawn background thread to read cookies from the WebView2 DB
+            let redirect_url_str = url.as_str().to_string();
             let cookie_handle = cloned_handle.clone();
-            let cookie_config_dir = cookie_capture_config_dir.clone();
             let cookie_session_id = cookie_capture_session_id.clone();
+            let cookie_window = cloned_handle.get_webview_window(&window_label);
+
+            // WebView2 exposes HTTP-only cookies through its native cookie
+            // manager. Read them on a worker thread (the synchronous
+            // navigation callback can deadlock on Windows), emit them first,
+            // and only then tell React to close the popup. The SQLite reader
+            // remains the post-close fallback in DataContext.
             std::thread::spawn(move || {
-                match read_session_cookies_with_wait(&cookie_config_dir, &cookie_session_id, 15000)
-                {
-                    Ok(Some(cookie_str)) => {
-                        let _ = cookie_handle.emit(
-                            "riot-login-cookies-v2",
-                            LoginCookiesPayload {
-                                session_id: cookie_session_id,
-                                cookies: cookie_str.clone(),
-                            },
-                        );
-                        let _ = cookie_handle.emit("riot-login-cookies", cookie_str);
-                    }
-                    Ok(None) => {
-                        let _ = cookie_handle.emit(
-                            "riot-login-cookies-missing-v2",
-                            LoginSessionPayload {
-                                session_id: cookie_session_id.clone(),
-                            },
-                        );
-                        let _ = cookie_handle.emit("riot-login-cookies-missing", cookie_session_id);
-                    }
-                    Err(err) => {
-                        let _ = cookie_handle.emit(
-                            "riot-login-cookies-error-v2",
-                            LoginErrorPayload {
-                                session_id: cookie_session_id,
-                                error: err.clone(),
-                            },
-                        );
-                        let _ = cookie_handle.emit("riot-login-cookies-error", err);
-                    }
+                let cookie_str = cookie_window
+                    .and_then(|window| window.cookies().ok())
+                    .and_then(|cookies| {
+                        build_riot_cookie_header(
+                            cookies
+                                .iter()
+                                .map(|cookie| (cookie.name(), cookie.value(), cookie.domain())),
+                        )
+                    });
+
+                if let Some(cookie_str) = cookie_str {
+                    let _ = cookie_handle.emit(
+                        "riot-login-cookies-v2",
+                        LoginCookiesPayload {
+                            session_id: cookie_session_id.clone(),
+                            cookies: cookie_str.clone(),
+                        },
+                    );
+                    let _ = cookie_handle.emit("riot-login-cookies", cookie_str);
+                } else {
+                    let _ = cookie_handle.emit(
+                        "riot-login-cookies-missing-v2",
+                        LoginSessionPayload {
+                            session_id: cookie_session_id.clone(),
+                        },
+                    );
+                    let _ =
+                        cookie_handle.emit("riot-login-cookies-missing", cookie_session_id.clone());
                 }
+
+                let _ = cookie_handle.emit(
+                    "riot-login-redirect-v2",
+                    LoginRedirectPayload {
+                        session_id: cookie_session_id,
+                        url: redirect_url_str.clone(),
+                    },
+                );
+                let _ = cookie_handle.emit("riot-login-redirect", redirect_url_str);
             });
 
-            // Navigate the popup to a neutral Riot URL to force cookie commit.
-            if let Some(window) = cloned_handle.get_webview_window(&window_label) {
-                let _ = window.eval("window.location.href = 'https://www.riotgames.com/';");
-            }
             false
         } else {
             true
@@ -261,20 +289,26 @@ let window = tauri::webview::WebviewWindowBuilder::new(
 }
 
 #[tauri::command]
-async fn show_login_window(app_handle: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
+async fn show_login_window(
+    app_handle: tauri::AppHandle,
+    session_id: Option<String>,
+) -> Result<(), String> {
     let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
     if let Some(window) = app_handle.get_webview_window(&window_label) {
-        let _ = window.show().map_err(|e| e.to_string())?;
-        let _ = window.set_focus().map_err(|e| e.to_string())?;
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-async fn close_login_window(app_handle: tauri::AppHandle, session_id: Option<String>) -> Result<(), String> {
+async fn close_login_window(
+    app_handle: tauri::AppHandle,
+    session_id: Option<String>,
+) -> Result<(), String> {
     let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
     if let Some(window) = app_handle.get_webview_window(&window_label) {
-        let _ = window.close().map_err(|e| e.to_string())?;
+        window.close().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -326,12 +360,7 @@ async fn persist_login_session(
         return Ok(());
     }
 
-    if target.exists() {
-        remove_dir_all_with_retry(&target)
-            .map_err(|e| format!("Failed to replace existing login session: {}", e))?;
-    }
-
-    copy_dir_recursive_with_retry(&source, &target)
+    replace_session_dir(&source, &target)
         .map_err(|e| format!("Failed to persist login session: {}", e))?;
 
     Ok(())
@@ -340,6 +369,32 @@ async fn persist_login_session(
 // ---------------------------------------------------------------------------
 // Cookie helpers
 // ---------------------------------------------------------------------------
+
+fn build_riot_cookie_header<'a>(
+    cookies: impl IntoIterator<Item = (&'a str, &'a str, Option<&'a str>)>,
+) -> Option<String> {
+    let mut cookie_map = HashMap::new();
+    for (name, value, domain) in cookies {
+        let is_riot_cookie = domain
+            .map(|domain| domain.to_ascii_lowercase().ends_with("riotgames.com"))
+            .unwrap_or(false);
+        if is_riot_cookie && !name.is_empty() && !value.is_empty() {
+            cookie_map.insert(name, value);
+        }
+    }
+
+    if !cookie_map.contains_key("ssid") {
+        return None;
+    }
+
+    Some(
+        cookie_map
+            .into_iter()
+            .map(|(name, value)| format!("{}={}", name, value))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
 
 /// Polls the WebView2 cookie database until the `ssid` cookie is found or
 /// the timeout expires.
@@ -382,14 +437,12 @@ fn read_session_cookies_with_wait(
 
         if timeout_ms == 0 || start.elapsed() >= timeout {
             // Attempt one final read before giving up
-            if cookie_db.exists() {
-                if let Ok(_) = std::fs::copy(&cookie_db, &temp_path) {
-                    let result = read_cookies_from_db(&temp_path, &session_dir);
-                    let _ = std::fs::remove_file(&temp_path);
-                    if let Ok(Some(ref cookie_str)) = result {
-                        if cookie_str.contains("ssid=") {
-                            return result;
-                        }
+            if cookie_db.exists() && std::fs::copy(&cookie_db, &temp_path).is_ok() {
+                let result = read_cookies_from_db(&temp_path, &session_dir);
+                let _ = std::fs::remove_file(&temp_path);
+                if let Ok(Some(ref cookie_str)) = result {
+                    if cookie_str.contains("ssid=") {
+                        return result;
                     }
                 }
             }
@@ -526,9 +579,31 @@ fn remove_dir_all_with_retry(path: &std::path::Path) -> std::io::Result<()> {
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Other, "failed to remove directory")
-    }))
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("failed to remove directory")))
+}
+
+fn replace_session_dir(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    let staging = target.with_extension("staging");
+    let backup = target.with_extension("backup");
+    remove_dir_all_with_retry(&staging)?;
+    if !target.exists() && backup.exists() {
+        std::fs::rename(&backup, target)?;
+    } else {
+        remove_dir_all_with_retry(&backup)?;
+    }
+    copy_dir_recursive_with_retry(source, &staging)?;
+
+    if target.exists() {
+        std::fs::rename(target, &backup)?;
+    }
+    if let Err(err) = std::fs::rename(&staging, target) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, target);
+        }
+        return Err(err);
+    }
+    let _ = remove_dir_all_with_retry(&backup);
+    Ok(())
 }
 
 fn copy_dir_recursive_with_retry(
@@ -564,8 +639,7 @@ fn copy_file_with_retry(source: &std::path::Path, target: &std::path::Path) -> s
         }
     }
 
-    Err(last_error
-        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "failed to copy file")))
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("failed to copy file")))
 }
 
 // ---------------------------------------------------------------------------
@@ -654,9 +728,13 @@ fn strip_chromium_host_key_hash<'a>(host_key: &str, plaintext: &'a [u8]) -> &'a 
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod tests {
-    use super::strip_chromium_host_key_hash;
+    use super::{
+        build_riot_cookie_header, prune_session_cache, recover_session_swap_artifacts,
+        replace_session_dir, strip_chromium_host_key_hash,
+    };
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -680,6 +758,82 @@ mod tests {
             strip_chromium_host_key_hash(".riotgames.com", cookie_value),
             cookie_value
         );
+    }
+
+    #[test]
+    fn builds_riot_cookie_header_only_when_ssid_is_present() {
+        let cookies = [
+            ("ssid", "session-token", Some(".riotgames.com")),
+            ("clid", "client-id", Some("auth.riotgames.com")),
+            ("ignored", "value", Some("example.com")),
+        ];
+
+        let header = build_riot_cookie_header(cookies).unwrap();
+
+        assert!(header.contains("ssid=session-token"));
+        assert!(header.contains("clid=client-id"));
+        assert!(!header.contains("ignored=value"));
+        assert!(
+            build_riot_cookie_header([("clid", "client-id", Some(".riotgames.com"))]).is_none()
+        );
+    }
+
+    #[test]
+    fn prunes_webview_cache_without_removing_cookies() {
+        let root =
+            std::env::temp_dir().join(format!("valovault-cache-test-{}", std::process::id()));
+        let cache = root.join("EBWebView/Default/Cache");
+        let cookies = root.join("EBWebView/Default/Network/Cookies");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(cookies.parent().unwrap()).unwrap();
+        std::fs::write(cache.join("data"), b"cache").unwrap();
+        std::fs::write(&cookies, b"cookies").unwrap();
+
+        prune_session_cache(&root);
+
+        assert!(!cache.exists());
+        assert!(cookies.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn replaces_session_only_after_staging_copy_is_complete() {
+        let root =
+            std::env::temp_dir().join(format!("valovault-session-test-{}", std::process::id()));
+        let source = root.join("source");
+        let target = root.join("target");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(source.join("cookie"), b"new").unwrap();
+        std::fs::write(target.join("cookie"), b"old").unwrap();
+
+        replace_session_dir(&source, &target).unwrap();
+
+        assert_eq!(std::fs::read(target.join("cookie")).unwrap(), b"new");
+        assert!(!target.with_extension("staging").exists());
+        assert!(!target.with_extension("backup").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovers_interrupted_session_swap() {
+        let root =
+            std::env::temp_dir().join(format!("valovault-recovery-test-{}", std::process::id()));
+        let backup = root.join("session_account.backup");
+        let staging = root.join("session_account.staging");
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(backup.join("cookie"), b"old").unwrap();
+
+        recover_session_swap_artifacts(&root);
+
+        assert_eq!(
+            std::fs::read(root.join("session_account/cookie")).unwrap(),
+            b"old"
+        );
+        assert!(!backup.exists());
+        assert!(!staging.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
@@ -710,7 +864,7 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Empty encrypted payload after stripping prefix".to_string());
     }
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: payload.len() as u32,
         pbData: payload.as_ptr() as *mut u8,
     };
@@ -720,7 +874,7 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
     };
 
     unsafe {
-        CryptUnprotectData(&mut input, None, None, None, None, 0, &mut output)
+        CryptUnprotectData(&input, None, None, None, None, 0, &mut output)
             .map_err(|e| format!("DPAPI decryption failed: {}", e))?;
     }
 
@@ -779,7 +933,9 @@ pub fn run() {
 
             let state = app.state::<AppState>();
             let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
-            let (_rx, child) = sidecar_command.spawn().expect("Failed to spawn backend sidecar");
+            let (_rx, child) = sidecar_command
+                .spawn()
+                .expect("Failed to spawn backend sidecar");
             *state.child.lock().unwrap() = Some(child);
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -789,18 +945,18 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "quit" {
                         app.exit(0);
                     }
-                    _ => {}
                 })
-                .on_tray_icon_event(|tray, event| match event {
-                    TrayIconEvent::Click {
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
-                    } => {
+                    } = event
+                    {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.unminimize();
@@ -808,7 +964,6 @@ pub fn run() {
                             let _ = window.set_focus();
                         }
                     }
-                    _ => {}
                 })
                 .build(app)?;
 

@@ -3,7 +3,10 @@ package accounts
 import (
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+var saveMu sync.Mutex
 
 func GetRaw() ([]byte, error) {
 	path, err := getPath()
@@ -32,7 +35,36 @@ func SaveRaw(data []byte) error {
 	if len(data) == 0 {
 		data = []byte("[]")
 	}
-	return os.WriteFile(path, data, 0600)
+
+	saveMu.Lock()
+	defer saveMu.Unlock()
+	return writeFileAtomically(path, data)
+}
+
+func writeFileAtomically(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), "accounts-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	if err := temp.Chmod(0600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func getPath() (string, error) {

@@ -499,7 +499,7 @@ fetch("https://valorant-api.com/v1/seasons")
             setMapStats(mp);
             setSyncStatus(st);
             setIdentity(ov ? { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" } : null);
-            if (st?.lastError) setError(cleanError(st.lastError));
+            if (st?.lastError && !viewedProfile) setError(cleanError(st.lastError));
         } catch (err) {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
                 setError(cleanError(err));
@@ -509,7 +509,7 @@ fetch("https://valorant-api.com/v1/seasons")
                 setLoading(false);
             }
         }
-    }, [opts, puuid, queue]);
+    }, [opts, puuid, queue, viewedProfile]);
 
     useEffect(() => {
         refreshRequestRef.current += 1;
@@ -556,12 +556,12 @@ fetch("https://valorant-api.com/v1/seasons")
                 setRRHistory(rr);
             })
             .catch((err) => {
-                if (!cancelled) setError(cleanError(err));
+                if (!cancelled && !viewedProfile) setError(cleanError(err));
             });
         return () => {
             cancelled = true;
         };
-    }, [opts, overview?.currentSeasonId, puuid]);
+    }, [opts, overview?.currentSeasonId, puuid, viewedProfile]);
 
     useEffect(() => {
         if (!puuid) return;
@@ -571,14 +571,14 @@ fetch("https://valorant-api.com/v1/seasons")
                 if (!cancelled) setSeasonSummary(response.summary);
             })
             .catch((err) => {
-                if (!cancelled && !/404|page not found/i.test(String(err))) {
+                if (!cancelled && !viewedProfile && !/404|page not found/i.test(String(err))) {
                     setError(cleanError(err));
                 }
             });
         return () => {
             cancelled = true;
         };
-    }, [opts, overview?.currentSeasonId, puuid, seasonQueue]);
+    }, [opts, overview?.currentSeasonId, puuid, seasonQueue, viewedProfile]);
 
     const runSync = useCallback(
         async (manual: boolean) => {
@@ -611,14 +611,14 @@ fetch("https://valorant-api.com/v1/seasons")
                 }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
-                    setError(cleanError(finalStatus.lastError));
+                    if (manual) setError(cleanError(finalStatus.lastError));
                 } else if (manual) {
                     showToast("Profile synced.");
                 }
                 await refresh();
                 await loadHistory();
             } catch (err) {
-                if (currentPuuidRef.current === targetPuuid) setError(cleanError(err));
+                if (manual && currentPuuidRef.current === targetPuuid) setError(cleanError(err));
             } finally {
                 if (currentPuuidRef.current === targetPuuid) setSyncing(false);
             }
