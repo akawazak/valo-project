@@ -68,6 +68,10 @@ export default function Home() {
     const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('profile');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
+
+    useEffect(() => {
+        setProfileTarget(null);
+    }, [activeAccount?.puuid]);
     
     // Modals
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -402,6 +406,7 @@ export default function Home() {
                             key={`${activeAccount?.puuid || "none"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
                             requestedProfile={profileTarget}
+                            onRequestedProfileChange={setProfileTarget}
                         />
                     ) : (
                         isWorkspaceOpen ? (

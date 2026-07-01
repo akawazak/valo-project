@@ -28,6 +28,7 @@ import s from "./ProfilePanel.module.css";
 interface Props {
     onConnectAccount?: () => void;
     requestedProfile?: { puuid: string; gameName: string; tagLine: string } | null;
+    onRequestedProfileChange: (profile: { puuid: string; gameName: string; tagLine: string } | null) => void;
 }
 
 interface AgentMeta {
@@ -305,10 +306,10 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     return tierPromise;
 }
 
-export default function ProfilePanel({ onConnectAccount, requestedProfile }: Props) {
+export default function ProfilePanel({ onConnectAccount, requestedProfile, onRequestedProfileChange }: Props) {
     const { activeAccount } = useData();
-    const [viewedProfile, setViewedProfile] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
     const ownPuuid = activeAccount?.puuid ?? "";
+    const viewedProfile = requestedProfile?.puuid && requestedProfile.puuid !== ownPuuid ? requestedProfile : null;
     const puuid = viewedProfile?.puuid || ownPuuid;
     const region = activeAccount?.region ?? "na";
 
@@ -345,10 +346,13 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
     const historyRequestRef = useRef(0);
+    const refreshRequestRef = useRef(0);
+    const currentPuuidRef = useRef(puuid);
+    currentPuuidRef.current = puuid;
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
-        setViewedProfile(profile);
+        onRequestedProfileChange(profile.puuid === ownPuuid ? null : profile);
         window.scrollTo({ top: 0, behavior: "smooth" });
-    }, []);
+    }, [onRequestedProfileChange, ownPuuid]);
     const setPerformanceRail = useCallback((rail: HTMLDivElement | null) => {
         if (!rail) return;
         const handleWheel = (event: WheelEvent) => {
@@ -361,11 +365,6 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile }: Pro
         rail.addEventListener("wheel", handleWheel, { passive: false });
         return () => rail.removeEventListener("wheel", handleWheel);
     }, []);
-
-    useEffect(() => setViewedProfile(null), [ownPuuid]);
-    useEffect(() => {
-        if (requestedProfile?.puuid) viewProfile(requestedProfile);
-    }, [requestedProfile, viewProfile]);
 
     useEffect(() => {
         let cancelled = false;
@@ -448,6 +447,7 @@ fetch("https://valorant-api.com/v1/seasons")
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
     const loadHistory = useCallback(async () => {
         const request = ++historyRequestRef.current;
+        const targetPuuid = puuid;
         if (!puuid) {
             setHistory([]);
             setTotal(0);
@@ -456,19 +456,21 @@ fetch("https://valorant-api.com/v1/seasons")
         setHistoryLoading(true);
         try {
             const matches = await getProfileMatchHistory(0, pageSize, queue || undefined, opts);
-            if (request !== historyRequestRef.current) return;
+            if (request !== historyRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setHistory(matches.matches || []);
             setTotal(matches.total || 0);
             setDetails({});
             setExpanded(new Set());
         } catch (err) {
-            if (request === historyRequestRef.current) setError(cleanError(err));
+            if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setError(cleanError(err));
         } finally {
-            if (request === historyRequestRef.current) setHistoryLoading(false);
+            if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setHistoryLoading(false);
         }
     }, [opts, pageSize, puuid, queue]);
 
     const refresh = useCallback(async () => {
+        const request = ++refreshRequestRef.current;
+        const targetPuuid = puuid;
         if (!puuid) {
             setOverview(null);
             setSeasonSummary(null);
@@ -489,6 +491,7 @@ fetch("https://valorant-api.com/v1/seasons")
                 getMapStats(queue || undefined, opts),
                 getProfileSyncStatus(opts).catch(() => null),
             ]);
+            if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setOverview(ov);
             setSeasonSummary(ov.seasonSummary);
             setAgentStats(ag);
@@ -497,15 +500,33 @@ fetch("https://valorant-api.com/v1/seasons")
             setIdentity(ov ? { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" } : null);
             if (st?.lastError) setError(cleanError(st.lastError));
         } catch (err) {
-            setError(cleanError(err));
+            if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
+                setError(cleanError(err));
+            }
         } finally {
-            setLoading(false);
+            if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
+                setLoading(false);
+            }
         }
     }, [opts, puuid, queue]);
 
     useEffect(() => {
+        refreshRequestRef.current += 1;
+        historyRequestRef.current += 1;
+        setOverview(null);
+        setSeasonSummary(null);
+        setRRHistory(null);
+        setAgentStats(null);
+        setMapStats(null);
+        setSyncStatus(null);
+        setIdentity(null);
+        setError("");
+        setLoading(false);
+        setHistoryLoading(false);
+        setSyncing(false);
         setDetails({});
         setExpanded(new Set());
+        setLoadingDetails(new Set());
         setHistory([]);
         setTotal(0);
     }, [puuid]);
@@ -561,10 +582,12 @@ fetch("https://valorant-api.com/v1/seasons")
     const runSync = useCallback(
         async (manual: boolean) => {
             if (!puuid) return;
+            const targetPuuid = puuid;
             setSyncing(true);
             setError("");
             try {
                 await postProfileSync({ ...opts, force: manual });
+                if (currentPuuidRef.current !== targetPuuid) return;
                 if (manual) showToast("Sync started.");
                 let finalStatus: ProfileSyncStatus | null = null;
                 let pollMisses = 0;
@@ -578,12 +601,14 @@ fetch("https://valorant-api.com/v1/seasons")
                         if (pollMisses < 4) continue;
                         throw pollErr;
                     }
+                    if (currentPuuidRef.current !== targetPuuid) return;
                     pollMisses = 0;
                     setSyncStatus(st);
                     finalStatus = st;
                     if (i === 0 || i % 3 === 2) await loadHistory();
                     if (!st.inFlight) break;
                 }
+                if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
                     setError(cleanError(finalStatus.lastError));
                 } else if (manual) {
@@ -592,9 +617,9 @@ fetch("https://valorant-api.com/v1/seasons")
                 await refresh();
                 await loadHistory();
             } catch (err) {
-                setError(cleanError(err));
+                if (currentPuuidRef.current === targetPuuid) setError(cleanError(err));
             } finally {
-                setSyncing(false);
+                if (currentPuuidRef.current === targetPuuid) setSyncing(false);
             }
         },
         [loadHistory, opts, puuid, refresh, showToast],
@@ -616,6 +641,7 @@ fetch("https://valorant-api.com/v1/seasons")
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
+            const targetPuuid = puuid;
             setExpanded((prev) => {
                 const next = new Set(prev);
                 if (next.has(matchId)) next.delete(matchId);
@@ -626,15 +652,19 @@ fetch("https://valorant-api.com/v1/seasons")
             setLoadingDetails((prev) => new Set(prev).add(matchId));
             try {
                 const d = await getProfileMatchDetails(matchId, opts);
-                setDetails((prev) => ({ ...prev, [matchId]: d }));
+                if (currentPuuidRef.current === targetPuuid) {
+                    setDetails((prev) => ({ ...prev, [matchId]: d }));
+                }
             } catch (err) {
-                setError(cleanError(err));
+                if (currentPuuidRef.current === targetPuuid) setError(cleanError(err));
             } finally {
-                setLoadingDetails((prev) => {
-                    const next = new Set(prev);
-                    next.delete(matchId);
-                    return next;
-                });
+                if (currentPuuidRef.current === targetPuuid) {
+                    setLoadingDetails((prev) => {
+                        const next = new Set(prev);
+                        next.delete(matchId);
+                        return next;
+                    });
+                }
             }
         },
         [details, opts, puuid],
@@ -746,7 +776,7 @@ fetch("https://valorant-api.com/v1/seasons")
 
                     <div className={s.railBody}>
                         {viewedProfile && (
-                            <button type="button" className={s.backToProfile} onClick={() => setViewedProfile(null)}>
+                            <button type="button" className={s.backToProfile} onClick={() => onRequestedProfileChange(null)}>
                                 ← Back to my profile
                             </button>
                         )}
@@ -768,6 +798,7 @@ fetch("https://valorant-api.com/v1/seasons")
                                     width={88}
                                     height={88}
                                     className={s.railRankIcon}
+                                    loading="eager"
                                     unoptimized
                                 />
                                 <div className={s.railRankName}>{currentRankLabel}</div>
@@ -859,6 +890,7 @@ fetch("https://valorant-api.com/v1/seasons")
                                                     alt=""
                                                     width={78}
                                                     height={78}
+                                                    loading="eager"
                                                     unoptimized
                                                 />
                                             </div>
