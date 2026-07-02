@@ -577,7 +577,7 @@ fetch("https://valorant-api.com/v1/seasons")
             setSyncing(true);
             setError("");
             try {
-                await postProfileSync({ ...opts, force: manual });
+                await postProfileSync(opts);
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (manual) showToast("Sync started.");
                 let finalStatus: ProfileSyncStatus | null = null;

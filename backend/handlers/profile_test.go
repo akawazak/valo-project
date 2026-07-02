@@ -17,6 +17,23 @@ func TestRiotFailureReasonKeepsRankErrorsActionable(t *testing.T) {
 	}
 }
 
+func TestSyncInFlightGuardRejectsDuplicateSync(t *testing.T) {
+	h := &Handler{}
+	if !h.markSyncInFlight("player-1") {
+		t.Fatal("first sync was rejected")
+	}
+	if h.markSyncInFlight("player-1") {
+		t.Fatal("duplicate sync was accepted")
+	}
+	if !h.isSyncInFlight("player-1") {
+		t.Fatal("sync was not marked in flight")
+	}
+	h.unmarkSyncInFlight("player-1")
+	if h.isSyncInFlight("player-1") {
+		t.Fatal("finished sync remained in flight")
+	}
+}
+
 func TestMergeLiveMMRUsesDocumentedSeasonFields(t *testing.T) {
 	var live playerMMRResponse
 	if err := json.Unmarshal([]byte(`{

@@ -776,7 +776,8 @@ func (h *Handler) GetProfileMatchDetails(w http.ResponseWriter, r *http.Request)
 // Triggers a background sync of new matches from Riot into the local
 // DB. Returns 200 {"started": true} on success, 202
 // {"started": false, "inFlight": true} when a sync is already in
-// flight, and supports `?force=true` to bypass the in-flight check.
+// flight. `?force=true` refreshes cached match details but never bypasses the
+// per-account in-flight guard.
 func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 	puuid, region, ok := h.requireProfileAuth(w, r)
 	if !ok {
@@ -784,7 +785,7 @@ func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 	}
 	force := strings.EqualFold(r.URL.Query().Get("force"), "true")
 
-	if !force && h.isSyncInFlight(puuid) {
+	if h.isSyncInFlight(puuid) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -794,22 +795,16 @@ func (h *Handler) PostProfileSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark in-flight BEFORE calling Start so a rapid double-click
-	// can't slip past the check. force=true re-arms the flag.
-	if !force {
-		if !h.markSyncInFlight(puuid) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"started":  false,
-				"inFlight": true,
-			})
-			return
-		}
-	} else {
-		// Re-arm: clear the existing flag (if any) and mark fresh.
-		h.unmarkSyncInFlight(puuid)
-		h.markSyncInFlight(puuid)
+	// Mark in-flight BEFORE calling Start so a rapid double-click cannot start
+	// another manager for the same account.
+	if !h.markSyncInFlight(puuid) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"started":  false,
+			"inFlight": true,
+		})
+		return
 	}
 
 	sm, err := h.trackingSyncManagerForRequest(r)
