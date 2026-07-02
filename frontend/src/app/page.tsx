@@ -213,7 +213,6 @@ export default function Home() {
 
     const loadInitialData = useCallback(async () => {
         try {
-            setIsLoading(true);
             const [fetchedPresets, settings] = await Promise.all([getPresets(), getSettings()]);
             let playerLoadout: Record<string, LoadoutItemV1> = {};
             let gameMeta: GameLoadoutMeta = { sprays: [] };
