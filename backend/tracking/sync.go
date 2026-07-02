@@ -193,10 +193,6 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 			shardForRegion(region), id,
 		)
 		b, fetchErr := m.fetchRiot("GET", url, nil)
-		if fetchErr != nil && strings.Contains(fetchErr.Error(), "status 429") {
-			time.Sleep(2 * time.Second)
-			b, fetchErr = m.fetchRiot("GET", url, nil)
-		}
 		if fetchErr != nil {
 			slog.Warn("tracking: getMatchDetails failed", "matchID", id, "err", fetchErr)
 			if strings.Contains(fetchErr.Error(), "status 429") {

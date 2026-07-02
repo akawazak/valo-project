@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"backend/riothttp"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -234,16 +235,11 @@ func postJSON(apiURL, accessToken string, payload []byte, result any) error {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	bodyBytes, err := riothttp.Do(client, req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-	return json.NewDecoder(resp.Body).Decode(result)
+	return json.Unmarshal(bodyBytes, result)
 }
 
 func getJSON(apiURL, accessToken string, result any) error {
@@ -253,16 +249,11 @@ func getJSON(apiURL, accessToken string, result any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	bodyBytes, err := riothttp.Do(client, req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-	return json.NewDecoder(resp.Body).Decode(result)
+	return json.Unmarshal(bodyBytes, result)
 }
 
 func putJSON(apiURL, accessToken string, payload []byte, result any) error {
@@ -273,16 +264,11 @@ func putJSON(apiURL, accessToken string, payload []byte, result any) error {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	bodyBytes, err := riothttp.Do(client, req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-	return json.NewDecoder(resp.Body).Decode(result)
+	return json.Unmarshal(bodyBytes, result)
 }
 
 type AuthTokenRequest struct {
@@ -646,14 +632,9 @@ func runRiotJSON(method, apiURL string, headers http.Header, body any, result an
 		}
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	bodyBytes, err := riothttp.Do(client, req)
 	if err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 	if result != nil && len(bodyBytes) > 0 {
 		return json.Unmarshal(bodyBytes, result)

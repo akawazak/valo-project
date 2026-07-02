@@ -1,6 +1,7 @@
 package tracking
 
 import (
+	"backend/riothttp"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -14,9 +15,6 @@ import (
 // backend/handlers/remote.go (built via buildRiotHeaders) and
 // performs plain HTTP requests, returning the raw response body.
 //
-// We use a private copy of remote.go's runRiotJSON logic (rather
-// than reaching into the handlers package) so the tracking package
-// stays self-contained and unit-testable without a full app boot.
 func NewRiotFetcher(headers http.Header) func(method, apiURL string, body []byte) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return func(method, apiURL string, body []byte) ([]byte, error) {
@@ -36,19 +34,7 @@ func NewRiotFetcher(headers http.Header) func(method, apiURL string, body []byte
 		if len(body) > 0 && req.Header.Get("Content-Type") == "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("request: %w", err)
-		}
-		defer resp.Body.Close()
-		out, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("read body: %w", err)
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("riot %s %s returned status %d: %s", method, apiURL, resp.StatusCode, truncateForLog(out, 256))
-		}
-		return out, nil
+		return riothttp.Do(client, req)
 	}
 }
 
