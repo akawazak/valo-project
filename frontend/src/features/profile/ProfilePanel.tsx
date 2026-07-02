@@ -496,11 +496,14 @@ fetch("https://valorant-api.com/v1/seasons")
         setLoading(true);
         setError("");
         try {
-            const ov = await getProfileOverview(opts);
-            const [ag, mp, st] = await Promise.all([
+            const st = await getProfileSyncStatus(opts).catch(() => null);
+            if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
+            setSyncStatus(st);
+
+            const [ov, ag, mp] = await Promise.all([
+                getProfileOverview(opts),
                 getAgentStats(queue || undefined, opts),
                 getMapStats(queue || undefined, opts),
-                getProfileSyncStatus(opts).catch(() => null),
             ]);
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setOverview(ov);
@@ -508,12 +511,13 @@ fetch("https://valorant-api.com/v1/seasons")
             setSeasonSummary(ov.seasonSummary);
             setAgentStats(ag);
             setMapStats(mp);
-            setSyncStatus(st);
             setIdentity(ov ? { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" } : null);
             if (st?.lastError && !viewedProfile) setError(cleanError(st.lastError));
         } catch (err) {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
-                setError(cleanError(err));
+                if (!viewedProfile || !/404|not found/i.test(String(err))) {
+                    setError(cleanError(err));
+                }
             }
         } finally {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
