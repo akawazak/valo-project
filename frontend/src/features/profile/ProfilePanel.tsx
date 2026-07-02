@@ -1066,14 +1066,14 @@ fetch("https://valorant-api.com/v1/seasons")
                                         </select>
                                     }
                                 >
-                                    {historyLoading && history.length === 0 ? (
-                                        <div className={s.placeholder}>Loading cached profile…</div>
-                                    ) : history.length === 0 ? (
-                                        <div className={s.placeholder}>
-                                            {syncStatus?.inFlight || syncing
-                                                ? "Syncing match history…"
-                                                : "No matches cached yet. Hit Sync."}
+                                    {history.length === 0 && (historyLoading || syncStatus?.inFlight || syncing) ? (
+                                        <div className={s.matchLoading} role="status" aria-live="polite">
+                                            <span className={s.matchLoadingSpinner} aria-hidden="true" />
+                                            <strong>Loading recent matches…</strong>
+                                            <small>The first group will appear as soon as it is ready.</small>
                                         </div>
+                                    ) : history.length === 0 ? (
+                                        <div className={s.placeholder}>No matches cached yet. Hit Sync.</div>
                                     ) : (
                                         <div className={s.matchList}>
                                             {history.map((match) => (
