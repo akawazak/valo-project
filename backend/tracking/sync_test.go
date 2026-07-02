@@ -108,11 +108,131 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.LastHistoryEndIndex != 20 {
-		t.Fatalf("last history end index = %d, want 20", state.LastHistoryEndIndex)
+	if state.LastHistoryEndIndex != -1 || state.LastCompetitiveEndIndex != -1 {
+		t.Fatalf("history cursors = %d/%d, want -1/-1", state.LastHistoryEndIndex, state.LastCompetitiveEndIndex)
 	}
 	if len(requested) != 4 {
 		t.Fatalf("requested urls = %d, want 4: %#v", len(requested), requested)
+	}
+}
+
+func TestSyncManagerBoundsHistoryWorkForLargeCaches(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const puuid = "large-cache-player"
+	if _, err := db.Exec(`
+		INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, gameStartMillis, seasonId, rawJsonPath, cachedAt, accountPuuid)
+		VALUES ('cached', 'competitive', 'map', 'mode', 1, 'season', '', 1, ?);
+		INSERT INTO sync_state
+			(puuid, lastSyncedAt, lastHistoryEndIndex, lastCompetitiveEndIndex)
+		VALUES (?, 1, 220, 180)
+	`, puuid, puuid); err != nil {
+		t.Fatal(err)
+	}
+
+	historyRequests := 0
+	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
+		switch {
+		case strings.Contains(apiURL, "/match-history/"):
+			historyRequests++
+			total := 400
+			if strings.Contains(apiURL, "queue=competitive") {
+				total = 200
+			}
+			history := make([]map[string]any, 20)
+			for i := range history {
+				history[i] = map[string]any{"MatchID": "cached"}
+			}
+			return json.Marshal(map[string]any{"Total": total, "History": history})
+		case strings.Contains(apiURL, "/competitiveupdates"):
+			return json.Marshal(map[string]any{"Matches": []any{}})
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", method, apiURL)
+		}
+	}
+
+	manager := NewSyncManager(db, fetch, appDir)
+	if err := manager.runOnce(puuid, "eu", false); err != nil {
+		t.Fatal(err)
+	}
+	if historyRequests != 4 {
+		t.Fatalf("history requests = %d, want 4", historyRequests)
+	}
+	state, err := GetSyncState(db, puuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastHistoryEndIndex != 240 || state.LastCompetitiveEndIndex != 20 {
+		t.Fatalf("history cursors = %d/%d, want 240/20", state.LastHistoryEndIndex, state.LastCompetitiveEndIndex)
+	}
+}
+
+func TestSyncManagerPublishesMatchesBeforeDetailBatchFinishes(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const puuid = "progressive-player"
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
+		switch {
+		case strings.Contains(apiURL, "/match-history/"):
+			return json.Marshal(map[string]any{
+				"Total": 2,
+				"History": []map[string]any{
+					{"MatchID": "progressive-1"},
+					{"MatchID": "progressive-2"},
+				},
+			})
+		case strings.Contains(apiURL, "/match-details/v1/matches/progressive-1"):
+			fixture := matchFixture(puuid)
+			fixture["matchInfo"].(map[string]any)["matchId"] = "progressive-1"
+			return json.Marshal(fixture)
+		case strings.Contains(apiURL, "/match-details/v1/matches/progressive-2"):
+			close(secondStarted)
+			<-releaseSecond
+			fixture := matchFixture(puuid)
+			fixture["matchInfo"].(map[string]any)["matchId"] = "progressive-2"
+			return json.Marshal(fixture)
+		case strings.Contains(apiURL, "/name-service/"):
+			return json.Marshal([]any{})
+		case strings.Contains(apiURL, "/competitiveupdates"):
+			return json.Marshal(map[string]any{"Matches": []any{}})
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", method, apiURL)
+		}
+	}
+
+	manager := NewSyncManager(db, fetch, appDir)
+	done := make(chan error, 1)
+	go func() { done <- manager.runOnce(puuid, "eu", false) }()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second detail request did not start")
+	}
+	matches, err := ListCachedMatches(db, puuid, "", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0].MatchID != "progressive-1" {
+		t.Fatalf("matches visible during sync = %+v, want progressive-1", matches)
+	}
+
+	close(releaseSecond)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

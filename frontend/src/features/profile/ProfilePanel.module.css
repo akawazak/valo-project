@@ -970,6 +970,8 @@
 }
 
 .matchRow {
+    content-visibility: auto;
+    contain-intrinsic-size: 126px;
     display: grid;
     grid-template-columns: 138px minmax(0, 1fr) 156px 16px;
     align-items: stretch;

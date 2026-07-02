@@ -88,6 +88,8 @@ func main() {
 	mux.HandleFunc("POST /v1/apply-loadout", h.PostApplyLoadout)
 	mux.HandleFunc("GET /v1/settings", h.GetSettings)
 	mux.HandleFunc("POST /v1/settings", h.PostSettings)
+	mux.HandleFunc("GET /v1/storage", h.GetStorageStatus)
+	mux.HandleFunc("POST /v1/storage/clear", h.ClearStorage)
 	mux.HandleFunc("GET /v1/accounts", h.GetAccounts)
 	mux.HandleFunc("POST /v1/accounts", h.PostAccounts)
 	mux.HandleFunc("GET /v1/accounts/local", h.GetLocalAccount)

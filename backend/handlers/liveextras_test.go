@@ -46,3 +46,21 @@ func TestNormalizeLoadoutPlayersUsesDocumentedPregameLoadout(t *testing.T) {
 		t.Fatalf("unexpected pregame loadout: %#v", got)
 	}
 }
+
+func TestNormalizeLoadoutPlayersKeepsOuterSubjectForNestedLoadout(t *testing.T) {
+	got := normalizeLoadoutPlayers(map[string]any{
+		"Loadouts": []any{map[string]any{
+			"Subject": "player-3",
+			"Loadout": map[string]any{
+				"Items": map[string]any{
+					"weapon-3": map[string]any{"ID": "skin-level-3"},
+				},
+			},
+		}},
+	})
+
+	if len(got) != 1 || got[0].Puuid != "player-3" || got[0].GunCount != 1 ||
+		len(got[0].SkinIDs) != 1 || got[0].SkinIDs[0] != "skin-level-3" {
+		t.Fatalf("unexpected nested loadout with outer subject: %#v", got)
+	}
+}

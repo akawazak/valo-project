@@ -47,7 +47,7 @@ function phaseShort(phase: PartyStatusResponse["phase"]) {
 type CardMeta = { small: string; wide: string; art: string };
 type TierMeta = { name: string; icon: string };
 
-export default function LivePartyStatus() {
+export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
     const { activeAccount, isBackendOnline } = useData();
     const [party, setParty] = useState<PartyStatusResponse | null>(null);
     const [social, setSocial] = useState<SocialStatusResponse | null>(null);
@@ -249,7 +249,12 @@ export default function LivePartyStatus() {
                 </div>
             )}
             {!hasParty && <PartyEmptyState party={party} />}
-            <FriendPresenceList social={social} presences={presences} cardCache={cardCache} />
+            <FriendPresenceList
+                social={social}
+                presences={presences}
+                cardCache={cardCache}
+                showOfflineByDefault={showOfflineByDefault}
+            />
         </aside>
     );
 }
@@ -347,12 +352,15 @@ function FriendPresenceList({
     social,
     presences,
     cardCache,
+    showOfflineByDefault,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
     cardCache: Record<string, CardMeta>;
+    showOfflineByDefault: boolean;
 }) {
-    const [showOffline, setShowOffline] = useState(false);
+    const [showOffline, setShowOffline] = useState(showOfflineByDefault);
+    useEffect(() => setShowOffline(showOfflineByDefault), [showOfflineByDefault]);
     const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
     const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
 

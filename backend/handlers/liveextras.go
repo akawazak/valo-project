@@ -141,8 +141,12 @@ func normalizeLoadoutPlayers(raw map[string]any) []LiveLoadoutPlayer {
 		}
 		items := firstMap(loadout, "Items", "items")
 		skins := uniqueStrings(collectStringFields(items, "ID"))
+		puuid := firstString(loadout, "Subject", "subject")
+		if puuid == "" {
+			puuid = firstString(m, "Subject", "subject")
+		}
 		players = append(players, LiveLoadoutPlayer{
-			Puuid:    firstString(loadout, "Subject", "subject"),
+			Puuid:    puuid,
 			SkinIDs:  skins,
 			GunCount: len(items),
 		})

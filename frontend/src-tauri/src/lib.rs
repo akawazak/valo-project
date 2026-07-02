@@ -18,11 +18,6 @@ struct AppState {
     /// cookie loss that happens when two windows try to read the same
     /// SQLite file simultaneously.
     window_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    /// Per-stable-session mutex used by `persist_login_session` to
-    /// serialise cookie-directory copy/delete operations on the same
-    /// stable session. Without this, two concurrent logins for the
-    /// same PUUID can clobber each other's stable directory mid-persist.
-    session_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -52,19 +47,11 @@ impl AppState {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
-    fn lock_for_session(&self, session_id: &str) -> Arc<Mutex<()>> {
-        let mut map = self.session_locks.lock().unwrap();
-        map.entry(session_id.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
 }
 
 // ---------------------------------------------------------------------------
-// Startup cleanup — only removes old *temporary* session directories
-// (session_<timestamp>_<random>) while leaving stable PUUID-based sessions
-// (session_<uuid>) untouched.  This avoids the race condition where an
-// active account's cookie directory was deleted mid-use.
+// Startup cleanup removes abandoned login folders while preserving claimed
+// per-account WebView2 user-data folders. It runs before any WebView exists.
 // ---------------------------------------------------------------------------
 fn cleanup_stale_sessions(config_dir: &std::path::Path) {
     let sessions_dir = config_dir.join("sessions");
@@ -79,7 +66,18 @@ fn cleanup_stale_sessions(config_dir: &std::path::Path) {
         .filter_map(Result::ok)
     {
         let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with("session_") || !entry.path().is_dir() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        if name.starts_with("account_") {
+            if entry.path().join(".claimed").exists() {
+                prune_session_cache(&entry.path());
+            } else {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+            continue;
+        }
+        if !name.starts_with("session_") {
             continue;
         }
         // Temp sessions look like: session_<digits>_<alphanum>
@@ -129,9 +127,73 @@ fn prune_session_cache(session_dir: &std::path::Path) {
     }
 }
 
+fn session_cache_size(config_dir: &std::path::Path) -> u64 {
+    let sessions_dir = config_dir.join("sessions");
+    std::fs::read_dir(sessions_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| {
+            [
+                "EBWebView/Default/Cache",
+                "EBWebView/Default/Code Cache",
+                "EBWebView/Default/GPUCache",
+                "EBWebView/Default/DawnCache",
+                "EBWebView/GrShaderCache",
+                "EBWebView/GraphiteDawnCache",
+                "EBWebView/component_crx_cache",
+            ]
+            .iter()
+            .map(|relative| directory_size(&entry.path().join(relative)))
+            .sum::<u64>()
+        })
+        .sum()
+}
+
+fn directory_size(path: &std::path::Path) -> u64 {
+    if path.is_file() {
+        return path.metadata().map(|meta| meta.len()).unwrap_or(0);
+    }
+    std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| directory_size(&entry.path()))
+        .sum()
+}
+
 // ---------------------------------------------------------------------------
 // Tauri Commands
 // ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_session_cache_size(app_handle: tauri::AppHandle) -> Result<u64, String> {
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    Ok(session_cache_size(&config_dir))
+}
+
+#[tauri::command]
+fn clear_session_caches(app_handle: tauri::AppHandle) -> Result<u64, String> {
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    let before = session_cache_size(&config_dir);
+    let sessions_dir = config_dir.join("sessions");
+    for entry in std::fs::read_dir(sessions_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+    {
+        prune_session_cache(&entry.path());
+    }
+    Ok(before.saturating_sub(session_cache_size(&config_dir)))
+}
 
 #[tauri::command]
 async fn open_login_window(
@@ -223,15 +285,22 @@ async fn open_login_window(
             // and only then tell React to close the popup. The SQLite reader
             // remains the post-close fallback in DataContext.
             std::thread::spawn(move || {
-                let cookie_str = cookie_window
-                    .and_then(|window| window.cookies().ok())
-                    .and_then(|cookies| {
-                        build_riot_cookie_header(
-                            cookies
-                                .iter()
-                                .map(|cookie| (cookie.name(), cookie.value(), cookie.domain())),
-                        )
-                    });
+                let mut cookie_str = None;
+                if let Some(window) = cookie_window {
+                    for _ in 0..5 {
+                        cookie_str = window.cookies().ok().and_then(|cookies| {
+                            build_riot_cookie_header(
+                                cookies
+                                    .iter()
+                                    .map(|cookie| (cookie.name(), cookie.value(), cookie.domain())),
+                            )
+                        });
+                        if cookie_str.is_some() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
 
                 if let Some(cookie_str) = cookie_str {
                     let _ = cookie_handle.emit(
@@ -289,6 +358,51 @@ async fn open_login_window(
 }
 
 #[tauri::command]
+fn claim_login_session(app_handle: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    if !is_valid_account_session_id(&session_id) {
+        return Err("Invalid login session ID".to_string());
+    }
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    let session_dir = config_dir.join("sessions").join(session_id);
+    if !session_dir.is_dir() {
+        return Err("Login session directory is missing".to_string());
+    }
+    std::fs::write(session_dir.join(".claimed"), b"")
+        .map_err(|e| format!("Failed to claim login session: {e}"))
+}
+
+#[tauri::command]
+fn delete_login_session(app_handle: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    if !is_valid_account_session_id(&session_id) {
+        return Err("Invalid login session ID".to_string());
+    }
+    let window_label = format!("riot_login_{session_id}");
+    if app_handle.get_webview_window(&window_label).is_some() {
+        return Err("Login session is still in use".to_string());
+    }
+    let config_dir = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    let session_dir = config_dir.join("sessions").join(session_id);
+    if !session_dir.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(session_dir).map_err(|e| format!("Failed to delete login session: {e}"))
+}
+
+fn is_valid_account_session_id(session_id: &str) -> bool {
+    session_id.starts_with("account_")
+        && session_id.len() <= 128
+        && session_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+#[tauri::command]
 async fn show_login_window(
     app_handle: tauri::AppHandle,
     session_id: Option<String>,
@@ -328,42 +442,6 @@ async fn get_ssid_cookie(
         .map_err(|e| e.to_string())?;
 
     read_session_cookies_with_wait(&config_dir, &session_id, wait_ms.unwrap_or(0))
-}
-
-#[tauri::command]
-async fn persist_login_session(
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-    from_session_id: String,
-    to_session_id: String,
-) -> Result<(), String> {
-    if from_session_id == to_session_id {
-        return Ok(());
-    }
-
-    // Serialise per stable-session: two concurrent logins for the same
-    // PUUID would otherwise delete+copy the stable directory in parallel,
-    // and one side would race ahead and wipe the other's freshly-persisted
-    // cookies. The lock is held for the entire delete+copy window.
-    let lock = state.lock_for_session(&to_session_id);
-    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
-
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let sessions_dir = config_dir.join("sessions");
-    let source = sessions_dir.join(&from_session_id);
-    let target = sessions_dir.join(&to_session_id);
-
-    if !source.exists() {
-        return Ok(());
-    }
-
-    replace_session_dir(&source, &target)
-        .map_err(|e| format!("Failed to persist login session: {}", e))?;
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -563,85 +641,6 @@ fn read_cookies_from_db(
     }
 }
 
-fn remove_dir_all_with_retry(path: &std::path::Path) -> std::io::Result<()> {
-    let mut last_error = None;
-
-    for attempt in 0..20 {
-        match std::fs::remove_dir_all(path) {
-            Ok(()) => return Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => {
-                last_error = Some(err);
-                if attempt < 19 {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| std::io::Error::other("failed to remove directory")))
-}
-
-fn replace_session_dir(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
-    let staging = target.with_extension("staging");
-    let backup = target.with_extension("backup");
-    remove_dir_all_with_retry(&staging)?;
-    if !target.exists() && backup.exists() {
-        std::fs::rename(&backup, target)?;
-    } else {
-        remove_dir_all_with_retry(&backup)?;
-    }
-    copy_dir_recursive_with_retry(source, &staging)?;
-
-    if target.exists() {
-        std::fs::rename(target, &backup)?;
-    }
-    if let Err(err) = std::fs::rename(&staging, target) {
-        if backup.exists() {
-            let _ = std::fs::rename(&backup, target);
-        }
-        return Err(err);
-    }
-    let _ = remove_dir_all_with_retry(&backup);
-    Ok(())
-}
-
-fn copy_dir_recursive_with_retry(
-    source: &std::path::Path,
-    target: &std::path::Path,
-) -> std::io::Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_dir_recursive_with_retry(&source_path, &target_path)?;
-        } else {
-            copy_file_with_retry(&source_path, &target_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn copy_file_with_retry(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
-    let mut last_error = None;
-
-    for attempt in 0..20 {
-        match std::fs::copy(source, target) {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                last_error = Some(err);
-                if attempt < 19 {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
-            }
-        }
-    }
-
-    Err(last_error.unwrap_or_else(|| std::io::Error::other("failed to copy file")))
-}
-
 // ---------------------------------------------------------------------------
 // Cookie decryption — Chromium AES-256-GCM + Windows DPAPI
 // ---------------------------------------------------------------------------
@@ -732,8 +731,9 @@ fn strip_chromium_host_key_hash<'a>(host_key: &str, plaintext: &'a [u8]) -> &'a 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_riot_cookie_header, prune_session_cache, recover_session_swap_artifacts,
-        replace_session_dir, strip_chromium_host_key_hash,
+        build_riot_cookie_header, cleanup_stale_sessions, is_valid_account_session_id,
+        prune_session_cache, recover_session_swap_artifacts, session_cache_size,
+        strip_chromium_host_key_hash,
     };
     use sha2::{Digest, Sha256};
 
@@ -782,14 +782,16 @@ mod tests {
     fn prunes_webview_cache_without_removing_cookies() {
         let root =
             std::env::temp_dir().join(format!("valovault-cache-test-{}", std::process::id()));
-        let cache = root.join("EBWebView/Default/Cache");
-        let cookies = root.join("EBWebView/Default/Network/Cookies");
+        let session = root.join("sessions/session_account");
+        let cache = session.join("EBWebView/Default/Cache");
+        let cookies = session.join("EBWebView/Default/Network/Cookies");
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::create_dir_all(cookies.parent().unwrap()).unwrap();
         std::fs::write(cache.join("data"), b"cache").unwrap();
         std::fs::write(&cookies, b"cookies").unwrap();
 
-        prune_session_cache(&root);
+        assert_eq!(session_cache_size(&root), 5);
+        prune_session_cache(&session);
 
         assert!(!cache.exists());
         assert!(cookies.exists());
@@ -797,22 +799,38 @@ mod tests {
     }
 
     #[test]
-    fn replaces_session_only_after_staging_copy_is_complete() {
-        let root =
-            std::env::temp_dir().join(format!("valovault-session-test-{}", std::process::id()));
-        let source = root.join("source");
-        let target = root.join("target");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(source.join("cookie"), b"new").unwrap();
-        std::fs::write(target.join("cookie"), b"old").unwrap();
+    fn startup_cleanup_keeps_claimed_account_sessions_only() {
+        let root = std::env::temp_dir().join(format!(
+            "valovault-claimed-session-test-{}",
+            std::process::id()
+        ));
+        let claimed = root.join("sessions/account_claimed");
+        let abandoned = root.join("sessions/account_abandoned");
+        let legacy = root.join("sessions/session_existing");
+        std::fs::create_dir_all(&claimed).unwrap();
+        std::fs::create_dir_all(&abandoned).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(claimed.join(".claimed"), b"").unwrap();
 
-        replace_session_dir(&source, &target).unwrap();
+        cleanup_stale_sessions(&root);
 
-        assert_eq!(std::fs::read(target.join("cookie")).unwrap(), b"new");
-        assert!(!target.with_extension("staging").exists());
-        assert!(!target.with_extension("backup").exists());
+        assert!(claimed.exists());
+        assert!(!abandoned.exists());
+        assert!(legacy.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn accepts_only_bounded_account_session_ids() {
+        assert!(is_valid_account_session_id(
+            "account_01234567-89ab-cdef-0123-456789abcdef"
+        ));
+        assert!(!is_valid_account_session_id("../account_escape"));
+        assert!(!is_valid_account_session_id("session_legacy"));
+        assert!(!is_valid_account_session_id(&format!(
+            "account_{}",
+            "a".repeat(121)
+        )));
     }
 
     #[test]
@@ -905,17 +923,19 @@ pub fn run() {
         .manage(AppState {
             child: Mutex::new(None),
             window_locks: Mutex::new(HashMap::new()),
-            session_locks: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
+            get_session_cache_size,
+            clear_session_caches,
             open_login_window,
             show_login_window,
             close_login_window,
+            claim_login_session,
+            delete_login_session,
             get_ssid_cookie,
-            persist_login_session,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

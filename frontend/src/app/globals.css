@@ -5493,6 +5493,10 @@ div#__next>div {
     max-width: 100%;
   }
 
+  .settings-storage-summary {
+    grid-template-columns: 1fr;
+  }
+
   .theme-select-group {
     width: 100%;
   }
@@ -10854,7 +10858,7 @@ div#__next>div {
 }
 
 .settings-account-card.expired {
-  opacity: 0.75;
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
 }
 
 .settings-account-details {
@@ -10863,6 +10867,21 @@ div#__next>div {
   gap: 0.6rem;
   flex: 1;
   min-width: 0;
+}
+
+.settings-account-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.settings-account-topline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 .settings-account-fav-btn {
@@ -10927,6 +10946,61 @@ div#__next>div {
   flex-shrink: 0;
 }
 
+.settings-renew-help {
+  margin: -0.1rem 0 0.65rem;
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  line-height: 1.45;
+}
+
+.settings-bulk-running {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.75rem;
+  margin-bottom: 0.65rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+}
+
+.settings-bulk-running > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-bulk-running .settings-bulk-progress {
+  grid-column: 1 / -1;
+}
+
+.settings-account-health {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: var(--text-dim);
+  font-size: 0.65rem;
+}
+
+.settings-account-health strong {
+  overflow: hidden;
+  color: var(--accent);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-bulk-summary {
+  margin-bottom: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
 .status-pill {
   font-family: var(--font-mono);
   font-size: 0.58rem;
@@ -10968,6 +11042,31 @@ div#__next>div {
   display: grid;
   place-items: center;
   transition: all var(--transition);
+}
+
+.settings-account-action-btn.refresh-btn {
+  width: auto;
+  min-width: 52px;
+  padding-inline: 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+@media (max-width: 760px) {
+  .settings-account-card {
+    align-items: flex-start;
+  }
+
+  .settings-account-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-account-pills {
+    flex-wrap: wrap;
+  }
 }
 
 .refresh-btn:hover:not(:disabled) {
@@ -11061,6 +11160,61 @@ div#__next>div {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+}
+
+.settings-pane-subtitle {
+  margin: 0.5rem 0 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.settings-select {
+  min-width: 145px;
+  padding: 0.55rem 0.7rem;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.settings-storage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.settings-storage-summary > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.85rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.settings-storage-summary span,
+.settings-storage-summary small {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.settings-storage-summary strong {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.settings-storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.settings-storage-message {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
 /* Update status */

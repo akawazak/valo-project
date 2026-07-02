@@ -117,9 +117,10 @@ CREATE TABLE IF NOT EXISTS map_stats (
 CREATE INDEX IF NOT EXISTS idx_map_stats_puuid_queue_matches ON map_stats(puuid, queue, matches DESC);
 
 CREATE TABLE IF NOT EXISTS sync_state (
-    puuid               TEXT    NOT NULL PRIMARY KEY,
-    lastSyncedAt        INTEGER NOT NULL DEFAULT 0,
-    lastHistoryEndIndex INTEGER NOT NULL DEFAULT 0
+    puuid                   TEXT    NOT NULL PRIMARY KEY,
+    lastSyncedAt            INTEGER NOT NULL DEFAULT 0,
+    lastHistoryEndIndex     INTEGER NOT NULL DEFAULT 0,
+    lastCompetitiveEndIndex INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -158,6 +159,10 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 		return nil, fmt.Errorf("tracking: apply schema: %w", err)
 	}
 	if err := ensureMatchPlayerNameColumns(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "sync_state", "lastCompetitiveEndIndex", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -292,6 +297,92 @@ func IsMatchCached(db *sql.DB, matchID string) (bool, error) {
 		return false, fmt.Errorf("tracking: IsMatchCached: %w", err)
 	}
 	return n > 0, nil
+}
+
+func CountCachedMatches(db *sql.DB) (int, error) {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM matches`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("tracking: count cached matches: %w", err)
+	}
+	return count, nil
+}
+
+// PruneMatchesBefore removes detailed match rows older than cutoffMillis.
+// Rank snapshots and act summaries are intentionally retained because they
+// are tiny and cannot always be reconstructed after Riot stops returning an
+// old act.
+func PruneMatchesBefore(db *sql.DB, cutoffMillis int64) (int64, error) {
+	if cutoffMillis <= 0 {
+		return 0, nil
+	}
+	rows, err := db.Query(`SELECT puuid FROM sync_state`)
+	if err != nil {
+		return 0, fmt.Errorf("tracking: list synced accounts: %w", err)
+	}
+	var puuids []string
+	for rows.Next() {
+		var puuid string
+		if err := rows.Scan(&puuid); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		puuids = append(puuids, puuid)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("tracking: begin retention cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		DELETE FROM match_players
+		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
+	`, cutoffMillis); err != nil {
+		return 0, fmt.Errorf("tracking: prune match players: %w", err)
+	}
+	result, err := tx.Exec(`DELETE FROM matches WHERE gameStartMillis < ?`, cutoffMillis)
+	if err != nil {
+		return 0, fmt.Errorf("tracking: prune matches: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM agent_stats`); err != nil {
+		return 0, fmt.Errorf("tracking: clear retained agent stats: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM map_stats`); err != nil {
+		return 0, fmt.Errorf("tracking: clear retained map stats: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("tracking: commit retention cleanup: %w", err)
+	}
+
+	for _, puuid := range puuids {
+		if err := RecomputeAggregates(db, puuid); err != nil {
+			return 0, err
+		}
+	}
+	return result.RowsAffected()
+}
+
+func ClearMatchCache(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("tracking: begin cache clear: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, table := range []string{"match_players", "matches", "agent_stats", "map_stats", "sync_state"} {
+		if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
+			return fmt.Errorf("tracking: clear %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("tracking: commit cache clear: %w", err)
+	}
+	_, _ = db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, _ = db.Exec(`VACUUM`)
+	return nil
 }
 
 // InsertMatchDetails parses a Riot MatchDetailsResponse and atomically
@@ -1380,18 +1471,19 @@ func GetSeasonSummary(db *sql.DB, puuid, seasonID, queue string) (*SeasonSummary
 // MarkSynced updates the sync_state row for the given puuid, setting
 // lastSyncedAt to now (millis) and lastHistoryEndIndex to the given
 // value. Insert or update.
-func MarkSynced(db *sql.DB, puuid string, lastIndex int) error {
+func MarkSynced(db *sql.DB, puuid string, lastIndex, competitiveIndex int) error {
 	if puuid == "" {
 		return fmt.Errorf("tracking: MarkSynced: puuid is required")
 	}
 	now := time.Now().UnixMilli()
 	_, err := db.Exec(`
-		INSERT INTO sync_state (puuid, lastSyncedAt, lastHistoryEndIndex)
-		VALUES (?, ?, ?)
+		INSERT INTO sync_state (puuid, lastSyncedAt, lastHistoryEndIndex, lastCompetitiveEndIndex)
+		VALUES (?, ?, ?, ?)
 		ON CONFLICT(puuid) DO UPDATE SET
 		    lastSyncedAt = excluded.lastSyncedAt,
-		    lastHistoryEndIndex = excluded.lastHistoryEndIndex
-	`, puuid, now, lastIndex)
+		    lastHistoryEndIndex = excluded.lastHistoryEndIndex,
+		    lastCompetitiveEndIndex = excluded.lastCompetitiveEndIndex
+	`, puuid, now, lastIndex, competitiveIndex)
 	if err != nil {
 		return fmt.Errorf("tracking: MarkSynced: %w", err)
 	}
@@ -1406,9 +1498,9 @@ func GetSyncState(db *sql.DB, puuid string) (SyncState, error) {
 	}
 	var s SyncState
 	err := db.QueryRow(`
-		SELECT puuid, lastSyncedAt, lastHistoryEndIndex
+		SELECT puuid, lastSyncedAt, lastHistoryEndIndex, lastCompetitiveEndIndex
 		FROM sync_state WHERE puuid = ?
-	`, puuid).Scan(&s.Puuid, &s.LastSyncedAt, &s.LastHistoryEndIndex)
+	`, puuid).Scan(&s.Puuid, &s.LastSyncedAt, &s.LastHistoryEndIndex, &s.LastCompetitiveEndIndex)
 	if err == sql.ErrNoRows {
 		return SyncState{Puuid: puuid}, nil
 	}

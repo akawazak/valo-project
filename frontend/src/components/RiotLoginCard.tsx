@@ -21,8 +21,7 @@ type Stage = "start" | "paste";
  * Loading state contract:
  *   - "Opening Riot login window…" (popup spawning)
  *   - "Completing login…" (popup visible, waiting for redirect/close)
- *   - "Saving session…" (post-redirect: token exchange + cookie read + persist)
- *   - "Refreshing tokens…" (silent reauth step)
+ *   - "Saving session…" (post-redirect: token exchange + cookie read + claim)
  *
  * Until ALL of these complete, the card shows a full-card overlay and
  * every button (except Cancel) is disabled. The user CANNOT open a second
@@ -36,7 +35,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     const [error, setError] = useState<string | null>(null);
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [phase, setPhase] = useState<"idle" | "opening" | "completing" | "persisting" | "refreshing">("idle");
+    const [phase, setPhase] = useState<"idle" | "opening" | "completing" | "persisting">("idle");
 
     // Belt-and-braces: track our OWN start to detect stale state where the
     // context has cleared `loginInFlight` but our local state hasn't caught up.
@@ -61,10 +60,13 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         }
         const start = loginInFlight.startedAt;
         const tick = () => {
+            if (loginInFlight.redirectReceivedAt) {
+                setPhase("persisting");
+                return;
+            }
             const elapsed = Date.now() - start;
             if (elapsed < 1500) setPhase("opening");
-            else if (elapsed < 6000) setPhase("completing");
-            else setPhase("persisting");
+            else setPhase("completing");
         };
         tick();
         const id = window.setInterval(tick, 500);
@@ -155,13 +157,11 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                             {phase === "opening" && "Opening Riot login window…"}
                             {phase === "completing" && "Waiting for you to sign in…"}
                             {phase === "persisting" && "Saving your session…"}
-                            {phase === "refreshing" && "Refreshing tokens…"}
                         </h3>
                         <p className="login-busy-subtitle">
                             {phase === "opening" && "A new browser window will appear shortly."}
                             {phase === "completing" && "Complete the Riot login in the popup, then return here. Do not close this window — your cookies are being captured."}
-                            {phase === "persisting" && "Persisting your login cookies to a stable session. This must complete before you can add another account."}
-                            {phase === "refreshing" && "Verifying your new tokens against Riot's servers."}
+                            {phase === "persisting" && "Finalizing the saved Riot browser session. This must complete before you can add another account."}
                         </p>
                         <button
                             type="button"

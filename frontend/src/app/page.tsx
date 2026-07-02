@@ -10,7 +10,7 @@ import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
 import { getPlayerLoadoutData, getPresets } from '@/services/api';
-import { getSettings, saveSettings } from '@/services/settings';
+import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { useData } from '@/context/DataContext';
@@ -60,6 +60,9 @@ export default function Home() {
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
+    const [autoSyncMatches, setAutoSyncMatches] = useState<boolean | undefined>(undefined);
+    const [matchRetentionDays, setMatchRetentionDays] = useState<Settings["matchRetentionDays"] | undefined>(undefined);
+    const [showOfflineFriends, setShowOfflineFriends] = useState<boolean | undefined>(undefined);
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
@@ -223,6 +226,9 @@ export default function Home() {
             setDataRevision(r => r + 1);
             setAutoSelectAgent(settings.autoSelectAgent);
             setUseLocalSso(settings.useLocalSso);
+            setAutoSyncMatches(settings.autoSyncMatches);
+            setMatchRetentionDays(settings.matchRetentionDays);
+            setShowOfflineFriends(settings.showOfflineFriends);
             prevSettingsRef.current = settings;
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
@@ -248,17 +254,22 @@ export default function Home() {
         }
     }, [activeAccount?.puuid, isClientHealthy, loadInitialData]);
 
-    const prevSettingsRef = useRef<{ autoSelectAgent: boolean; useLocalSso: boolean } | null>(null);
+    const prevSettingsRef = useRef<Settings | null>(null);
 
     useEffect(() => {
-        if (autoSelectAgent !== undefined && useLocalSso !== undefined) {
-            const prev = prevSettingsRef.current;
-            if (!prev || prev.autoSelectAgent !== autoSelectAgent || prev.useLocalSso !== useLocalSso) {
-                saveSettings({ autoSelectAgent, useLocalSso });
-                prevSettingsRef.current = { autoSelectAgent, useLocalSso };
-            }
-        }
-    }, [autoSelectAgent, useLocalSso]);
+        if (
+            autoSelectAgent === undefined ||
+            useLocalSso === undefined ||
+            autoSyncMatches === undefined ||
+            matchRetentionDays === undefined ||
+            showOfflineFriends === undefined
+        ) return;
+        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends };
+        if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
+        void saveSettings(next).then(() => {
+            prevSettingsRef.current = next;
+        }).catch((error) => console.error("Failed to save settings:", error));
+    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, useLocalSso]);
 
     const handleToggleLocalSso = (val: boolean) => {
         setUseLocalSso(val);
@@ -386,6 +397,7 @@ export default function Home() {
                 activeTab={activeTab}
                 onTabChange={(tab) => {
                     setActiveTab(tab);
+                    if (tab !== 'profile') setProfileTarget(null);
                     if (tab === 'store' || tab === 'profile') setIsWorkspaceOpen(false);
                     if (tab === 'skins') setIsWorkspaceOpen(true);
                 }}
@@ -403,10 +415,11 @@ export default function Home() {
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : activeTab === 'profile' ? (
                         <ProfilePanel
-                            key={`${activeAccount?.puuid || "none"}:${storefrontRefreshKey}`}
+                            key={`${activeAccount?.puuid || "none"}:${profileTarget?.puuid || "own"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
                             requestedProfile={profileTarget}
                             onRequestedProfileChange={setProfileTarget}
+                            autoSyncMatches={autoSyncMatches ?? true}
                         />
                     ) : (
                         isWorkspaceOpen ? (
@@ -530,6 +543,12 @@ export default function Home() {
                 onToggleAutoAgent={(v) => setAutoSelectAgent(v)}
                 useLocalSso={useLocalSso || false}
                 onToggleLocalSso={handleToggleLocalSso}
+                autoSyncMatches={autoSyncMatches ?? true}
+                onToggleAutoSyncMatches={setAutoSyncMatches}
+                matchRetentionDays={matchRetentionDays ?? 365}
+                onMatchRetentionDaysChange={setMatchRetentionDays}
+                showOfflineFriends={showOfflineFriends ?? false}
+                onShowOfflineFriendsChange={setShowOfflineFriends}
                 launchAtStartup={launchAtStartup}
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}
@@ -558,11 +577,7 @@ export default function Home() {
                             setShowAddAccount(false);
                             if (!acc) return;
 
-                            const stableAcc = {
-                                ...acc,
-                                sessionId: `session_${acc.puuid}`,
-                            };
-                            handleAddNewAccount(stableAcc);
+                            handleAddNewAccount(acc);
                         }}
                         onCancel={() => setShowAddAccount(false)}
                     />
@@ -586,12 +601,8 @@ export default function Home() {
                 onClose={() => handleResolveLocalAccount(false)}
             />
 
-            <LiveMatchOverlay onViewProfile={(profile) => {
-                setProfileTarget(profile);
-                setActiveTab('profile');
-                setIsWorkspaceOpen(false);
-            }} />
-            <LivePartyStatus />
+            <LiveMatchOverlay autoSyncMatches={autoSyncMatches ?? true} />
+            <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} />
         </div>
     );
 }

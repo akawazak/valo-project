@@ -50,6 +50,16 @@ type Handler struct {
 	// false} so we don't hammer Riot on every poll.
 	playerStatsCache map[string]CachedPlayerStats
 	playerStatsMu    sync.RWMutex
+
+	// partyCache memoizes the per-match party grouping used by the
+	// live match overlay. Keyed by matchId so a fresh match triggers
+	// a single fan-out across all 10 players via
+	// parties/v1/players/{puuid}; subsequent polls for the same
+	// matchId reuse the cached opaque group keys. The same pattern
+	// as the agent-select countdown: snapshot once, reuse until the
+	// server signals a new match. Protected by partyCacheMu.
+	partyCache   map[string]map[string]string // matchId -> puuid -> opaque group key
+	partyCacheMu sync.RWMutex
 }
 
 // CachedPlayerStats is the per-(puuid, agent) agent-specific record.
@@ -70,6 +80,7 @@ func NewHandler(Val *valclient.ValClient) *Handler {
 		Val:              Val,
 		namesCache:       make(map[string]string),
 		playerStatsCache: make(map[string]CachedPlayerStats),
+		partyCache:       make(map[string]map[string]string),
 	}
 }
 

@@ -4,6 +4,15 @@ import { appFetch, LOCAL_URL } from "./api";
 export type Settings = {
     autoSelectAgent: boolean;
     useLocalSso: boolean;
+    autoSyncMatches: boolean;
+    matchRetentionDays: 0 | 30 | 90 | 180 | 365;
+    showOfflineFriends: boolean;
+};
+
+export type StorageStatus = {
+    matchCacheBytes: number;
+    logBytes: number;
+    cachedMatches: number;
 };
 
 export async function getSettings(): Promise<Settings> {
@@ -32,5 +41,21 @@ export async function saveSettings(settings: Settings): Promise<void> {
         console.error(error);
         throw new LocalClientError();
     }
+}
+
+export async function getStorageStatus(): Promise<StorageStatus> {
+    const response = await appFetch(LOCAL_URL + '/storage');
+    if (!response.ok) throw new Error(await response.text() || 'Failed to read storage usage.');
+    return response.json();
+}
+
+export async function clearMatchCache(): Promise<StorageStatus> {
+    const response = await appFetch(LOCAL_URL + '/storage/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'matches' }),
+    });
+    if (!response.ok) throw new Error(await response.text() || 'Failed to clear match cache.');
+    return response.json();
 }
 

@@ -130,67 +130,22 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		return fmt.Errorf("read sync state: %w", err)
 	}
 
-	// Step 2: compute the history window and fetch it in Riot's
-	// accepted page size. The endpoint rejects wide windows such as
-	// 0..100 with MATCH_HISTORY_INVALID_INDICES.
-	const pageSize = 20
-	endIndex := pageSize
-	if state.LastHistoryEndIndex > 0 {
-		endIndex = state.LastHistoryEndIndex + pageSize
+	// Step 2: always inspect the newest page, then advance one older page per
+	// sync. This keeps refresh time bounded while repeated syncs still sweep
+	// the full history and retry previously missed match details.
+	history, nextHistoryIndex, err := m.fetchHistoryLane(
+		puuid, region, "", state.LastHistoryEndIndex, 1000,
+	)
+	if err != nil {
+		return err
 	}
-	var history []historyItem
-	for start := 0; start < endIndex; start += pageSize {
-		pageEnd := start + pageSize
-		if pageEnd > endIndex {
-			pageEnd = endIndex
-		}
-		historyURL := fmt.Sprintf(
-			"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=%d&endIndex=%d",
-			shardForRegion(region), puuid, start, pageEnd,
-		)
-		body, err := m.fetchRiot("GET", historyURL, nil)
-		if err != nil {
-			return fmt.Errorf("fetch match history %d..%d: %w", start, pageEnd, err)
-		}
-		var histResp struct {
-			History []historyItem `json:"History"`
-		}
-		if err := json.Unmarshal(body, &histResp); err != nil {
-			return fmt.Errorf("parse history %d..%d: %w", start, pageEnd, err)
-		}
-		history = append(history, histResp.History...)
-		if len(histResp.History) < pageEnd-start {
-			endIndex = pageEnd
-			break
-		}
-	}
-
-	// Ranked games can be buried behind a large all-queue history. Fetch the
-	// documented competitive-only lane and use its Total to recover old acts.
-	const maxCompetitiveMatches = 200
-	for start := 0; start < maxCompetitiveMatches; start += pageSize {
-		pageEnd := start + pageSize
-		historyURL := fmt.Sprintf(
-			"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=%d&endIndex=%d&queue=competitive",
-			shardForRegion(region), puuid, start, pageEnd,
-		)
-		body, fetchErr := m.fetchRiot("GET", historyURL, nil)
-		if fetchErr != nil {
-			slog.Warn("tracking: competitive match history fetch failed", "startIndex", start, "err", fetchErr)
-			break
-		}
-		var histResp struct {
-			Total   int           `json:"Total"`
-			History []historyItem `json:"History"`
-		}
-		if err := json.Unmarshal(body, &histResp); err != nil {
-			slog.Warn("tracking: competitive match history parse failed", "startIndex", start, "err", err)
-			break
-		}
-		history = append(history, histResp.History...)
-		if len(histResp.History) < pageSize || (histResp.Total > 0 && pageEnd >= histResp.Total) {
-			break
-		}
+	competitiveHistory, nextCompetitiveIndex, competitiveErr := m.fetchHistoryLane(
+		puuid, region, "competitive", state.LastCompetitiveEndIndex, 200,
+	)
+	if competitiveErr != nil {
+		slog.Warn("tracking: competitive match history fetch failed", "err", competitiveErr)
+	} else {
+		history = append(history, competitiveHistory...)
 	}
 
 	// Step 3: dedupe against cache.
@@ -220,12 +175,15 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 
 	// Step 4: hydrate a bounded batch sequentially. Riot's match-details
 	// endpoint rate-limits burst fan-out; failed IDs remain uncached and are
-	// retried by the next sync because history is always rechecked from zero.
+	// retried because the newest page and unfinished backfill page repeat.
 	const maxDetailsPerSync = 24
+	detailsTruncated := len(newIDs) > maxDetailsPerSync
 	if len(newIDs) > maxDetailsPerSync {
 		newIDs = newIDs[:maxDetailsPerSync]
 	}
 	results := make([][]byte, len(newIDs))
+	insertedEarly := make([]bool, len(newIDs))
+	inserted := 0
 	for i, id := range newIDs {
 		if i > 0 {
 			time.Sleep(250 * time.Millisecond)
@@ -247,6 +205,12 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 			continue
 		}
 		results[i] = b
+		if err := InsertMatchDetails(m.db, m.appDir, id, puuid, b, nil); err != nil {
+			slog.Warn("tracking: early InsertMatchDetails failed", "matchID", id, "err", err)
+		} else {
+			insertedEarly[i] = true
+			inserted++
+		}
 	}
 
 	// Step 5: parse player subjects with empty names and resolve them via name-service.
@@ -307,17 +271,22 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		}
 	}
 
-	// Step 6: insert each successfully fetched match.
-	inserted := 0
+	// Step 6: retry failed early inserts and re-apply rows only when
+	// name-service supplied identity fields that were absent from Riot's match.
 	for i, raw := range results {
 		if raw == nil {
+			continue
+		}
+		if insertedEarly[i] && len(resolvedNames) == 0 {
 			continue
 		}
 		if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, raw, resolvedNames); err != nil {
 			slog.Warn("tracking: InsertMatchDetails failed", "matchID", newIDs[i], "err", err)
 			continue
 		}
-		inserted++
+		if !insertedEarly[i] {
+			inserted++
+		}
 	}
 
 	// Step 7: competitive updates for the current season.
@@ -337,86 +306,155 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	}
 
 	// Step 8.5: resolve any missing names in the database for older matches.
-	resolvedTotal := 0
-	for batchCount := 0; batchCount < 20; batchCount++ { // cap at 20 batches of 100 to prevent infinite loop
-		var dbEmptyPUUIDs []string
-		drows, err := m.db.Query(`
-			SELECT DISTINCT subject FROM match_players
-			WHERE gameName = '' OR gameName IS NULL
-			LIMIT 100
-		`)
-		if err != nil {
-			slog.Warn("tracking: failed to query empty name PUUIDs", "err", err)
-			break
+	// New match payloads already ran name-service above; defer legacy cleanup
+	// to an otherwise idle sync instead of making the user wait twice.
+	if inserted == 0 {
+		if resolved, err := m.resolveMissingNames(puuid, region); err != nil {
+			slog.Warn("tracking: background name resolution failed", "err", err)
+		} else if resolved > 0 {
+			slog.Info("tracking: background name resolution complete", "resolvedCount", resolved)
 		}
-		for drows.Next() {
-			var sub string
-			if err := drows.Scan(&sub); err == nil && sub != "" {
-				dbEmptyPUUIDs = append(dbEmptyPUUIDs, sub)
-			}
-		}
-		drows.Close()
-
-		if len(dbEmptyPUUIDs) == 0 {
-			break
-		}
-
-		nameURL := fmt.Sprintf(
-			"https://pd.%s.a.pvp.net/name-service/v2/players",
-			shardForRegion(region),
-		)
-		reqBody, _ := json.Marshal(dbEmptyPUUIDs)
-		body, err := m.fetchRiot("PUT", nameURL, reqBody)
-		if err != nil {
-			slog.Warn("tracking: batch name-service fetch failed", "err", err)
-			break
-		}
-
-		var nameResp []struct {
-			Subject  string `json:"Subject"`
-			GameName string `json:"GameName"`
-			TagLine  string `json:"TagLine"`
-		}
-		if err := json.Unmarshal(body, &nameResp); err != nil {
-			slog.Warn("tracking: failed to unmarshal batch name-service response", "err", err)
-			break
-		}
-
-		tx, err := m.db.Begin()
-		if err != nil {
-			slog.Warn("tracking: failed to begin transaction for name update", "err", err)
-			break
-		}
-		stmt, err := tx.Prepare(`UPDATE match_players SET gameName = ?, tagLine = ? WHERE subject = ?`)
-		if err != nil {
-			_ = tx.Rollback()
-			slog.Warn("tracking: failed to prepare statement for name update", "err", err)
-			break
-		}
-
-		for _, r := range nameResp {
-			_, err = stmt.Exec(r.GameName, r.TagLine, strings.ToLower(r.Subject))
-			if err == nil {
-				resolvedTotal++
-			}
-		}
-		stmt.Close()
-		if err := tx.Commit(); err != nil {
-			slog.Warn("tracking: failed to commit transaction for name update", "err", err)
-			break
-		}
-	}
-	if resolvedTotal > 0 {
-		slog.Info("tracking: background name resolution complete", "resolvedCount", resolvedTotal)
 	}
 
 	// Step 9: update sync state.
-	if err := MarkSynced(m.db, puuid, endIndex); err != nil {
+	if detailsTruncated {
+		// Repeat the same backfill pages next time so IDs beyond this run's
+		// bounded hydration batch are not skipped until the cursor wraps.
+		nextHistoryIndex = state.LastHistoryEndIndex
+		nextCompetitiveIndex = state.LastCompetitiveEndIndex
+	}
+	if err := MarkSynced(m.db, puuid, nextHistoryIndex, nextCompetitiveIndex); err != nil {
 		slog.Warn("tracking: MarkSynced failed", "err", err)
 	}
 
-	slog.Info("tracking: sync complete", "puuid", puuid, "fetched", inserted, "endIndex", endIndex)
+	slog.Info("tracking: sync complete",
+		"puuid", puuid,
+		"fetched", inserted,
+		"nextHistoryIndex", nextHistoryIndex,
+		"nextCompetitiveIndex", nextCompetitiveIndex)
 	return nil
+}
+
+func (m *SyncManager) fetchHistoryLane(
+	puuid, region, queue string,
+	cursor, maxMatches int,
+) ([]historyItem, int, error) {
+	const pageSize = 20
+	fetchPage := func(start int) ([]historyItem, int, error) {
+		end := min(start+pageSize, maxMatches)
+		historyURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=%d&endIndex=%d",
+			shardForRegion(region), puuid, start, end,
+		)
+		if queue != "" {
+			historyURL += "&queue=" + queue
+		}
+		body, err := m.fetchRiot("GET", historyURL, nil)
+		if err != nil {
+			return nil, 0, fmt.Errorf("fetch %s history %d..%d: %w", queue, start, end, err)
+		}
+		var response struct {
+			Total   int           `json:"Total"`
+			History []historyItem `json:"History"`
+		}
+		if err := json.Unmarshal(body, &response); err != nil {
+			return nil, 0, fmt.Errorf("parse %s history %d..%d: %w", queue, start, end, err)
+		}
+		return response.History, response.Total, nil
+	}
+
+	recent, total, err := fetchPage(0)
+	if err != nil {
+		return nil, cursor, err
+	}
+	if len(recent) < pageSize || (total > 0 && total <= pageSize) {
+		return recent, -1, nil
+	}
+
+	if cursor < pageSize || (total > 0 && cursor >= total) || cursor >= maxMatches {
+		cursor = pageSize
+	}
+	older, olderTotal, err := fetchPage(cursor)
+	if err != nil {
+		return nil, cursor, err
+	}
+	if total == 0 {
+		total = olderTotal
+	}
+	next := cursor + pageSize
+	if len(older) < pageSize || (total > 0 && next >= total) || next >= maxMatches {
+		next = pageSize
+	}
+	return append(recent, older...), next, nil
+}
+
+func (m *SyncManager) resolveMissingNames(puuid, region string) (int, error) {
+	rows, err := m.db.Query(`
+		SELECT DISTINCT mp.subject
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE (mp.gameName = '' OR mp.gameName IS NULL)
+		  AND LOWER(m.accountPuuid) = LOWER(?)
+		LIMIT 100
+	`, puuid)
+	if err != nil {
+		return 0, err
+	}
+	var subjects []string
+	for rows.Next() {
+		var subject string
+		if err := rows.Scan(&subject); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if subject != "" {
+			subjects = append(subjects, subject)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(subjects) == 0 {
+		return 0, nil
+	}
+
+	nameURL := fmt.Sprintf(
+		"https://pd.%s.a.pvp.net/name-service/v2/players",
+		shardForRegion(region),
+	)
+	requestBody, _ := json.Marshal(subjects)
+	body, err := m.fetchRiot("PUT", nameURL, requestBody)
+	if err != nil {
+		return 0, err
+	}
+	var names []struct {
+		Subject  string `json:"Subject"`
+		GameName string `json:"GameName"`
+		TagLine  string `json:"TagLine"`
+	}
+	if err := json.Unmarshal(body, &names); err != nil {
+		return 0, err
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	statement, err := tx.Prepare(`UPDATE match_players SET gameName = ?, tagLine = ? WHERE subject = ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer statement.Close()
+	for _, name := range names {
+		if _, err := statement.Exec(name.GameName, name.TagLine, strings.ToLower(name.Subject)); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(names), nil
 }
 
 // ingestCompetitiveUpdates parses a /competitiveupdates response and

@@ -18,12 +18,12 @@ import (
 //
 // Field names mirror Riot's PascalCase JSON schema.
 type RiotMissionsResponse struct {
-	Version               int                       `json:"Version"`
-	Subject               string                    `json:"Subject"`
-	ActiveSpecialContract string                    `json:"ActiveSpecialContract"`
-	Contracts             []RiotContractProgress    `json:"Contracts"`
-	Missions              []RiotMissionProgress     `json:"Missions"`
-	MissionMetadata       RiotMissionMetadata       `json:"MissionMetadata"`
+	Version               int                    `json:"Version"`
+	Subject               string                 `json:"Subject"`
+	ActiveSpecialContract string                 `json:"ActiveSpecialContract"`
+	Contracts             []RiotContractProgress `json:"Contracts"`
+	Missions              []RiotMissionProgress  `json:"Missions"`
+	MissionMetadata       RiotMissionMetadata    `json:"MissionMetadata"`
 }
 
 // RiotContractProgress is one row of the user's tracked contracts.
@@ -37,10 +37,10 @@ type RiotMissionsResponse struct {
 // is a map keyed by season (legacy), so the frontend / api.ts
 // code is responsible for picking the right entry.
 type RiotContractProgress struct {
-	ContractDefinitionID       string         `json:"ContractDefinitionID"`
-	ContractProgression        map[string]any `json:"ContractProgression"`
-	ProgressionLevelReached    int            `json:"ProgressionLevelReached"`
-	ProgressionTowardsNextLevel int           `json:"ProgressionTowardsNextLevel"`
+	ContractDefinitionID        string         `json:"ContractDefinitionID"`
+	ContractProgression         map[string]any `json:"ContractProgression"`
+	ProgressionLevelReached     int            `json:"ProgressionLevelReached"`
+	ProgressionTowardsNextLevel int            `json:"ProgressionTowardsNextLevel"`
 }
 
 // RiotMissionProgress is one daily/weekly/BTE mission. The ID maps
@@ -82,7 +82,7 @@ func (h *Handler) GetMissions(w http.ResponseWriter, r *http.Request) {
 
 	url := val.BuildUrl("https://pd.{shard}.a.pvp.net/contracts/v1/contracts/{puuid}")
 	resp := new(RiotMissionsResponse)
-	if err := val.RunRequest(http.MethodGet, url, nil, resp); err != nil {
+	if err := runRiotJSON(http.MethodGet, url, val.Header, nil, resp); err != nil {
 		h.returnError(w, err)
 		return
 	}
@@ -131,7 +131,7 @@ func (h *Handler) GetContracts(w http.ResponseWriter, r *http.Request) {
 
 	url := val.BuildUrl("https://pd.{shard}.a.pvp.net/contracts/v1/contracts/{puuid}")
 	resp := new(RiotContractsResponse)
-	if err := val.RunRequest(http.MethodGet, url, nil, resp); err != nil {
+	if err := runRiotJSON(http.MethodGet, url, val.Header, nil, resp); err != nil {
 		h.returnError(w, err)
 		return
 	}

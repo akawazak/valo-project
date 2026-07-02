@@ -1,6 +1,8 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { RiotAccount } from "@/lib/types";
+import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -11,6 +13,12 @@ interface SettingsModalProps {
     onToggleAutoAgent: (v: boolean) => void;
     useLocalSso: boolean;
     onToggleLocalSso: (v: boolean) => void;
+    autoSyncMatches: boolean;
+    onToggleAutoSyncMatches: (v: boolean) => void;
+    matchRetentionDays: 0 | 30 | 90 | 180 | 365;
+    onMatchRetentionDaysChange: (v: 0 | 30 | 90 | 180 | 365) => void;
+    showOfflineFriends: boolean;
+    onShowOfflineFriendsChange: (v: boolean) => void;
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
@@ -49,6 +57,12 @@ function formatRelativeTime(timestamp: number | null): string {
     return `${diffDay}d ago`;
 }
 
+function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+    if (bytes < 1024 ** 2) return `${Math.ceil(bytes / 1024)} KB`;
+    return `${(bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0)} MB`;
+}
+
 export default function SettingsModal({
     isOpen,
     onClose,
@@ -56,6 +70,12 @@ export default function SettingsModal({
     onToggleAutoAgent,
     useLocalSso,
     onToggleLocalSso,
+    autoSyncMatches,
+    onToggleAutoSyncMatches,
+    matchRetentionDays,
+    onMatchRetentionDaysChange,
+    showOfflineFriends,
+    onShowOfflineFriendsChange,
     launchAtStartup,
     onLaunchAtStartupChange,
     theme,
@@ -76,6 +96,27 @@ export default function SettingsModal({
     onRestartForUpdate,
     onCheckForUpdates,
 }: SettingsModalProps) {
+    const [storage, setStorage] = useState<StorageStatus | null>(null);
+    const [sessionCacheBytes, setSessionCacheBytes] = useState(0);
+    const [storageBusy, setStorageBusy] = useState(false);
+    const [storageMessage, setStorageMessage] = useState("");
+
+    const refreshStorage = useCallback(async () => {
+        const [status, sessionBytes] = await Promise.all([
+            getStorageStatus(),
+            import("@tauri-apps/api/core")
+                .then(({ invoke }) => invoke<number>("get_session_cache_size"))
+                .catch(() => 0),
+        ]);
+        setStorage(status);
+        setSessionCacheBytes(sessionBytes);
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        void refreshStorage().catch((error) => setStorageMessage(error instanceof Error ? error.message : String(error)));
+    }, [isOpen, refreshStorage]);
+
     if (!isOpen) return null;
 
     return (
@@ -264,6 +305,110 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
+                        </div>
+
+                        <h3 className="settings-pane-title settings-pane-subtitle">Profile & Presence</h3>
+                        <div className="settings-list">
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Automatic Match Sync</div>
+                                    <div className="settings-item-desc">Download missing match details when a profile is opened. Turn this off to reduce Riot requests and disk usage.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input aria-label="Automatic Match Sync" type="checkbox" checked={autoSyncMatches} onChange={(e) => onToggleAutoSyncMatches(e.target.checked)} />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Offline Friends</div>
+                                    <div className="settings-item-desc">Open the offline section by default in Party & Friends.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input aria-label="Offline Friends" type="checkbox" checked={showOfflineFriends} onChange={(e) => onShowOfflineFriendsChange(e.target.checked)} />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h3 className="settings-pane-title settings-pane-subtitle">Storage</h3>
+                        <div className="settings-list">
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Match Retention</div>
+                                    <div className="settings-item-desc">Keep rank snapshots, but remove older detailed scoreboards and derived agent/map stats.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <select
+                                        aria-label="Match Retention"
+                                        className="settings-select"
+                                        value={matchRetentionDays}
+                                        onChange={(event) => onMatchRetentionDaysChange(Number(event.target.value) as 0 | 30 | 90 | 180 | 365)}
+                                    >
+                                        <option value={30}>30 days</option>
+                                        <option value={90}>90 days</option>
+                                        <option value={180}>180 days</option>
+                                        <option value={365}>1 year</option>
+                                        <option value={0}>Keep everything</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="settings-storage-summary">
+                                <div><span>Match cache</span><strong>{storage ? formatBytes(storage.matchCacheBytes) : "Loading…"}</strong><small>{storage?.cachedMatches ?? 0} matches</small></div>
+                                <div><span>Login image cache</span><strong>{formatBytes(sessionCacheBytes)}</strong><small>Cookies are never removed</small></div>
+                                <div><span>Logs</span><strong>{storage ? formatBytes(storage.logBytes) : "Loading…"}</strong><small>Automatically kept for 7 days</small></div>
+                            </div>
+                            <div className="settings-storage-actions">
+                                <button
+                                    type="button"
+                                    className="settings-update-now-btn"
+                                    disabled={storageBusy || !storage?.cachedMatches}
+                                    onClick={async () => {
+                                        if (!window.confirm("Clear cached match details and derived stats? Rank snapshots and connected accounts will be kept.")) return;
+                                        setStorageBusy(true);
+                                        setStorageMessage("");
+                                        try {
+                                            setStorage(await clearMatchCache());
+                                            setStorageMessage("Match cache cleared.");
+                                        } catch (error) {
+                                            setStorageMessage(error instanceof Error ? error.message : String(error));
+                                        } finally {
+                                            setStorageBusy(false);
+                                        }
+                                    }}
+                                >
+                                    Clear Match Cache
+                                </button>
+                                <button
+                                    type="button"
+                                    className="settings-update-now-btn"
+                                    disabled={storageBusy || sessionCacheBytes === 0}
+                                    onClick={async () => {
+                                        setStorageBusy(true);
+                                        setStorageMessage("");
+                                        try {
+                                            const { invoke } = await import("@tauri-apps/api/core");
+                                            const freed = await invoke<number>("clear_session_caches");
+                                            setSessionCacheBytes(0);
+                                            setStorageMessage(`Freed ${formatBytes(freed)}. Riot login cookies were kept.`);
+                                        } catch (error) {
+                                            setStorageMessage(error instanceof Error ? error.message : String(error));
+                                        } finally {
+                                            setStorageBusy(false);
+                                        }
+                                    }}
+                                >
+                                    Clear Image Cache
+                                </button>
+                                <button type="button" className="btn-tactical-ghost" disabled={storageBusy} onClick={() => void refreshStorage()}>
+                                    Refresh Usage
+                                </button>
+                            </div>
+                            {storageMessage && <div className="settings-storage-message">{storageMessage}</div>}
                         </div>
 
                         {/* Connection Mode */}

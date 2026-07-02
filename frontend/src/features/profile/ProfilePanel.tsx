@@ -30,6 +30,7 @@ interface Props {
     onConnectAccount?: () => void;
     requestedProfile?: { puuid: string; gameName: string; tagLine: string } | null;
     onRequestedProfileChange: (profile: { puuid: string; gameName: string; tagLine: string } | null) => void;
+    autoSyncMatches: boolean;
 }
 
 interface AgentMeta {
@@ -42,6 +43,7 @@ interface AgentMeta {
 interface MapMeta {
     name: string;
     splash: string;
+    mode: "standard" | "teamdeathmatch" | "other";
 }
 interface SeasonMeta {
     uuid: string;
@@ -261,7 +263,13 @@ async function loadMaps(): Promise<Record<string, MapMeta>> {
             const m: Record<string, MapMeta> = {};
             for (const mp of d?.data ?? []) {
                 if (!mp.uuid) continue;
-                const meta = { name: mp.displayName, splash: mp.splash || "" };
+                const assetPath = String(mp.assetPath || "");
+                const mode: MapMeta["mode"] = /\/Maps\/HURM\//i.test(assetPath)
+                    ? "teamdeathmatch"
+                    : /\/Maps\/(?:Duel|NPEV2|Poveglia(?:V2)?)\//i.test(assetPath)
+                      ? "other"
+                      : "standard";
+                const meta = { name: mp.displayName, splash: mp.splash || "", mode };
                 m[mp.uuid.toLowerCase()] = meta;
                 if (mp.mapUrl) m[mp.mapUrl.toLowerCase()] = meta;
             }
@@ -307,7 +315,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     return tierPromise;
 }
 
-export default function ProfilePanel({ onConnectAccount, requestedProfile, onRequestedProfileChange }: Props) {
+export default function ProfilePanel({ onConnectAccount, requestedProfile, onRequestedProfileChange, autoSyncMatches }: Props) {
     const { activeAccount } = useData();
     const ownPuuid = activeAccount?.puuid ?? "";
     const viewedProfile = requestedProfile?.puuid && requestedProfile.puuid !== ownPuuid ? requestedProfile : null;
@@ -348,6 +356,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile, onReq
     const autoSyncPuuidRef = useRef("");
     const historyRequestRef = useRef(0);
     const refreshRequestRef = useRef(0);
+    const hasCachedProfileRef = useRef(false);
     const currentPuuidRef = useRef(puuid);
     currentPuuidRef.current = puuid;
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
@@ -460,6 +469,7 @@ fetch("https://valorant-api.com/v1/seasons")
             if (request !== historyRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setHistory(matches.matches || []);
             setTotal(matches.total || 0);
+            hasCachedProfileRef.current = hasCachedProfileRef.current || Boolean(matches.total || matches.matches?.length);
             setDetails({});
             setExpanded(new Set());
         } catch (err) {
@@ -494,6 +504,7 @@ fetch("https://valorant-api.com/v1/seasons")
             ]);
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setOverview(ov);
+            hasCachedProfileRef.current = true;
             setSeasonSummary(ov.seasonSummary);
             setAgentStats(ag);
             setMapStats(mp);
@@ -510,27 +521,6 @@ fetch("https://valorant-api.com/v1/seasons")
             }
         }
     }, [opts, puuid, queue, viewedProfile]);
-
-    useEffect(() => {
-        refreshRequestRef.current += 1;
-        historyRequestRef.current += 1;
-        setOverview(null);
-        setSeasonSummary(null);
-        setRRHistory(null);
-        setAgentStats(null);
-        setMapStats(null);
-        setSyncStatus(null);
-        setIdentity(null);
-        setError("");
-        setLoading(false);
-        setHistoryLoading(false);
-        setSyncing(false);
-        setDetails({});
-        setExpanded(new Set());
-        setLoadingDetails(new Set());
-        setHistory([]);
-        setTotal(0);
-    }, [puuid]);
 
     useEffect(() => {
         void refresh();
@@ -606,29 +596,36 @@ fetch("https://valorant-api.com/v1/seasons")
                     pollMisses = 0;
                     setSyncStatus(st);
                     finalStatus = st;
-                    if (i === 0 || i % 3 === 2) await loadHistory();
+                    if (viewedProfile || i === 0 || i % 3 === 2) await loadHistory();
                     if (!st.inFlight) break;
                 }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
-                    if (manual) setError(cleanError(finalStatus.lastError));
+                    if (viewedProfile && !hasCachedProfileRef.current) {
+                        onRequestedProfileChange(null);
+                        return;
+                    }
+                    if (manual || viewedProfile) setError(cleanError(finalStatus.lastError));
                 } else if (manual) {
                     showToast("Profile synced.");
                 }
                 await refresh();
                 await loadHistory();
             } catch (err) {
-                if (manual && currentPuuidRef.current === targetPuuid) setError(cleanError(err));
+                if (currentPuuidRef.current === targetPuuid) {
+                    if (viewedProfile && !hasCachedProfileRef.current) onRequestedProfileChange(null);
+                    else if (manual) setError(cleanError(err));
+                }
             } finally {
                 if (currentPuuidRef.current === targetPuuid) setSyncing(false);
             }
         },
-        [loadHistory, opts, puuid, refresh, showToast],
+        [loadHistory, onRequestedProfileChange, opts, puuid, refresh, showToast, viewedProfile],
     );
 
     // Auto-sync on first visit if nothing is cached yet.
     useEffect(() => {
-        if (!puuid || loading || syncing || !syncStatus) return;
+        if (!autoSyncMatches || !puuid || loading || syncing || !syncStatus) return;
         if (syncStatus.inFlight) {
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
@@ -638,7 +635,7 @@ fetch("https://valorant-api.com/v1/seasons")
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
         }
-    }, [loading, puuid, runSync, syncStatus, syncing, viewedProfile]);
+    }, [autoSyncMatches, loading, puuid, runSync, syncStatus, syncing, viewedProfile]);
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
@@ -699,9 +696,9 @@ fetch("https://valorant-api.com/v1/seasons")
         return seasonLabel(id, seasons);
     })();
     const mapLookup = useMemo(() => {
-        const out: Record<string, { displayName: string; splash?: string }> = {};
+        const out: Record<string, { displayName: string; splash?: string; mode: MapMeta["mode"] }> = {};
         for (const [id, meta] of Object.entries(maps)) {
-            out[id] = { displayName: meta.name, splash: meta.splash };
+            out[id] = { displayName: meta.name, splash: meta.splash, mode: meta.mode };
         }
         return out;
     }, [maps]);
@@ -1183,14 +1180,14 @@ function groupAgentStats(stats: ProfileAgentStatsResponse["agents"], agents: Rec
 
 function groupMapStats(
     stats: ProfileMapStatsResponse["maps"],
-    maps: Record<string, { displayName: string; splash?: string }>,
+    maps: Record<string, { displayName: string; splash?: string; mode: MapMeta["mode"] }>,
 ) {
-    const tdmNames = /^(District|Kasbah|Piazza|Drift|Glitch|Skirmish|Summit)/i;
-    const standard: Array<{ stat: ProfileMapStatsResponse["maps"][number]; meta?: { displayName: string; splash?: string } }> = [];
+    const standard: Array<{ stat: ProfileMapStatsResponse["maps"][number]; meta?: { displayName: string; splash?: string; mode: MapMeta["mode"] } }> = [];
     const deathmatch: typeof standard = [];
     for (const stat of stats) {
         const meta = maps[stat.mapID.toLowerCase()];
-        (tdmNames.test(meta?.displayName || "") ? deathmatch : standard).push({ stat, meta });
+        if (meta?.mode === "standard") standard.push({ stat, meta });
+        if (meta?.mode === "teamdeathmatch") deathmatch.push({ stat, meta });
     }
     return [
         { label: "Standard maps", items: standard },

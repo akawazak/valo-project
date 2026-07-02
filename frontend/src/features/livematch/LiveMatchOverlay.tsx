@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { Weapon } from '@/lib/types';
 import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
+import ProfilePanel from '@/features/profile/ProfilePanel';
 import './LiveMatchOverlay.css';
 
 // Sort players for stable rendering. The 5-second poll can reorder
@@ -30,10 +31,12 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
 }
 
 interface Props {
-    onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+    autoSyncMatches: boolean;
 }
 
-export default function LiveMatchOverlay({ onViewProfile }: Props) {
+type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
+
+export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
     const { activeAccount, weapons } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
@@ -41,6 +44,12 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
     const [selectedPlayer, setSelectedPlayer] = useState<LivePlayer | null>(null);
+    const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
+
+    useEffect(() => {
+        setSelectedPlayer(null);
+        setProfileTarget(null);
+    }, [activeAccount?.puuid]);
 
     // ---- Local countdown timer ----
     // The backend only emits timeLeft at each 5s poll. We capture the
@@ -112,11 +121,18 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
             }
         };
 
-        poll();
-        const interval = setInterval(poll, 5000);
+        let timer = 0;
+        const schedule = () => {
+            if (!active) return;
+            timer = window.setTimeout(async () => {
+                await poll();
+                if (active) schedule();
+            }, document.hidden ? 20_000 : 5_000);
+        };
+        void poll().finally(schedule);
         return () => {
             active = false;
-            clearInterval(interval);
+            window.clearTimeout(timer);
         };
     }, [activeAccount, dismissedMatchKey]);
 
@@ -233,6 +249,11 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
     const sortedEnemies = stablePlayerSort(match.enemyTeam);
     const partySizes = partyGroupSizes([...sortedAllies, ...sortedEnemies]);
     const partyColors = partyGroupColors(partySizes);
+    const yourPartySize = partySizes.get("your-party") || 0;
+    const yourPartyColor = partyColors.get("your-party");
+    const hasLiveScore = match.phase === "coregame"
+        && Number.isFinite(match.allyScore)
+        && Number.isFinite(match.enemyScore);
 
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
@@ -259,7 +280,25 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
                     </div>
                 )}
                 {match.phase === "coregame" && (
-                    <div className="live-badge">LIVE MATCH</div>
+                    <div className="live-match-context">
+                        <div className="live-badge">LIVE MATCH</div>
+                        {hasLiveScore && (
+                            <div className="live-match-score" aria-label={`Your team ${match.allyScore}, enemy team ${match.enemyScore}`}>
+                                <span><small>Your team</small><strong>{match.allyScore}</strong></span>
+                                <b>:</b>
+                                <span><small>Enemy</small><strong>{match.enemyScore}</strong></span>
+                            </div>
+                        )}
+                        {yourPartySize > 1 && (
+                            <div
+                                className="live-match-party-summary"
+                                style={{ "--party-color": yourPartyColor } as CSSProperties}
+                            >
+                                <i aria-hidden="true" />
+                                {yourPartySize === 2 ? "Duo queued" : `${yourPartySize}-stack`}
+                            </div>
+                        )}
+                    </div>
                 )}
             </header>
 
@@ -275,6 +314,7 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
+                                partyGroup={player.partyGroup}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -296,6 +336,7 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
+                                partyGroup={player.partyGroup}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -309,7 +350,18 @@ export default function LiveMatchOverlay({ onViewProfile }: Props) {
                     tier={tierCache[selectedPlayer.competitiveTier]}
                     weapons={weapons}
                     onClose={() => setSelectedPlayer(null)}
-                    onViewProfile={onViewProfile}
+                    onViewProfile={(profile) => {
+                        setSelectedPlayer(null);
+                        setProfileTarget(profile);
+                    }}
+                />
+            )}
+            {profileTarget && (
+                <LiveProfileModal
+                    profile={profileTarget}
+                    autoSyncMatches={autoSyncMatches}
+                    onProfileChange={setProfileTarget}
+                    onClose={() => setProfileTarget(null)}
                 />
             )}
         </div>
@@ -347,6 +399,7 @@ function PlayerCard({
     tier,
     partySize,
     partyColor,
+    partyGroup,
     onSelect,
 }: {
     player: LivePlayer;
@@ -354,6 +407,7 @@ function PlayerCard({
     tier?: { name: string; icon: string };
     partySize?: number;
     partyColor?: string;
+    partyGroup?: string;
     onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
@@ -361,6 +415,9 @@ function PlayerCard({
     const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
     const displayName = privatePlayerLabel(player, agent?.name);
+    const partyPillText = partySize && partySize > 1
+        ? partyPillLabel(partySize, partyGroup, player.isLocal)
+        : null;
 
     return (
         <button
@@ -390,7 +447,7 @@ function PlayerCard({
                     <div className="player-name-row">
                         <span className="player-display-name">{displayName}</span>
                         {player.isLocal && <span className="local-user-pill">YOU</span>}
-                        {partySize && partySize > 1 ? <span className="player-party-pill">{partySize === 2 ? "YOUR DUO" : `YOUR PARTY · ${partySize}`}</span> : null}
+                        {partyPillText ? <span className="player-party-pill">{partyPillText}</span> : null}
                     </div>
                     <span className="agent-name-display">
                         {agent ? agent.name : (isLocked || isSelecting ? "Agent Selection" : "Selecting...")}
@@ -441,8 +498,13 @@ function LivePlayerModal({
     onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const [stats, setStats] = useState<LivePlayerStats | null>(null);
-    const [loadoutIds, setLoadoutIds] = useState<string[] | null>(null);
     const [showLoadout, setShowLoadout] = useState(false);
+    const [loadoutAttempt, setLoadoutAttempt] = useState(0);
+    const [loadoutState, setLoadoutState] = useState<LoadoutState>({
+        status: "idle",
+        ids: [],
+        message: "",
+    });
 
     useEffect(() => {
         if (!player.puuid || !player.agentId) {
@@ -461,24 +523,24 @@ function LivePlayerModal({
     useEffect(() => {
         if (!showLoadout) return;
         if (!player.puuid) {
-            setLoadoutIds([]);
+            setLoadoutState({ status: "error", ids: [], message: "This player has no public Riot ID." });
             return;
         }
         let cancelled = false;
-        setLoadoutIds(null);
+        setLoadoutState({ status: "loading", ids: [], message: "Reading this player's live loadout..." });
         getLiveLoadouts().then((response) => {
-            if (cancelled) return;
-            const loadout = response.players?.find((entry) => entry.puuid?.toLowerCase() === player.puuid.toLowerCase());
-            setLoadoutIds(loadout?.skinIds || []);
+            if (!cancelled) setLoadoutState(resolveLiveLoadout(response, player.puuid));
         });
         return () => {
             cancelled = true;
         };
-    }, [player.puuid, showLoadout]);
+    }, [loadoutAttempt, player.puuid, showLoadout]);
+
+    const loadoutIds = loadoutState.ids;
 
     const equippedSkins = useMemo(() => {
         if (!loadoutIds?.length) return [];
-        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; icon: string }>();
+        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; icon: string; fallbackIcon: string }>();
         for (const weapon of weapons) {
             for (const skin of weapon.skins) {
                 const cosmetic = {
@@ -487,6 +549,7 @@ function LivePlayerModal({
                     weapon: weapon.displayName,
                     name: skin.displayName,
                     icon: skin.displayIcon || skin.chromas[0]?.fullRender || weapon.displayIcon,
+                    fallbackIcon: weapon.displayIcon,
                 };
                 byItemId.set(skin.uuid.toLowerCase(), cosmetic);
                 for (const level of skin.levels) byItemId.set(level.uuid.toLowerCase(), cosmetic);
@@ -496,7 +559,7 @@ function LivePlayerModal({
         return Array.from(new Map(
             loadoutIds
                 .map((id) => byItemId.get(id.toLowerCase()))
-                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; icon: string } => Boolean(skin))
+                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; icon: string; fallbackIcon: string } => Boolean(skin))
                 .map((skin) => [skin.weaponId, skin]),
         ).values());
     }, [loadoutIds, weapons]);
@@ -521,6 +584,17 @@ function LivePlayerModal({
     const displayName = privatePlayerLabel(player, agent?.name);
     const [gameName, tagLine = ""] = player.name.split("#");
     const canViewProfile = Boolean(player.puuid && gameName && !["Agent", "Enemy"].includes(gameName));
+    const waitingForWeaponMetadata = loadoutState.status === "ready" && loadoutIds.length > 0 && weapons.length === 0;
+    const unmatchedCosmetics = loadoutState.status === "ready"
+        && loadoutIds.length > 0
+        && weapons.length > 0
+        && equippedSkins.length === 0;
+    const loadoutMessage = waitingForWeaponMetadata
+        ? "Loading weapon artwork..."
+        : unmatchedCosmetics
+            ? "Weapon cosmetics could not be matched yet. Retry."
+            : loadoutState.message;
+    const canRetryLoadout = loadoutState.status === "error" || unmatchedCosmetics;
 
     return (
         <div className="live-player-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -565,7 +639,6 @@ function LivePlayerModal({
                         disabled={!canViewProfile}
                         onClick={() => {
                             if (!canViewProfile) return;
-                            onClose();
                             onViewProfile?.({ puuid: player.puuid, gameName, tagLine });
                         }}
                     >
@@ -573,20 +646,20 @@ function LivePlayerModal({
                         <strong>{canViewProfile ? "Check Profile" : "Profile Hidden"}</strong>
                         <small>{canViewProfile ? "Open full match and rank history" : "Riot hid this identity"}</small>
                     </button>
-                    <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
-                    <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
                     <button type="button" className="live-player-info-tile live-player-loadout-tile" onClick={() => setShowLoadout((open) => !open)}>
                         <span>Loadout</span>
                         <strong>{showLoadout ? "Close Loadout" : "Open Loadout"}</strong>
-                        <small>{equippedSkins.length ? `${equippedSkins.length} equipped skins` : showLoadout && loadoutIds === null ? "Loading live cosmetics" : "View equipped weapons"}</small>
+                        <small>{equippedSkins.length ? `${equippedSkins.length} equipped skins` : showLoadout && loadoutState.status === "loading" ? "Loading live cosmetics" : "View equipped weapons"}</small>
                     </button>
+                    <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
+                    <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
                 </div>
 
                 {showLoadout && <section className="live-player-loadout" aria-label={`${displayName} equipped skins`}>
                     <div className="live-player-loadout-heading">
                         <span>Live Loadout</span>
                         <button type="button" className="live-player-loadout-close" onClick={() => setShowLoadout(false)}>Close</button>
-                        <small>{loadoutIds === null ? "Loading…" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}</small>
+                        <small>{loadoutState.status === "loading" || waitingForWeaponMetadata ? "Loading…" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}</small>
                     </div>
                     {loadoutColumns.length > 0 ? (
                         <div className="live-player-loadout-board">
@@ -597,7 +670,20 @@ function LivePlayerModal({
                                             <h3>{section.label}</h3>
                                             {section.skins.map((skin) => skin ? (
                                                 <div className="live-player-loadout-item" key={skin.uuid}>
-                                                    {skin.icon && <img src={skin.icon} alt="" aria-hidden="true" />}
+                                                    {skin.icon && (
+                                                        <img
+                                                            src={skin.icon}
+                                                            data-fallback={skin.fallbackIcon}
+                                                            alt=""
+                                                            aria-hidden="true"
+                                                            onError={(event) => {
+                                                                const image = event.currentTarget;
+                                                                const fallback = image.dataset.fallback;
+                                                                if (fallback && image.src !== fallback) image.src = fallback;
+                                                                else image.hidden = true;
+                                                            }}
+                                                        />
+                                                    )}
                                                     <span><b>{skin.weapon}</b><small>{skin.name}</small></span>
                                                 </div>
                                             ) : null)}
@@ -606,11 +692,86 @@ function LivePlayerModal({
                                 </div>
                             ))}
                         </div>
-                    ) : <div className="live-player-loadout-empty">{loadoutIds === null ? "Reading this player's live loadout..." : "Riot did not expose this player's loadout."}</div>}
+                    ) : (
+                        <div className="live-player-loadout-empty">
+                            <span>{loadoutMessage}</span>
+                            {canRetryLoadout && (
+                                <button type="button" onClick={() => setLoadoutAttempt((attempt) => attempt + 1)}>
+                                    Retry loadout
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </section>}
 
                 <div className="live-player-modal-note">
                     Only live endpoint fields and cached agent stats are shown here. Missing Riot fields stay hidden instead of being guessed.
+                </div>
+            </section>
+        </div>
+    );
+}
+
+type LoadoutState = {
+    status: "idle" | "loading" | "ready" | "empty" | "error";
+    ids: string[];
+    message: string;
+};
+
+function resolveLiveLoadout(response: LiveLoadoutsResponse, puuid: string): LoadoutState {
+    if (response.phase === "error") {
+        return { status: "error", ids: [], message: response.error || "Riot could not read live loadouts. Try again." };
+    }
+    if (response.phase === "none") {
+        return { status: "error", ids: [], message: "No active match loadout is available. Try again after agent select." };
+    }
+    if (response.loadoutsValid === false) {
+        return { status: "error", ids: [], message: "Riot is still preparing live loadouts. Try again in a moment." };
+    }
+    const loadout = response.players?.find((entry) => entry.puuid?.toLowerCase() === puuid.toLowerCase());
+    if (!loadout) {
+        return { status: "error", ids: [], message: "Riot has not exposed this player's loadout yet." };
+    }
+    const ids = loadout.skinIds || [];
+    if (ids.length === 0 && loadout.gunCount > 0) {
+        return { status: "error", ids: [], message: "Weapon data arrived without cosmetic details. Try again." };
+    }
+    if (ids.length === 0) {
+        return { status: "empty", ids: [], message: "This player has no visible weapon cosmetics yet." };
+    }
+    return { status: "ready", ids, message: "" };
+}
+
+function LiveProfileModal({
+    profile,
+    autoSyncMatches,
+    onProfileChange,
+    onClose,
+}: {
+    profile: ProfileTarget;
+    autoSyncMatches: boolean;
+    onProfileChange: (profile: ProfileTarget | null) => void;
+    onClose: () => void;
+}) {
+    return (
+        <div className="live-profile-modal-backdrop" role="presentation" onMouseDown={onClose}>
+            <section
+                className="live-profile-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`${profile.gameName} profile`}
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <button type="button" className="live-profile-modal-close" onClick={onClose} aria-label="Close player profile">
+                    <span aria-hidden="true">×</span>
+                </button>
+                <div className="live-profile-modal-content">
+                    <ProfilePanel
+                        key={profile.puuid}
+                        requestedProfile={profile}
+                        onRequestedProfileChange={onProfileChange}
+                        autoSyncMatches={autoSyncMatches}
+                    />
                 </div>
             </section>
         </div>
@@ -622,6 +783,21 @@ function privatePlayerLabel(player: LivePlayer, agentName?: string) {
         return agentName || (player.selectionState === "none" ? "Selecting..." : "Hidden player");
     }
     return player.name;
+}
+
+// Label vocabulary for a player's party pill. The local user's own
+// party is anchored with "YOUR …" so it reads as self-referential on
+// every row of their premade. Other premades use the match-history
+// stack labels (DUO / TRIO / 4-STACK / 5-STACK) without the YOUR
+// prefix, so an enemy Jett+Reyna duo reads "DUO", not "YOUR DUO".
+const PARTY_STACK_LABELS = ["DUO", "TRIO", "4-STACK", "5-STACK"];
+
+function partyPillLabel(partySize: number, partyGroup: string | undefined, isLocal: boolean) {
+    if (isLocal || partyGroup === "your-party") {
+        return partySize === 2 ? "YOUR DUO" : `YOUR PARTY · ${partySize}`;
+    }
+    const idx = Math.min(PARTY_STACK_LABELS.length - 1, Math.max(0, partySize - 2));
+    return PARTY_STACK_LABELS[idx];
 }
 
 function InfoTile({

@@ -1078,6 +1078,9 @@ export interface LiveMatchResponse {
     mapId: string;
     queueId: string;
     timeLeft: number;
+    allyScore?: number;
+    enemyScore?: number;
+    scoreSource?: "local-presence";
     allyTeam?: LivePlayer[];
     enemyTeam?: LivePlayer[];
     source?: "local" | "remote";
@@ -1096,6 +1099,7 @@ export interface LivePlayer {
     rankedRating: number;
     /** Opaque grouping only; raw Riot party IDs are never returned. */
     partyGroup?: string;
+    teamId?: string;
 }
 
 export async function getLiveMatch(): Promise<LiveMatchResponse> {

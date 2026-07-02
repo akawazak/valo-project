@@ -16,6 +16,14 @@ export interface RiotAccount {
     sessionId?: string;
     ssid?: string;      // Riot auth cookies used to renew short-lived access tokens
     favorite?: boolean; // user-pinned account
+    lastRenewedAt?: number;
+    lastRefreshAttemptAt?: number;
+    lastRefreshError?: string;
+    lastRefreshErrorCode?: string;
+}
+
+export function accountRequiresManualRepair(account: RiotAccount) {
+    return !account.ssid && !account.sessionId;
 }
 
 export interface IdentityV1 {

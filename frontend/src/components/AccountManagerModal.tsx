@@ -1,7 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { RiotAccount } from "@/lib/types";
+import { accountRequiresManualRepair, RiotAccount } from "@/lib/types";
+
+function relativeTime(timestamp?: number) {
+    if (!timestamp) return "never";
+    const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+}
+
+function renewalFailureText(account: RiotAccount) {
+    if (!account.lastRefreshError) return "";
+    if (account.lastRefreshErrorCode === "cookies_expired") {
+        return "Cookie renewal failed. Repair will retry the saved Riot browser session.";
+    }
+    return account.lastRefreshError;
+}
 
 interface AccountManagerModalProps {
     isOpen: boolean;
@@ -33,13 +51,23 @@ export default function AccountManagerModal({
     const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
     const [bulkProgressCurrent, setBulkProgressCurrent] = useState(0);
     const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
+    const [bulkCurrentAccount, setBulkCurrentAccount] = useState("");
+    const [bulkSummary, setBulkSummary] = useState("");
     const bulkCancelRef = useRef(false);
     const refreshTimeoutMs = 30_000;
+    const bulkAttemptIntervalMs = 2_000;
 
     useEffect(() => {
         if (isOpen) return;
         bulkCancelRef.current = true;
         accounts.forEach(onCancelRefresh);
+        setRefreshingPuuids({});
+        setRefreshResults({});
+        setIsBulkRefreshing(false);
+        setBulkProgressCurrent(0);
+        setBulkProgressTotal(0);
+        setBulkCurrentAccount("");
+        setBulkSummary("");
     }, [accounts, isOpen, onCancelRefresh]);
 
     if (!isOpen) return null;
@@ -48,6 +76,9 @@ export default function AccountManagerModal({
         if (!acc.expiresAt) return true;
         return Date.now() >= acc.expiresAt;
     };
+    const renewableAccounts = accounts.filter(
+        (account) => isAccountTokenExpired(account) || Boolean(account.lastRefreshError),
+    );
 
     const refreshWithTimeout = async (acc: RiotAccount, allowPopup: boolean) => {
         let timeoutId = 0;
@@ -87,29 +118,51 @@ export default function AccountManagerModal({
 
     const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        const expiredAccounts = accounts.filter(isAccountTokenExpired);
-        if (isBulkRefreshing || expiredAccounts.length === 0) return;
+        if (isBulkRefreshing || renewableAccounts.length === 0) return;
         bulkCancelRef.current = false;
+        setBulkSummary("");
         setIsBulkRefreshing(true);
-        setBulkProgressTotal(expiredAccounts.length);
+        setBulkProgressTotal(renewableAccounts.length);
         setBulkProgressCurrent(0);
+        setBulkCurrentAccount("");
+        let renewed = 0;
+        let failed = 0;
 
-        for (let i = 0; i < expiredAccounts.length; i++) {
+        for (let i = 0; i < renewableAccounts.length; i++) {
             if (bulkCancelRef.current) break;
-            const acc = expiredAccounts[i];
+            const acc = renewableAccounts[i];
+            const attemptStartedAt = Date.now();
             setBulkProgressCurrent(i + 1);
+            setBulkCurrentAccount(`${acc.gameName}#${acc.tagLine}`);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
-                const refreshed = await refreshWithTimeout(acc, false);
+                const refreshed = await refreshWithTimeout(acc, true);
+                if (refreshed) renewed += 1;
+                else failed += 1;
                 setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
             } catch (err) {
+                failed += 1;
                 console.error(`Failed to refresh token for ${acc.gameName}:`, err);
                 setRefreshResults((prev) => ({ ...prev, [acc.puuid]: "failed" }));
             } finally {
                 setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
             }
+            if (!bulkCancelRef.current && i < renewableAccounts.length - 1) {
+                const remainingInterval = bulkAttemptIntervalMs - (Date.now() - attemptStartedAt);
+                if (remainingInterval > 0) {
+                    await new Promise((resolve) => window.setTimeout(resolve, remainingInterval));
+                }
+            }
         }
         setIsBulkRefreshing(false);
+        setBulkCurrentAccount("");
+        const checked = renewed + failed;
+        const remaining = Math.max(0, renewableAccounts.length - checked);
+        setBulkSummary(
+            bulkCancelRef.current
+                ? `Stopped at ${checked}/${renewableAccounts.length} · ${renewed} renewed · ${failed} not renewed · ${remaining} remaining`
+                : `${renewed} renewed · ${failed} not renewed`,
+        );
     };
 
     const handleCancelRefreshAll = (e: React.MouseEvent) => {
@@ -118,7 +171,6 @@ export default function AccountManagerModal({
         for (const acc of accounts) {
             if (refreshingPuuids[acc.puuid]) onCancelRefresh(acc);
         }
-        setIsBulkRefreshing(false);
     };
 
     // Sort accounts: favorites first
@@ -141,30 +193,28 @@ export default function AccountManagerModal({
 
                 <div className="account-manager-body">
                     <div className="account-manager-actions-row">
-                        {accounts.length > 0 && accounts.filter(isAccountTokenExpired).length > 0 && (
-                            <>
-                                <button
-                                    type="button"
-                                    className={`btn-tactical btn-tactical-secondary btn-tactical-sm ${
-                                        isBulkRefreshing ? "refreshing" : ""
-                                    }`}
-                                    onClick={handleRefreshAllAccounts}
-                                    disabled={isBulkRefreshing}
-                                >
-                                    {isBulkRefreshing
-                                        ? `Refreshing (${bulkProgressCurrent}/${bulkProgressTotal})`
-                                        : `↻ Renew Access (${accounts.filter(isAccountTokenExpired).length})`}
-                                </button>
-                                {isBulkRefreshing && (
-                                    <button
-                                        type="button"
-                                        className="btn-tactical btn-tactical-danger btn-tactical-sm"
-                                        onClick={handleCancelRefreshAll}
-                                    >
-                                        Cancel refresh
-                                    </button>
-                                )}
-                            </>
+                        <button
+                            type="button"
+                            className={`btn-tactical btn-tactical-secondary btn-tactical-sm ${
+                                isBulkRefreshing ? "refreshing" : ""
+                            }`}
+                            onClick={handleRefreshAllAccounts}
+                            disabled={isBulkRefreshing || renewableAccounts.length === 0}
+                        >
+                            {isBulkRefreshing
+                                ? `Refreshing (${bulkProgressCurrent}/${bulkProgressTotal})`
+                                : renewableAccounts.length
+                                    ? `↻ Renew Access (${renewableAccounts.length})`
+                                    : "Access current"}
+                        </button>
+                        {isBulkRefreshing && (
+                            <button
+                                type="button"
+                                className="btn-tactical btn-tactical-danger btn-tactical-sm"
+                                onClick={handleCancelRefreshAll}
+                            >
+                                Cancel refresh
+                            </button>
                         )}
                         <button
                             type="button"
@@ -178,13 +228,30 @@ export default function AccountManagerModal({
                         </button>
                     </div>
 
+                    <p className="settings-renew-help">
+                        Renews accounts whose access has expired, one at a time. Retry uses the saved Riot browser session when cookie renewal fails.
+                    </p>
+
                     {isBulkRefreshing && (
-                        <div className="settings-bulk-progress mb-3">
+                        <div className="settings-bulk-running" role="status" aria-live="polite">
+                            <span>Checking {bulkCurrentAccount || "saved session"}</span>
+                            <span>{bulkProgressCurrent}/{bulkProgressTotal}</span>
                             <div
-                                className="settings-bulk-progress-fill"
-                                style={{ width: `${(bulkProgressCurrent / bulkProgressTotal) * 100}%` }}
-                            />
+                                className="settings-bulk-progress"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={bulkProgressTotal}
+                                aria-valuenow={bulkProgressCurrent}
+                            >
+                                <div
+                                    className="settings-bulk-progress-fill"
+                                    style={{ width: `${(bulkProgressCurrent / bulkProgressTotal) * 100}%` }}
+                                />
+                            </div>
                         </div>
+                    )}
+                    {bulkSummary && !isBulkRefreshing && (
+                        <div className="settings-bulk-summary" role="status" aria-live="polite">{bulkSummary}</div>
                     )}
 
                     {accounts.length > 0 ? (
@@ -194,6 +261,10 @@ export default function AccountManagerModal({
                                 const isActive = activeAccount?.puuid === acc.puuid;
                                 const isFav = !!acc.favorite;
                                 const isRefreshing = !!refreshingPuuids[acc.puuid];
+                                const needsRepair = accountRequiresManualRepair(acc) ||
+                                    acc.lastRefreshErrorCode === "cookies_expired" ||
+                                    acc.lastRefreshErrorCode === "account_mismatch";
+                                const failureText = renewalFailureText(acc);
 
                                 return (
                                     <div
@@ -211,31 +282,39 @@ export default function AccountManagerModal({
                                             >
                                                 {isFav ? "★" : "☆"}
                                             </button>
-                                            <div
-                                                className="settings-account-identity"
-                                                onClick={() => {
-                                                    if (!isActive) {
-                                                        onSwitchAccount(acc);
-                                                        onClose();
-                                                    }
-                                                }}
-                                            >
-                                                <span className="account-card-name">{acc.gameName}</span>
-                                                <span className="account-card-tag">#{acc.tagLine}</span>
-                                            </div>
-                                            <div className="settings-account-pills">
-                                                {isActive && <span className="status-pill active-pill">Active</span>}
-                                                {isExpired && (
-                                                    <span className="status-pill expired-pill">
-                                                        {acc.ssid ? "Renewal due" : "Sign-in required"}
-                                                    </span>
-                                                )}
-                                                {refreshResults[acc.puuid] === "success" && (
-                                                    <span className="status-pill active-pill">Refreshed</span>
-                                                )}
-                                                {refreshResults[acc.puuid] === "failed" && (
-                                                    <span className="status-pill expired-pill">Renewal failed</span>
-                                                )}
+                                            <div className="settings-account-copy">
+                                                <div className="settings-account-topline">
+                                                    <div
+                                                        className="settings-account-identity"
+                                                        onClick={() => {
+                                                            if (!isActive) {
+                                                                onSwitchAccount(acc);
+                                                                onClose();
+                                                            }
+                                                        }}
+                                                    >
+                                                        <span className="account-card-name">{acc.gameName}</span>
+                                                        <span className="account-card-tag">#{acc.tagLine}</span>
+                                                    </div>
+                                                    <div className="settings-account-pills">
+                                                        {isActive && <span className="status-pill active-pill">Active</span>}
+                                                        {refreshResults[acc.puuid] === "success" ? (
+                                                            <span className="status-pill active-pill">Refreshed</span>
+                                                        ) : refreshResults[acc.puuid] === "failed" ? (
+                                                            <span className="status-pill expired-pill">Renewal failed</span>
+                                                        ) : isExpired ? (
+                                                            <span className="status-pill expired-pill">
+                                                                {acc.sessionId || acc.ssid ? "Renewal due" : "Sign-in required"}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                </div>
+                                                <div className="settings-account-health">
+                                                    <span>{acc.sessionId ? "Riot browser session saved" : acc.ssid ? "Cookie session saved" : "Manual sign-in required"} · renewed {relativeTime(acc.lastRenewedAt)}</span>
+                                                    {failureText && (
+                                                        <strong title={failureText}>{failureText}</strong>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
 
@@ -258,9 +337,9 @@ export default function AccountManagerModal({
                                                     type="button"
                                                     className="settings-account-action-btn refresh-btn"
                                                     onClick={(e) => handleRefreshAccount(e, acc)}
-                                                    title="Renew access"
+                                                    title={needsRepair ? "Repair Riot session" : acc.lastRefreshError ? "Retry renewal" : "Renew access"}
                                                 >
-                                                    ↻
+                                                    {needsRepair ? "Repair" : acc.lastRefreshError ? "Retry" : "Renew"}
                                                 </button>
                                             )}
                                             <button

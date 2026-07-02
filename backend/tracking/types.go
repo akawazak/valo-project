@@ -202,9 +202,10 @@ type Overview struct {
 
 // SyncState is one row of `sync_state`.
 type SyncState struct {
-	Puuid               string `json:"puuid"`
-	LastSyncedAt        int64  `json:"lastSyncedAt"`
-	LastHistoryEndIndex int    `json:"lastHistoryEndIndex"`
+	Puuid                   string `json:"puuid"`
+	LastSyncedAt            int64  `json:"lastSyncedAt"`
+	LastHistoryEndIndex     int    `json:"lastHistoryEndIndex"`
+	LastCompetitiveEndIndex int    `json:"lastCompetitiveEndIndex"`
 }
 
 // SyncStatus is the payload of `GET /v1/profile/sync-status`.

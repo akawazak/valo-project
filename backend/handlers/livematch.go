@@ -1,22 +1,30 @@
 package handlers
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/truearken/valclient/valclient"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
 type LiveMatchResponse struct {
-	Phase     string        `json:"phase"` // "pregame", "coregame", "none"
-	MatchID   string        `json:"matchId"`
-	MapID     string        `json:"mapId"`
-	QueueID   string        `json:"queueId"`
-	TimeLeft  int           `json:"timeLeft"`
-	AllyTeam  []*LivePlayer `json:"allyTeam"`
-	EnemyTeam []*LivePlayer `json:"enemyTeam"`
-	Source    string        `json:"source,omitempty"` // "local" or "remote"
-	Error     string        `json:"error,omitempty"`
+	Phase       string        `json:"phase"` // "pregame", "coregame", "none"
+	MatchID     string        `json:"matchId"`
+	MapID       string        `json:"mapId"`
+	QueueID     string        `json:"queueId"`
+	TimeLeft    int           `json:"timeLeft"`
+	AllyScore   *int          `json:"allyScore,omitempty"`
+	EnemyScore  *int          `json:"enemyScore,omitempty"`
+	ScoreSource string        `json:"scoreSource,omitempty"`
+	AllyTeam    []*LivePlayer `json:"allyTeam"`
+	EnemyTeam   []*LivePlayer `json:"enemyTeam"`
+	Source      string        `json:"source,omitempty"` // "local" or "remote"
+	Error       string        `json:"error,omitempty"`
 }
 
 type LivePlayer struct {
@@ -30,6 +38,7 @@ type LivePlayer struct {
 	CompetitiveTier int    `json:"competitiveTier"`
 	RankedRating    int    `json:"rankedRating"`
 	PartyGroup      string `json:"partyGroup,omitempty"`
+	TeamID          string `json:"teamId,omitempty"`
 }
 
 type CoreGamePlayerResponse struct {
@@ -59,7 +68,7 @@ type CoreGameMatchResponse struct {
 func getCoreGamePlayer(c *valclient.ValClient) (*CoreGamePlayerResponse, error) {
 	url := c.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/core-game/v1/players/{puuid}")
 	resp := new(CoreGamePlayerResponse)
-	if err := c.RunRequest(http.MethodGet, url, nil, resp); err != nil {
+	if err := runRiotJSON(http.MethodGet, url, c.Header, nil, resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -68,7 +77,7 @@ func getCoreGamePlayer(c *valclient.ValClient) (*CoreGamePlayerResponse, error) 
 func getCoreGameMatch(c *valclient.ValClient, matchID string) (*CoreGameMatchResponse, error) {
 	url := c.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/core-game/v1/matches/{matchId}", "{matchId}", matchID)
 	resp := new(CoreGameMatchResponse)
-	if err := c.RunRequest(http.MethodGet, url, nil, resp); err != nil {
+	if err := runRiotJSON(http.MethodGet, url, c.Header, nil, resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
@@ -98,7 +107,7 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 		preMatch, err := val.GetPreGameMatch()
 		if err == nil && preMatch != nil {
 			response := h.buildPregameResponse(val, preMatch)
-			h.markCurrentParty(val, &response)
+			h.markAllParties(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			return response
@@ -112,8 +121,9 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 		coreMatch, err := getCoreGameMatch(val, corePlayer.MatchID)
 		if err == nil && coreMatch != nil {
 			response := h.buildCoregameResponse(val, coreMatch)
-			h.markCurrentParty(val, &response)
+			h.markAllParties(val, &response)
 			h.fillLiveQueueID(val, &response)
+			h.fillLiveScore(val, &response)
 			response.Source = source
 			return response
 		}
@@ -128,10 +138,81 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 	}
 }
 
+func (h *Handler) fillLiveScore(val *valclient.ValClient, response *LiveMatchResponse) {
+	if val == nil || val.Player == nil || response == nil || response.Phase != "coregame" {
+		return
+	}
+	localTeam := ""
+	for _, player := range response.AllyTeam {
+		if player != nil && player.IsLocal {
+			localTeam = player.TeamID
+			break
+		}
+	}
+	port, password, err := readRiotLockfile()
+	if err != nil {
+		return
+	}
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte("riot:"+password))
+	presences, err := doLocalChatRequest(
+		localChatHTTPClient,
+		fmt.Sprintf("https://127.0.0.1:%s/chat/v4/presences", port),
+		auth,
+		func(body []byte) (localPresencesResponse, error) {
+			var out localPresencesResponse
+			err := json.Unmarshal(body, &out)
+			return out, err
+		},
+	)
+	if err != nil {
+		return
+	}
+	for _, presence := range presences.Presences {
+		if !strings.EqualFold(presence.Puuid, val.Player.Uuid) {
+			continue
+		}
+		ally, enemy, ok := scoreFromPresencePrivate(presence.Private, localTeam)
+		if ok {
+			response.AllyScore = &ally
+			response.EnemyScore = &enemy
+			response.ScoreSource = "local-presence"
+		}
+		return
+	}
+}
+
+func scoreFromPresencePrivate(encoded, localTeam string) (int, int, bool) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return 0, 0, false
+	}
+	var private map[string]any
+	if json.Unmarshal(raw, &private) != nil {
+		return 0, 0, false
+	}
+	data, ok := private["matchPresenceData"].(map[string]any)
+	if !ok {
+		return 0, 0, false
+	}
+	allyRaw, allyOK := data["partyOwnerMatchScoreAllyTeam"]
+	enemyRaw, enemyOK := data["partyOwnerMatchScoreEnemyTeam"]
+	if !allyOK || !enemyOK {
+		return 0, 0, false
+	}
+	ally, enemy := intFromAny(allyRaw), intFromAny(enemyRaw)
+	ownerTeam := firstString(data, "partyOwnerMatchCurrentTeam")
+	if ownerTeam != "" && localTeam != "" && !strings.EqualFold(ownerTeam, localTeam) {
+		ally, enemy = enemy, ally
+	}
+	return ally, enemy, true
+}
+
 // markCurrentParty labels only the signed-in player's own party. Live match
 // payloads do not expose every premade, so unknown groups stay unlabelled.
 // Raw Riot party IDs never leave the backend.
 func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatchResponse) {
+	// Kept for compatibility with non-live-match callers; the live
+	// overlay uses markAllParties instead.
 	current, err := getCurrentParty(val)
 	if err != nil || current == nil || current.CurrentPartyID == "" {
 		return
@@ -144,10 +225,158 @@ func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatch
 	for _, member := range details.Members {
 		members = append(members, member.Subject)
 	}
-	markPartyMembers(response, members)
+	markPartyMembers(response, members, "your-party")
 }
 
-func markPartyMembers(response *LiveMatchResponse, memberPuuids []string) {
+// markAllParties fans out across every player in the live match and
+// groups them by their CurrentPartyID. Same-party players share an
+// opaque group key (e.g. "your-party", "party-2", "party-3") which
+// the frontend renders as a colored strip and a stack label.
+//
+// Caching follows the agent-select countdown pattern: the per-match
+// fan-out is run exactly once when a new matchId is observed, and
+// the resulting puuid->group map is reused for every subsequent
+// poll until the match changes. This caps Riot traffic at 10
+// lookups per match instead of 10 lookups every 5 seconds.
+//
+// Solo-queued players get no PartyGroup (Riot returns an empty
+// CurrentPartyID for them) and stay unlabelled, which matches the
+// "do not infer unknown parties" rule in the Handoff doc.
+func (h *Handler) markAllParties(val *valclient.ValClient, response *LiveMatchResponse) {
+	if response == nil || response.MatchID == "" {
+		return
+	}
+
+	// Fast path: same matchId, use cached group map. This works
+	// even without a val client — the cache is the source of truth
+	// after the first fan-out.
+	h.partyCacheMu.RLock()
+	cached, ok := h.partyCache[response.MatchID]
+	h.partyCacheMu.RUnlock()
+	if ok {
+		applyPartyMap(response, cached)
+		return
+	}
+
+	if val == nil {
+		return
+	}
+
+	puuidSet := collectLivePuuids(response)
+	if len(puuidSet) == 0 {
+		return
+	}
+	puuids := make([]string, 0, len(puuidSet))
+	for puuid := range puuidSet {
+		puuids = append(puuids, puuid)
+	}
+
+	// Slow path: fan out across all 10 players in parallel, then group the
+	// completed results. Assigning keys after the fan-out ensures the local
+	// party is always "your-party" regardless of response order.
+	playerToParty := make(map[string]string, len(puuids))
+	localPuuid := ""
+	if val.Player != nil {
+		localPuuid = val.Player.Uuid
+	}
+
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	for _, puuid := range puuids {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			resp, err := getCurrentPartyByPuuid(val, p)
+			if err != nil || resp == nil || resp.CurrentPartyID == "" {
+				return
+			}
+			mu.Lock()
+			playerToParty[p] = resp.CurrentPartyID
+			mu.Unlock()
+		}(puuid)
+	}
+	wg.Wait()
+	groupMap := buildPartyGroupMap(playerToParty, localPuuid)
+
+	h.partyCacheMu.Lock()
+	h.partyCache[response.MatchID] = groupMap
+	h.partyCacheMu.Unlock()
+
+	applyPartyMap(response, groupMap)
+}
+
+func buildPartyGroupMap(playerToParty map[string]string, localPuuid string) map[string]string {
+	localPartyID := ""
+	for puuid, partyID := range playerToParty {
+		if strings.EqualFold(puuid, localPuuid) {
+			localPartyID = partyID
+			break
+		}
+	}
+
+	partyIDs := make(map[string]struct{})
+	for _, partyID := range playerToParty {
+		if partyID != "" && partyID != localPartyID {
+			partyIDs[partyID] = struct{}{}
+		}
+	}
+	sortedPartyIDs := make([]string, 0, len(partyIDs))
+	for partyID := range partyIDs {
+		sortedPartyIDs = append(sortedPartyIDs, partyID)
+	}
+	sort.Strings(sortedPartyIDs)
+
+	partyToKey := make(map[string]string, len(sortedPartyIDs)+1)
+	if localPartyID != "" {
+		partyToKey[localPartyID] = "your-party"
+	}
+	for i, partyID := range sortedPartyIDs {
+		partyToKey[partyID] = "party-" + strconv.Itoa(i+1)
+	}
+
+	groupMap := make(map[string]string, len(playerToParty))
+	for puuid, partyID := range playerToParty {
+		if key := partyToKey[partyID]; key != "" {
+			groupMap[puuid] = key
+		}
+	}
+	return groupMap
+}
+
+// applyPartyMap stamps the cached opaque group keys onto every player
+// in the response. Players missing from the map stay unlabelled.
+func applyPartyMap(response *LiveMatchResponse, groupMap map[string]string) {
+	if len(groupMap) == 0 {
+		return
+	}
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player == nil {
+				continue
+			}
+			if key, ok := groupMap[player.Puuid]; ok && key != "" {
+				player.PartyGroup = key
+			}
+		}
+	}
+}
+
+func collectLivePuuids(response *LiveMatchResponse) map[string]struct{} {
+	seen := make(map[string]struct{})
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player == nil || player.Puuid == "" {
+				continue
+			}
+			seen[player.Puuid] = struct{}{}
+		}
+	}
+	return seen
+}
+
+func markPartyMembers(response *LiveMatchResponse, memberPuuids []string, key string) {
 	members := make(map[string]struct{}, len(memberPuuids))
 	for _, puuid := range memberPuuids {
 		members[puuid] = struct{}{}
@@ -156,7 +385,7 @@ func markPartyMembers(response *LiveMatchResponse, memberPuuids []string) {
 		for _, player := range team {
 			if player != nil {
 				if _, ok := members[player.Puuid]; ok {
-					player.PartyGroup = "your-party"
+					player.PartyGroup = key
 				}
 			}
 		}
@@ -382,6 +611,7 @@ func (h *Handler) buildCoregameResponse(val *valclient.ValClient, match *CoreGam
 				AccountLevel:   playerInfo.PlayerIdentity.AccountLevel,
 				CardID:         playerInfo.PlayerIdentity.PlayerCardID,
 				IsLocal:        playerInfo.Subject == val.Player.Uuid,
+				TeamID:         playerInfo.TeamID,
 			}
 
 			if playerInfo.PlayerIdentity.Incognito && playerInfo.Subject != val.Player.Uuid {
