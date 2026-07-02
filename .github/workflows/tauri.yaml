@@ -73,8 +73,15 @@ jobs:
       - name: Verify frontend
         working-directory: frontend
         run: |
+          npx tsc --noEmit
           npm run lint
           npm audit --omit=dev
+
+      - name: Verify desktop
+        working-directory: frontend
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Require updater signing key
         env:
