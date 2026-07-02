@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
+import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -108,6 +109,9 @@ export default function SettingsModal({
     const [sessionCacheBytes, setSessionCacheBytes] = useState(0);
     const [storageBusy, setStorageBusy] = useState(false);
     const [storageMessage, setStorageMessage] = useState("");
+    const [recoveryBusy, setRecoveryBusy] = useState(false);
+    const [recoveryMessage, setRecoveryMessage] = useState("");
+    const backupInputRef = useRef<HTMLInputElement>(null);
 
     const refreshStorage = useCallback(async () => {
         const [status, sessionBytes] = await Promise.all([
@@ -365,6 +369,88 @@ export default function SettingsModal({
                                     </label>
                                 </div>
                             </div>
+                        </div>
+
+                        <h3 className="settings-pane-title settings-pane-subtitle">Data & Recovery</h3>
+                        <div className="settings-list">
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Backup Current Account</div>
+                                    <div className="settings-item-desc">Export this account&apos;s presets and app preferences. Login tokens and cookies are never included.</div>
+                                </div>
+                                <div className="settings-item-control settings-storage-actions">
+                                    <button
+                                        type="button"
+                                        className="settings-update-now-btn"
+                                        disabled={recoveryBusy}
+                                        onClick={async () => {
+                                            setRecoveryBusy(true);
+                                            setRecoveryMessage("");
+                                            try {
+                                                await exportBackup();
+                                                setRecoveryMessage("Backup downloaded.");
+                                            } catch (error) {
+                                                setRecoveryMessage(error instanceof Error ? error.message : String(error));
+                                            } finally {
+                                                setRecoveryBusy(false);
+                                            }
+                                        }}
+                                    >
+                                        Export Backup
+                                    </button>
+                                    <button type="button" className="btn-tactical-ghost" disabled={recoveryBusy} onClick={() => backupInputRef.current?.click()}>
+                                        Import Backup
+                                    </button>
+                                    <input
+                                        ref={backupInputRef}
+                                        type="file"
+                                        accept="application/json,.json"
+                                        hidden
+                                        onChange={async (event) => {
+                                            const file = event.target.files?.[0];
+                                            event.target.value = "";
+                                            if (!file || !window.confirm("Replace the current account's presets and app preferences with this backup?")) return;
+                                            setRecoveryBusy(true);
+                                            setRecoveryMessage("");
+                                            try {
+                                                await importBackup(file);
+                                                window.location.reload();
+                                            } catch (error) {
+                                                setRecoveryMessage(error instanceof Error ? error.message : String(error));
+                                                setRecoveryBusy(false);
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Diagnostics</div>
+                                    <div className="settings-item-desc">Download app, backend, storage, and preference status without account names or Riot credentials.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <button
+                                        type="button"
+                                        className="btn-tactical-ghost"
+                                        disabled={recoveryBusy}
+                                        onClick={async () => {
+                                            setRecoveryBusy(true);
+                                            setRecoveryMessage("");
+                                            try {
+                                                await exportDiagnostics(appVersion);
+                                                setRecoveryMessage("Diagnostics downloaded.");
+                                            } catch (error) {
+                                                setRecoveryMessage(error instanceof Error ? error.message : String(error));
+                                            } finally {
+                                                setRecoveryBusy(false);
+                                            }
+                                        }}
+                                    >
+                                        Download Diagnostics
+                                    </button>
+                                </div>
+                            </div>
+                            {recoveryMessage && <div className="settings-storage-message">{recoveryMessage}</div>}
                         </div>
 
                         <h3 className="settings-pane-title settings-pane-subtitle">Storage</h3>
