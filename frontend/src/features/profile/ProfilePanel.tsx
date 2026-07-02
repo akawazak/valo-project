@@ -597,7 +597,7 @@ fetch("https://valorant-api.com/v1/seasons")
                     pollMisses = 0;
                     setSyncStatus(st);
                     finalStatus = st;
-                    if (!st.inFlight || st.totalMatches - publishedTotal >= 20) {
+                    if (!st.inFlight || st.totalMatches - publishedTotal >= 3) {
                         await loadHistory();
                         publishedTotal = st.totalMatches;
                     }
