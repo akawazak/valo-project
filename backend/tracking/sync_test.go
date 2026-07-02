@@ -173,7 +173,7 @@ func TestSyncManagerBoundsHistoryWorkForLargeCaches(t *testing.T) {
 	}
 }
 
-func TestSyncManagerPublishesMatchesBeforeDetailBatchFinishes(t *testing.T) {
+func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 	appDir := t.TempDir()
 	db, err := OpenTrackingDB(appDir)
 	if err != nil {
@@ -226,13 +226,20 @@ func TestSyncManagerPublishesMatchesBeforeDetailBatchFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 || matches[0].MatchID != "progressive-1" {
-		t.Fatalf("matches visible during sync = %+v, want progressive-1", matches)
+	if len(matches) != 0 {
+		t.Fatalf("matches visible before batch completed = %+v, want none", matches)
 	}
 
 	close(releaseSecond)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	matches, err = ListCachedMatches(db, puuid, "", 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches visible after batch completed = %d, want 2", len(matches))
 	}
 }
 

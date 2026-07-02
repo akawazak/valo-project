@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 )
 
 // SyncManager is the per-process handle to the Riot sync worker. It
@@ -173,10 +172,11 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	}
 	newIDs = append(newIDs, refreshIDs...)
 
-	// Step 4: hydrate a bounded batch sequentially. Riot's match-details
-	// endpoint rate-limits burst fan-out; failed IDs remain uncached and are
-	// retried because the newest page and unfinished backfill page repeat.
+	// Step 4: hydrate bounded groups of three concurrently. Each group is
+	// persisted before the next starts, giving the UI a useful first page
+	// quickly without unbounded fan-out against Riot.
 	const maxDetailsPerSync = 24
+	const detailBatchSize = 3
 	detailsTruncated := len(newIDs) > maxDetailsPerSync
 	if len(newIDs) > maxDetailsPerSync {
 		newIDs = newIDs[:maxDetailsPerSync]
@@ -184,28 +184,40 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	results := make([][]byte, len(newIDs))
 	insertedEarly := make([]bool, len(newIDs))
 	inserted := 0
-	for i, id := range newIDs {
-		if i > 0 {
-			time.Sleep(250 * time.Millisecond)
+	for start := 0; start < len(newIDs); start += detailBatchSize {
+		end := min(start+detailBatchSize, len(newIDs))
+		fetchErrors := make([]error, end-start)
+		var wg sync.WaitGroup
+		for i := start; i < end; i++ {
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				url := fmt.Sprintf(
+					"https://pd.%s.a.pvp.net/match-details/v1/matches/%s",
+					shardForRegion(region), newIDs[index],
+				)
+				results[index], fetchErrors[index-start] = m.fetchRiot("GET", url, nil)
+			}(i)
 		}
-		url := fmt.Sprintf(
-			"https://pd.%s.a.pvp.net/match-details/v1/matches/%s",
-			shardForRegion(region), id,
-		)
-		b, fetchErr := m.fetchRiot("GET", url, nil)
-		if fetchErr != nil {
-			slog.Warn("tracking: getMatchDetails failed", "matchID", id, "err", fetchErr)
-			if strings.Contains(fetchErr.Error(), "status 429") {
-				break
+		wg.Wait()
+
+		rateLimited := false
+		for i := start; i < end; i++ {
+			if fetchErr := fetchErrors[i-start]; fetchErr != nil {
+				slog.Warn("tracking: getMatchDetails failed", "matchID", newIDs[i], "err", fetchErr)
+				rateLimited = rateLimited || strings.Contains(fetchErr.Error(), "status 429")
+				results[i] = nil
+				continue
 			}
-			continue
+			if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, results[i], nil); err != nil {
+				slog.Warn("tracking: early InsertMatchDetails failed", "matchID", newIDs[i], "err", err)
+			} else {
+				insertedEarly[i] = true
+				inserted++
+			}
 		}
-		results[i] = b
-		if err := InsertMatchDetails(m.db, m.appDir, id, puuid, b, nil); err != nil {
-			slog.Warn("tracking: early InsertMatchDetails failed", "matchID", id, "err", err)
-		} else {
-			insertedEarly[i] = true
-			inserted++
+		if rateLimited {
+			break
 		}
 	}
 
