@@ -184,6 +184,8 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 	const puuid = "progressive-player"
 	secondStarted := make(chan struct{})
 	releaseSecond := make(chan struct{})
+	nameResolutionStarted := make(chan struct{})
+	releaseNameResolution := make(chan struct{})
 	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
 		switch {
 		case strings.Contains(apiURL, "/match-history/"):
@@ -205,9 +207,22 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 			fixture["matchInfo"].(map[string]any)["matchId"] = "progressive-2"
 			return json.Marshal(fixture)
 		case strings.Contains(apiURL, "/name-service/"):
+			close(nameResolutionStarted)
+			<-releaseNameResolution
 			return json.Marshal([]any{})
 		case strings.Contains(apiURL, "/competitiveupdates"):
-			return json.Marshal(map[string]any{"Matches": []any{}})
+			return json.Marshal(map[string]any{
+				"Matches": []map[string]any{{
+					"MatchID":                  "progressive-1",
+					"SeasonID":                 "season-1",
+					"MatchStartTime":           int64(1700000000000),
+					"TierBeforeUpdate":         14,
+					"TierAfterUpdate":          15,
+					"RankedRatingBeforeUpdate": 44,
+					"RankedRatingAfterUpdate":  62,
+					"RankedRatingEarned":       18,
+				}},
+			})
 		default:
 			return nil, fmt.Errorf("unexpected request %s %s", method, apiURL)
 		}
@@ -231,15 +246,21 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 	}
 
 	close(releaseSecond)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	select {
+	case <-nameResolutionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("name resolution did not start after detail batch")
 	}
 	matches, err = ListCachedMatches(db, puuid, "", 0, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 2 {
-		t.Fatalf("matches visible after batch completed = %d, want 2", len(matches))
+	if len(matches) != 2 || matches[0].RREarned != 18 {
+		t.Fatalf("completed batch = %+v, want 2 matches with RR already populated", matches)
+	}
+	close(releaseNameResolution)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

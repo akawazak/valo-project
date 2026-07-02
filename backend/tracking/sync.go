@@ -172,7 +172,19 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	}
 	newIDs = append(newIDs, refreshIDs...)
 
-	// Step 4: hydrate bounded groups of three concurrently. Each group is
+	// Step 4: cache competitive updates first so newly published match rows
+	// include their rank and RR delta on the first read.
+	compURL := fmt.Sprintf(
+		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=20&queue=competitive",
+		shardForRegion(region), puuid,
+	)
+	if cbody, ferr := m.fetchRiot("GET", compURL, nil); ferr == nil {
+		m.ingestCompetitiveUpdates(puuid, cbody)
+	} else {
+		slog.Warn("tracking: competitive updates fetch failed", "err", ferr)
+	}
+
+	// Step 5: hydrate bounded groups of three concurrently. Each group is
 	// persisted before the next starts, giving the UI a useful first page
 	// quickly without unbounded fan-out against Riot.
 	const maxDetailsPerSync = 24
@@ -221,7 +233,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		}
 	}
 
-	// Step 5: parse player subjects with empty names and resolve them via name-service.
+	// Step 6: parse player subjects with empty names and resolve them via name-service.
 	var emptyPUUIDs []string
 	seenPUUIDs := make(map[string]bool)
 	for _, raw := range results {
@@ -279,7 +291,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		}
 	}
 
-	// Step 6: retry failed early inserts and re-apply rows only when
+	// Step 7: retry failed early inserts and re-apply rows only when
 	// name-service supplied identity fields that were absent from Riot's match.
 	for i, raw := range results {
 		if raw == nil {
@@ -295,17 +307,6 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		if !insertedEarly[i] {
 			inserted++
 		}
-	}
-
-	// Step 7: competitive updates for the current season.
-	compURL := fmt.Sprintf(
-		"https://pd.%s.a.pvp.net/mmr/v1/players/%s/competitiveupdates?startIndex=0&endIndex=20&queue=competitive",
-		shardForRegion(region), puuid,
-	)
-	if cbody, ferr := m.fetchRiot("GET", compURL, nil); ferr == nil {
-		m.ingestCompetitiveUpdates(puuid, cbody)
-	} else {
-		slog.Warn("tracking: competitive updates fetch failed", "err", ferr)
 	}
 
 	// Step 8: recompute aggregates for the local player.
