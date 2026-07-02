@@ -1259,9 +1259,12 @@ export interface LiveLoadoutPlayer {
     gunCount: number;
 }
 
-export async function getLiveLoadouts(): Promise<LiveLoadoutsResponse> {
+export async function getLiveLoadouts(phase?: "pregame" | "coregame", matchId?: string): Promise<LiveLoadoutsResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/live-loadouts', undefined, { forceRemoteAuth: true });
+        const params = new URLSearchParams();
+        if (phase) params.set("phase", phase);
+        if (matchId) params.set("matchId", matchId);
+        const response = await fetchWithAuth(`${LOCAL_URL}/live-loadouts${params.size ? `?${params}` : ""}`, undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { phase: "error", error: text || "Failed to fetch live loadouts." };

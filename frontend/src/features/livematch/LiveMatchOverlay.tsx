@@ -346,6 +346,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
             {selectedPlayer && (
                 <LivePlayerModal
                     player={selectedPlayer}
+                    match={match}
                     agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
                     tier={tierCache[selectedPlayer.competitiveTier]}
                     weapons={weapons}
@@ -484,6 +485,7 @@ function PlayerCard({
 
 function LivePlayerModal({
     player,
+    match,
     agent,
     tier,
     weapons,
@@ -491,6 +493,7 @@ function LivePlayerModal({
     onViewProfile,
 }: {
     player: LivePlayer;
+    match: LiveMatchResponse;
     agent?: { name: string; icon: string; full: string };
     tier?: { name: string; icon: string };
     weapons: Weapon[];
@@ -528,13 +531,14 @@ function LivePlayerModal({
         }
         let cancelled = false;
         setLoadoutState({ status: "loading", ids: [], message: "Reading this player's live loadout..." });
-        getLiveLoadouts().then((response) => {
+        const phase = match.phase === "none" ? undefined : match.phase;
+        getLiveLoadouts(phase, match.matchId).then((response) => {
             if (!cancelled) setLoadoutState(resolveLiveLoadout(response, player.puuid));
         });
         return () => {
             cancelled = true;
         };
-    }, [loadoutAttempt, player.puuid, showLoadout]);
+    }, [loadoutAttempt, match.matchId, match.phase, player.puuid, showLoadout]);
 
     const loadoutIds = loadoutState.ids;
 

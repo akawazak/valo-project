@@ -82,6 +82,60 @@ func TestCollectLivePuuidsDedupesAcrossTeams(t *testing.T) {
 	}
 }
 
+func TestTrustedPartyLookupRejectsSubjectMismatch(t *testing.T) {
+	// Real scenario from the bug report: querying player "teammate-1"
+	// but the server returns the local user's party record (Subject
+	// = "local-user"). trustingPartyLookup must refuse the result,
+	// otherwise teammate-1 would get stamped as part of "your-party".
+	resp := &currentPartyPlayerResponse{
+		Subject:        "local-user",
+		CurrentPartyID: "party-local",
+	}
+	if id, ok := trustedPartyLookup(resp, "teammate-1"); ok {
+		t.Fatalf("Subject mismatch must be rejected, got id=%q ok=%v", id, ok)
+	}
+}
+
+func TestTrustedPartyLookupAcceptsMatchingSubject(t *testing.T) {
+	resp := &currentPartyPlayerResponse{
+		Subject:        "teammate-1",
+		CurrentPartyID: "party-local",
+	}
+	id, ok := trustedPartyLookup(resp, "teammate-1")
+	if !ok || id != "party-local" {
+		t.Fatalf("matching Subject should be trusted, got id=%q ok=%v", id, ok)
+	}
+}
+
+func TestTrustedPartyLookupAcceptsMatchingSubjectDifferentCase(t *testing.T) {
+	// Riot UUID casing is documented as inconsistent. Both sides
+	// must be normalized before comparison.
+	resp := &currentPartyPlayerResponse{
+		Subject:        "TEAMMATE-1",
+		CurrentPartyID: "party-local",
+	}
+	id, ok := trustedPartyLookup(resp, "teammate-1")
+	if !ok || id != "party-local" {
+		t.Fatalf("case-insensitive Subject match should be trusted, got id=%q ok=%v", id, ok)
+	}
+}
+
+func TestTrustedPartyLookupRejectsEmptyPartyID(t *testing.T) {
+	resp := &currentPartyPlayerResponse{
+		Subject:        "solo-player",
+		CurrentPartyID: "",
+	}
+	if _, ok := trustedPartyLookup(resp, "solo-player"); ok {
+		t.Fatal("empty CurrentPartyID (solo queue) must be rejected")
+	}
+}
+
+func TestTrustedPartyLookupRejectsNilResponse(t *testing.T) {
+	if _, ok := trustedPartyLookup(nil, "anyone"); ok {
+		t.Fatal("nil response must be rejected")
+	}
+}
+
 func TestPartyCacheReusesAcrossPolls(t *testing.T) {
 	h := &Handler{partyCache: make(map[string]map[string]string)}
 	matchID := "match-reuse"

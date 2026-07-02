@@ -454,13 +454,6 @@
   border-radius: var(--radius-md);
 }
 
-.live-party-friend-row.has-card-art {
-  min-height: 58px;
-  background-position: center;
-  background-size: cover;
-  border-color: rgba(111, 205, 229, 0.18);
-}
-
 .live-party-friend-avatar {
   position: relative;
   width: 42px;
@@ -638,17 +631,6 @@
   background-size: cover;
   background-position: center;
   overflow: hidden;
-}
-
-.live-party-member.has-card-bg {
-  border-color: rgba(255, 255, 255, 0.14);
-}
-
-.live-party-member-scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, rgba(7, 13, 18, 0.82) 0%, rgba(7, 13, 18, 0.55) 56%, rgba(7, 13, 18, 0.78) 100%);
-  pointer-events: none;
 }
 
 .live-party-member.is-local {

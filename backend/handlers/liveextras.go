@@ -71,6 +71,10 @@ func (h *Handler) GetLiveLoadouts(w http.ResponseWriter, r *http.Request) {
 		h.returnAny(w, LiveLoadoutsResponse{Phase: "error", Error: errString(err)})
 		return
 	}
+	if phase, matchID := r.URL.Query().Get("phase"), r.URL.Query().Get("matchId"); matchID != "" && (phase == "pregame" || phase == "coregame") {
+		h.returnAny(w, h.fetchLiveLoadouts(val, phase, matchID, source))
+		return
+	}
 
 	prePlayer, preErr := val.GetPreGamePlayer()
 	if preErr == nil && prePlayer != nil {

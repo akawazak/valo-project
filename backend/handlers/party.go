@@ -30,6 +30,14 @@ type PartyMember struct {
 }
 
 type currentPartyPlayerResponse struct {
+	// Subject is the PUUID the response is actually about. Riot's
+	// /parties/v1/players/{puuid} endpoint is auth-scoped to the
+	// local user — when we query someone else's PUUID the server
+	// may still return the local user's party record. The Subject
+	// in the body lets us detect that case and drop the result,
+	// otherwise we'd mark every teammate of the local user as
+	// "in your party" and surface a phantom 5-stack.
+	Subject        string `json:"Subject"`
 	CurrentPartyID string `json:"CurrentPartyID"`
 }
 
@@ -201,10 +209,7 @@ func (h *Handler) buildPartyResponse(val *valclient.ValClient, source string, de
 	}
 
 	for _, member := range details.Members {
-		name := "Player"
-		if !member.PlayerIdentity.Incognito {
-			name = h.getPlayerNameCached(val, member.Subject)
-		}
+		name := h.getPlayerNameCached(val, member.Subject)
 		accountLevel := member.PlayerIdentity.AccountLevel
 		cardID := member.PlayerIdentity.PlayerCardID
 		if accountLevel == 0 && member.Subject != "" && member.PlayerIdentity.Subject == "" {

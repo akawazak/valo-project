@@ -599,6 +599,9 @@ fetch("https://valorant-api.com/v1/seasons")
                     if (viewedProfile || i === 0 || i % 3 === 2) await loadHistory();
                     if (!st.inFlight) break;
                 }
+                if (finalStatus?.inFlight) {
+                    throw new Error("Sync is still running in the background. New matches will appear as Riot returns them.");
+                }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
                     if (viewedProfile && !hasCachedProfileRef.current) {

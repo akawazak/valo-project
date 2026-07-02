@@ -44,7 +44,7 @@ function phaseShort(phase: PartyStatusResponse["phase"]) {
     return "Party";
 }
 
-type CardMeta = { small: string; wide: string; art: string };
+type CardMeta = { icon: string };
 type TierMeta = { name: string; icon: string };
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
@@ -140,9 +140,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 for (const item of d.data || []) {
                     if (!item.uuid) continue;
                     m[item.uuid.toLowerCase()] = {
-                        small: item.smallArt || item.displayIcon || "",
-                        wide: item.wideArt || "",
-                        art: item.largeArt || item.artwork || "",
+                        icon: item.displayIcon || item.smallArt || "",
                     };
                 }
                 setCardCache(m);
@@ -293,8 +291,8 @@ function PartyPill({
             title="Open party"
         >
             <span className="live-party-pill-avatar" aria-hidden="true">
-                {card?.small ? (
-                    <img src={card.small} alt="" className="live-party-pill-avatar-img" />
+                {card?.icon ? (
+                    <img src={card.icon} alt="" className="live-party-pill-avatar-img" />
                 ) : (
                     <span className="live-party-pill-avatar-letter">
                         {local.name.slice(0, 1).toUpperCase()}
@@ -437,13 +435,10 @@ function FriendPresenceRow({
     const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
     return (
         <div
-            className={`live-party-friend-row is-${state}${card?.wide ? " has-card-art" : ""}`}
-            style={card?.wide ? {
-                backgroundImage: `linear-gradient(90deg, rgba(4, 18, 29, .93) 0%, rgba(4, 18, 29, .76) 58%, rgba(4, 18, 29, .9) 100%), url(${card.wide})`,
-            } : undefined}
+            className={`live-party-friend-row is-${state}`}
         >
             <span className="live-party-friend-avatar" aria-hidden="true">
-                {card?.small ? <img src={card.small} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
+                {card?.icon ? <img src={card.icon} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
                 <i className="live-party-friend-dot" />
             </span>
             <span className="live-party-friend-main">
@@ -516,17 +511,13 @@ function PartyMemberRow({
     card?: CardMeta;
     tier?: TierMeta;
 }) {
-    const showArtBg = !!card?.art;
     return (
         <div
-            className={`live-party-member${member.isLocal ? " is-local" : ""}${showArtBg ? " has-card-bg" : ""}`}
-            style={showArtBg ? { backgroundImage: `url(${card!.art})` } : undefined}
+            className={`live-party-member${member.isLocal ? " is-local" : ""}`}
         >
-            {showArtBg && <div className="live-party-member-scrim" aria-hidden="true" />}
-
             <div className="live-party-avatar" aria-hidden="true">
-                {card?.small ? (
-                    <img src={card.small} alt="" className="live-party-avatar-img" />
+                {card?.icon ? (
+                    <img src={card.icon} alt="" className="live-party-avatar-img" />
                 ) : (
                     <span className="live-party-avatar-letter">
                         {member.name.slice(0, 1).toUpperCase()}

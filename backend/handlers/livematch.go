@@ -107,7 +107,7 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 		preMatch, err := val.GetPreGameMatch()
 		if err == nil && preMatch != nil {
 			response := h.buildPregameResponse(val, preMatch)
-			h.markAllParties(val, &response)
+			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			return response
@@ -121,7 +121,7 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 		coreMatch, err := getCoreGameMatch(val, corePlayer.MatchID)
 		if err == nil && coreMatch != nil {
 			response := h.buildCoregameResponse(val, coreMatch)
-			h.markAllParties(val, &response)
+			h.markCurrentParty(val, &response)
 			h.fillLiveQueueID(val, &response)
 			h.fillLiveScore(val, &response)
 			response.Source = source
@@ -226,6 +226,13 @@ func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatch
 		members = append(members, member.Subject)
 	}
 	markPartyMembers(response, members, "your-party")
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player != nil && player.PartyGroup == "your-party" && !player.IsLocal && (player.Name == "Agent" || player.Name == "Enemy") {
+				player.Name = h.getPlayerNameCached(val, player.Puuid)
+			}
+		}
+	}
 }
 
 // markAllParties fans out across every player in the live match and
@@ -289,11 +296,15 @@ func (h *Handler) markAllParties(val *valclient.ValClient, response *LiveMatchRe
 		go func(p string) {
 			defer wg.Done()
 			resp, err := getCurrentPartyByPuuid(val, p)
-			if err != nil || resp == nil || resp.CurrentPartyID == "" {
+			if err != nil || resp == nil {
+				return
+			}
+			partyID, ok := trustedPartyLookup(resp, p)
+			if !ok {
 				return
 			}
 			mu.Lock()
-			playerToParty[p] = resp.CurrentPartyID
+			playerToParty[p] = partyID
 			mu.Unlock()
 		}(puuid)
 	}
@@ -343,6 +354,29 @@ func buildPartyGroupMap(playerToParty map[string]string, localPuuid string) map[
 		}
 	}
 	return groupMap
+}
+
+// trustedPartyLookup returns the CurrentPartyID only when the response
+// is unambiguously about the queried player. Two guard rails:
+//
+//  1. Empty CurrentPartyID means solo queue — no party.
+//  2. Subject must match the queried PUUID. Riot's
+//     /parties/v1/players/{puuid} endpoint is auth-scoped to the local
+//     user, so a query for someone else's PUUID can come back with the
+//     local user's party record (Subject = local user). Treating that
+//     as a hit would falsely stamp every teammate of the local user as
+//     "your-party" and surface a phantom 5-stack in the live overlay.
+//
+// Returns (partyID, true) when the result is trustworthy, ("", false)
+// otherwise. The caller should skip marking in the false case.
+func trustedPartyLookup(resp *currentPartyPlayerResponse, queriedPuuid string) (string, bool) {
+	if resp == nil || resp.CurrentPartyID == "" {
+		return "", false
+	}
+	if !strings.EqualFold(resp.Subject, queriedPuuid) {
+		return "", false
+	}
+	return resp.CurrentPartyID, true
 }
 
 // applyPartyMap stamps the cached opaque group keys onto every player
