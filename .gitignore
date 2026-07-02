@@ -1,5 +1,6 @@
 # Build artifacts
 backend/*.exe
+backend/*.exe~
 backend/bin/
 backend/tmp/
 backend/.gocache*/
