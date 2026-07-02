@@ -523,6 +523,26 @@ fetch("https://valorant-api.com/v1/seasons")
     }, [opts, puuid, queue, viewedProfile]);
 
     useEffect(() => {
+        setOverview(null);
+        setSeasonSummary(null);
+        setRRHistory(null);
+        setHistory([]);
+        setTotal(0);
+        setAgentStats(null);
+        setMapStats(null);
+        setSyncStatus(null);
+        setIdentity(null);
+        setDetails({});
+        setExpanded(new Set());
+        setLoadingDetails(new Set());
+        setSyncing(false);
+        setError("");
+        setLoading(Boolean(puuid));
+        setHistoryLoading(Boolean(puuid));
+        hasCachedProfileRef.current = false;
+    }, [puuid]);
+
+    useEffect(() => {
         void refresh();
     }, [refresh]);
 
