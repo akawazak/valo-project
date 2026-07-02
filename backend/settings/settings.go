@@ -14,6 +14,8 @@ type Settings struct {
 	AutoSyncMatches    bool `json:"autoSyncMatches"`
 	MatchRetentionDays int  `json:"matchRetentionDays"`
 	ShowOfflineFriends bool `json:"showOfflineFriends"`
+	ShowLiveMatch      bool `json:"showLiveMatch"`
+	ShowPartyWidget    bool `json:"showPartyWidget"`
 }
 
 func (s *Settings) Marshal() ([]byte, error) {
@@ -26,6 +28,8 @@ var DefaultSettings = &Settings{
 	AutoSyncMatches:    true,
 	MatchRetentionDays: 365,
 	ShowOfflineFriends: false,
+	ShowLiveMatch:      true,
+	ShowPartyWidget:    true,
 }
 
 func Get() (*Settings, error) {

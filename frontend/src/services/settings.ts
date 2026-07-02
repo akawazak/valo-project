@@ -7,6 +7,8 @@ export type Settings = {
     autoSyncMatches: boolean;
     matchRetentionDays: 0 | 30 | 90 | 180 | 365;
     showOfflineFriends: boolean;
+    showLiveMatch: boolean;
+    showPartyWidget: boolean;
 };
 
 export type StorageStatus = {

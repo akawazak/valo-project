@@ -19,6 +19,10 @@ interface SettingsModalProps {
     onMatchRetentionDaysChange: (v: 0 | 30 | 90 | 180 | 365) => void;
     showOfflineFriends: boolean;
     onShowOfflineFriendsChange: (v: boolean) => void;
+    showLiveMatch: boolean;
+    onShowLiveMatchChange: (v: boolean) => void;
+    showPartyWidget: boolean;
+    onShowPartyWidgetChange: (v: boolean) => void;
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
@@ -76,6 +80,10 @@ export default function SettingsModal({
     onMatchRetentionDaysChange,
     showOfflineFriends,
     onShowOfflineFriendsChange,
+    showLiveMatch,
+    onShowLiveMatchChange,
+    showPartyWidget,
+    onShowPartyWidgetChange,
     launchAtStartup,
     onLaunchAtStartupChange,
     theme,
@@ -329,6 +337,30 @@ export default function SettingsModal({
                                 <div className="settings-item-control">
                                     <label className="switch-control">
                                         <input aria-label="Offline Friends" type="checkbox" checked={showOfflineFriends} onChange={(e) => onShowOfflineFriendsChange(e.target.checked)} />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Live Match Overlay</div>
+                                    <div className="settings-item-desc">Show player, score, party, profile, and loadout details during a match.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input aria-label="Live Match Overlay" type="checkbox" checked={showLiveMatch} onChange={(e) => onShowLiveMatchChange(e.target.checked)} />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Party & Friends Widget</div>
+                                    <div className="settings-item-desc">Show live presence and party status in the app corner.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input aria-label="Party & Friends Widget" type="checkbox" checked={showPartyWidget} onChange={(e) => onShowPartyWidgetChange(e.target.checked)} />
                                         <span className="switch-slider" />
                                     </label>
                                 </div>

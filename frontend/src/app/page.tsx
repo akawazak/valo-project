@@ -63,6 +63,8 @@ export default function Home() {
     const [autoSyncMatches, setAutoSyncMatches] = useState<boolean | undefined>(undefined);
     const [matchRetentionDays, setMatchRetentionDays] = useState<Settings["matchRetentionDays"] | undefined>(undefined);
     const [showOfflineFriends, setShowOfflineFriends] = useState<boolean | undefined>(undefined);
+    const [showLiveMatch, setShowLiveMatch] = useState<boolean | undefined>(undefined);
+    const [showPartyWidget, setShowPartyWidget] = useState<boolean | undefined>(undefined);
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
@@ -229,6 +231,8 @@ export default function Home() {
             setAutoSyncMatches(settings.autoSyncMatches);
             setMatchRetentionDays(settings.matchRetentionDays);
             setShowOfflineFriends(settings.showOfflineFriends);
+            setShowLiveMatch(settings.showLiveMatch);
+            setShowPartyWidget(settings.showPartyWidget);
             prevSettingsRef.current = settings;
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
@@ -262,14 +266,16 @@ export default function Home() {
             useLocalSso === undefined ||
             autoSyncMatches === undefined ||
             matchRetentionDays === undefined ||
-            showOfflineFriends === undefined
+            showOfflineFriends === undefined ||
+            showLiveMatch === undefined ||
+            showPartyWidget === undefined
         ) return;
-        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends };
+        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget };
         if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
         }).catch((error) => console.error("Failed to save settings:", error));
-    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, useLocalSso]);
+    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, useLocalSso]);
 
     const handleToggleLocalSso = (val: boolean) => {
         setUseLocalSso(val);
@@ -549,6 +555,10 @@ export default function Home() {
                 onMatchRetentionDaysChange={setMatchRetentionDays}
                 showOfflineFriends={showOfflineFriends ?? false}
                 onShowOfflineFriendsChange={setShowOfflineFriends}
+                showLiveMatch={showLiveMatch ?? true}
+                onShowLiveMatchChange={setShowLiveMatch}
+                showPartyWidget={showPartyWidget ?? true}
+                onShowPartyWidgetChange={setShowPartyWidget}
                 launchAtStartup={launchAtStartup}
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}
@@ -601,8 +611,8 @@ export default function Home() {
                 onClose={() => handleResolveLocalAccount(false)}
             />
 
-            <LiveMatchOverlay autoSyncMatches={autoSyncMatches ?? true} />
-            <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} />
+            {(showLiveMatch ?? true) && <LiveMatchOverlay autoSyncMatches={autoSyncMatches ?? true} />}
+            {(showPartyWidget ?? true) && <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} />}
         </div>
     );
 }

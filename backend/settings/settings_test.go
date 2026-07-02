@@ -18,7 +18,7 @@ func TestSaveRawMergesDefaultsAndReplacesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.AutoSelectAgent || !got.AutoSyncMatches || got.MatchRetentionDays != 365 {
+	if got.AutoSelectAgent || !got.AutoSyncMatches || got.MatchRetentionDays != 365 || !got.ShowLiveMatch || !got.ShowPartyWidget {
 		t.Fatalf("legacy settings were not merged with defaults: %+v", got)
 	}
 
