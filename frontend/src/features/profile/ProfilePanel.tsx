@@ -582,6 +582,7 @@ fetch("https://valorant-api.com/v1/seasons")
                 if (manual) showToast("Sync started.");
                 let finalStatus: ProfileSyncStatus | null = null;
                 let pollMisses = 0;
+                let publishedTotal = syncStatus?.totalMatches ?? 0;
                 for (let i = 0; i < 90; i += 1) {
                     await new Promise((resolve) => setTimeout(resolve, i < 3 ? 900 : 1800));
                     let st: ProfileSyncStatus;
@@ -596,11 +597,14 @@ fetch("https://valorant-api.com/v1/seasons")
                     pollMisses = 0;
                     setSyncStatus(st);
                     finalStatus = st;
-                    if (viewedProfile || i === 0 || i % 3 === 2) await loadHistory();
+                    if (!st.inFlight || st.totalMatches - publishedTotal >= 20) {
+                        await loadHistory();
+                        publishedTotal = st.totalMatches;
+                    }
                     if (!st.inFlight) break;
                 }
                 if (finalStatus?.inFlight) {
-                    throw new Error("Sync is still running in the background. New matches will appear as Riot returns them.");
+                    throw new Error("Sync is still running in the background. New matches will appear in batches.");
                 }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
@@ -623,7 +627,7 @@ fetch("https://valorant-api.com/v1/seasons")
                 if (currentPuuidRef.current === targetPuuid) setSyncing(false);
             }
         },
-        [loadHistory, onRequestedProfileChange, opts, puuid, refresh, showToast, viewedProfile],
+        [loadHistory, onRequestedProfileChange, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
     );
 
     // Auto-sync on first visit if nothing is cached yet.
