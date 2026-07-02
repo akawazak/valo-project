@@ -953,6 +953,55 @@
     container-type: inline-size;
 }
 
+.profileFacade {
+    position: relative;
+    min-height: calc(100vh - 72px);
+    display: grid;
+    place-items: center;
+    padding: 32px;
+    background:
+        radial-gradient(circle at 50% 35%, rgba(var(--accent-rgb), 0.18), transparent 34%),
+        linear-gradient(168deg, #05070a 0%, #0a1118 52%, #060a0f 100%);
+}
+
+.profileFacadeBack {
+    position: absolute;
+    top: 24px;
+    left: 28px;
+    border: 0;
+    color: var(--text-secondary);
+    background: transparent;
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.profileFacadeContent {
+    display: grid;
+    place-items: center;
+    gap: 10px;
+    text-align: center;
+}
+
+.profileFacadeContent strong {
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+.profileFacadeContent small {
+    color: var(--text-dim);
+    font-size: 0.74rem;
+}
+
+.profileFacadeSpinner {
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: profileFacadeSpin 0.7s linear infinite;
+}
+
 .matchLoading {
     min-height: 126px;
     display: grid;
@@ -961,6 +1010,11 @@
     gap: 7px;
     color: var(--text-secondary);
     text-align: center;
+}
+
+.matchLoading .profileFacadeSpinner {
+    width: 22px;
+    height: 22px;
 }
 
 .matchLoading strong {
@@ -973,16 +1027,7 @@
     font-size: 0.7rem;
 }
 
-.matchLoadingSpinner {
-    width: 22px;
-    height: 22px;
-    border: 2px solid var(--border-strong);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: matchLoadingSpin 0.7s linear infinite;
-}
-
-@keyframes matchLoadingSpin {
+@keyframes profileFacadeSpin {
     to {
         transform: rotate(360deg);
     }

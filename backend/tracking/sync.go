@@ -184,11 +184,11 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		slog.Warn("tracking: competitive updates fetch failed", "err", ferr)
 	}
 
-	// Step 5: hydrate bounded groups of three concurrently. Each group is
-	// persisted before the next starts, giving the UI a useful first page
-	// quickly without unbounded fan-out against Riot.
+	// Step 5: hydrate bounded groups concurrently. Six requests keep a fresh
+	// profile import fast while avoiding an unbounded burst against Riot; the
+	// frontend independently controls how many matches it reveals at once.
 	const maxDetailsPerSync = 24
-	const detailBatchSize = 3
+	const detailBatchSize = 6
 	detailsTruncated := len(newIDs) > maxDetailsPerSync
 	if len(newIDs) > maxDetailsPerSync {
 		newIDs = newIDs[:maxDetailsPerSync]

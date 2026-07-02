@@ -346,6 +346,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile, onReq
     const [loading, setLoading] = useState(false);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
+    const [profileFacadeVisible, setProfileFacadeVisible] = useState(Boolean(viewedProfile));
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
@@ -357,6 +358,7 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile, onReq
     const historyRequestRef = useRef(0);
     const refreshRequestRef = useRef(0);
     const hasCachedProfileRef = useRef(false);
+    const profileFacadeStartedAtRef = useRef(Date.now());
     const currentPuuidRef = useRef(puuid);
     currentPuuidRef.current = puuid;
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
@@ -543,8 +545,10 @@ fetch("https://valorant-api.com/v1/seasons")
         setError("");
         setLoading(Boolean(puuid));
         setHistoryLoading(Boolean(puuid));
+        profileFacadeStartedAtRef.current = Date.now();
+        setProfileFacadeVisible(Boolean(viewedProfile));
         hasCachedProfileRef.current = false;
-    }, [puuid]);
+    }, [puuid, viewedProfile]);
 
     useEffect(() => {
         void refresh();
@@ -668,6 +672,32 @@ fetch("https://valorant-api.com/v1/seasons")
         }
     }, [autoSyncMatches, loading, puuid, runSync, syncStatus, syncing, viewedProfile]);
 
+    useEffect(() => {
+        const ready =
+            !viewedProfile ||
+            history.length > 0 ||
+            (!autoSyncMatches && !loading && !historyLoading) ||
+            (
+            autoSyncPuuidRef.current === puuid &&
+            !loading &&
+            !historyLoading &&
+            !syncing &&
+            !syncStatus?.inFlight
+            );
+        if (!ready) return;
+
+        const minimumVisibleMs = viewedProfile ? 650 : 0;
+        const remaining = Math.max(0, minimumVisibleMs - (Date.now() - profileFacadeStartedAtRef.current));
+        const timeout = setTimeout(() => setProfileFacadeVisible(false), remaining);
+        return () => clearTimeout(timeout);
+    }, [autoSyncMatches, history.length, historyLoading, loading, puuid, syncing, syncStatus, viewedProfile]);
+
+    useEffect(() => {
+        if (!profileFacadeVisible) return;
+        const timeout = setTimeout(() => setProfileFacadeVisible(false), 8000);
+        return () => clearTimeout(timeout);
+    }, [profileFacadeVisible, puuid]);
+
     const toggleDetails = useCallback(
         async (matchId: string) => {
             const targetPuuid = puuid;
@@ -759,6 +789,21 @@ fetch("https://valorant-api.com/v1/seasons")
                     <button className={s.primaryBtn} onClick={onConnectAccount}>
                         Connect Riot Account
                     </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (profileFacadeVisible && viewedProfile) {
+        return (
+            <div className={s.profileFacade} role="status" aria-live="polite">
+                <button type="button" className={s.profileFacadeBack} onClick={() => onRequestedProfileChange(null)}>
+                    ← Back to my profile
+                </button>
+                <div className={s.profileFacadeContent}>
+                    <span className={s.profileFacadeSpinner} aria-hidden="true" />
+                    <strong>Loading {viewedProfile.gameName || "player"}…</strong>
+                    <small>Fetching recent matches, rank, and RR details.</small>
                 </div>
             </div>
         );
@@ -1092,12 +1137,16 @@ fetch("https://valorant-api.com/v1/seasons")
                                 >
                                     {history.length === 0 && (historyLoading || syncStatus?.inFlight || syncing) ? (
                                         <div className={s.matchLoading} role="status" aria-live="polite">
-                                            <span className={s.matchLoadingSpinner} aria-hidden="true" />
+                                            <span className={s.profileFacadeSpinner} aria-hidden="true" />
                                             <strong>Loading recent matches…</strong>
                                             <small>The first group will appear as soon as it is ready.</small>
                                         </div>
                                     ) : history.length === 0 ? (
-                                        <div className={s.placeholder}>No matches cached yet. Hit Sync.</div>
+                                        <div className={s.placeholder}>
+                                            {syncStatus?.inFlight || syncing
+                                                ? "Syncing match history…"
+                                                : "No matches cached yet. Hit Sync."}
+                                        </div>
                                     ) : (
                                         <div className={s.matchList}>
                                             {history.map((match) => (
