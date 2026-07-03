@@ -45,3 +45,34 @@ func TestPruneAndClearMatchCachePreserveRankHistory(t *testing.T) {
 		t.Fatalf("rank snapshots after clear = %d err=%v", rankRows, err)
 	}
 }
+
+func TestGetLatestPlayerCards(t *testing.T) {
+	db, err := OpenTrackingDB(filepath.Join(t.TempDir(), "tracking"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, gameStartMillis, seasonId, rawJsonPath, cachedAt, accountPuuid)
+		VALUES
+			('old', 'unrated', 'map', 'mode', 1, 'act', '', 1, 'owner'),
+			('new', 'unrated', 'map', 'mode', 2, 'act', '', 2, 'owner');
+		INSERT INTO match_players (matchID, subject, teamId, characterId, playerCardId)
+		VALUES
+			('old', 'friend', 'Blue', 'agent', 'old-card'),
+			('new', 'friend', 'Blue', 'agent', 'new-card'),
+			('new', 'other', 'Blue', 'agent', 'other-card');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	cards, err := GetLatestPlayerCards(db, []string{"FRIEND", "missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cards["friend"] != "new-card" || cards["other"] != "" {
+		t.Fatalf("unexpected cards: %#v", cards)
+	}
+}

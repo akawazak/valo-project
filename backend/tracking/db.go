@@ -1349,6 +1349,50 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	return out, nil
 }
 
+// GetLatestPlayerCards returns the newest cached card for each requested player.
+func GetLatestPlayerCards(db *sql.DB, puuids []string) (map[string]string, error) {
+	unique := make(map[string]struct{}, len(puuids))
+	args := make([]any, 0, len(puuids))
+	for _, puuid := range puuids {
+		puuid = strings.ToLower(strings.TrimSpace(puuid))
+		if puuid == "" {
+			continue
+		}
+		if _, exists := unique[puuid]; exists {
+			continue
+		}
+		unique[puuid] = struct{}{}
+		args = append(args, puuid)
+	}
+	out := make(map[string]string, len(args))
+	if len(args) == 0 {
+		return out, nil
+	}
+
+	rows, err := db.Query(`
+		SELECT mp.subject, mp.playerCardId
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE mp.subject IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)
+		  AND mp.playerCardId != ''
+		ORDER BY m.gameStartMillis DESC
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: GetLatestPlayerCards: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var puuid, cardID string
+		if err := rows.Scan(&puuid, &cardID); err != nil {
+			return nil, fmt.Errorf("tracking: GetLatestPlayerCards scan: %w", err)
+		}
+		if out[puuid] == "" {
+			out[puuid] = cardID
+		}
+	}
+	return out, rows.Err()
+}
+
 // HydratePeakRankEvidence adds the exact promotion timestamp only when an RR
 // update proves the account crossed into its recorded peak tier. A match that
 // merely observes the tier is not enough to claim when it was first reached.

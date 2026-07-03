@@ -6,6 +6,7 @@ import (
 	"backend/tracking"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -50,16 +51,6 @@ type Handler struct {
 	// false} so we don't hammer Riot on every poll.
 	playerStatsCache map[string]CachedPlayerStats
 	playerStatsMu    sync.RWMutex
-
-	// partyCache memoizes the per-match party grouping used by the
-	// live match overlay. Keyed by matchId so a fresh match triggers
-	// a single fan-out across all 10 players via
-	// parties/v1/players/{puuid}; subsequent polls for the same
-	// matchId reuse the cached opaque group keys. The same pattern
-	// as the agent-select countdown: snapshot once, reuse until the
-	// server signals a new match. Protected by partyCacheMu.
-	partyCache   map[string]map[string]string // matchId -> puuid -> opaque group key
-	partyCacheMu sync.RWMutex
 }
 
 // CachedPlayerStats is the per-(puuid, agent) agent-specific record.
@@ -80,7 +71,6 @@ func NewHandler(Val *valclient.ValClient) *Handler {
 		Val:              Val,
 		namesCache:       make(map[string]string),
 		playerStatsCache: make(map[string]CachedPlayerStats),
-		partyCache:       make(map[string]map[string]string),
 	}
 }
 
@@ -123,19 +113,44 @@ func (h *Handler) trackingDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbDir := filepath.Join(configDir, "valovault")
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+	appDir := filepath.Join(configDir, "valovault")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := migrateNestedTrackingDB(appDir); err != nil {
 		return nil, err
 	}
 
-	db, err := tracking.OpenTrackingDB(dbDir)
+	db, err := tracking.OpenTrackingDB(configDir)
 	if err != nil {
 		return nil, err
 	}
 	h.trackingConn = db
-	h.trackingAppDir = dbDir
-	log.Printf("tracking: opened DB at %s", filepath.Join(dbDir, "tracking.db"))
+	h.trackingAppDir = appDir
+	log.Printf("tracking: opened DB at %s", filepath.Join(appDir, "tracking.db"))
 	return h.trackingConn, nil
+}
+
+func migrateNestedTrackingDB(appDir string) error {
+	legacyDir := filepath.Join(appDir, "valovault")
+	source := filepath.Join(legacyDir, "tracking.db")
+	target := filepath.Join(appDir, "tracking.db")
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(source); os.IsNotExist(err) {
+		return nil
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		oldPath, newPath := source+suffix, target+suffix
+		if _, err := os.Stat(oldPath); err == nil {
+			if err := os.Rename(oldPath, newPath); err != nil {
+				return fmt.Errorf("migrate tracking database: %w", err)
+			}
+		}
+	}
+	_ = os.Remove(legacyDir)
+	return nil
 }
 
 // trackingSyncManager returns the lazily-initialized SyncManager

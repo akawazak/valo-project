@@ -1078,9 +1078,6 @@ export interface LiveMatchResponse {
     mapId: string;
     queueId: string;
     timeLeft: number;
-    allyScore?: number;
-    enemyScore?: number;
-    scoreSource?: "local-presence";
     allyTeam?: LivePlayer[];
     enemyTeam?: LivePlayer[];
     source?: "local" | "remote";
@@ -1315,6 +1312,7 @@ export interface SocialPresence {
     state?: string;
     queueId?: string;
     cardId?: string;
+    platform?: string;
 }
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {

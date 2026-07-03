@@ -44,7 +44,10 @@ function phaseShort(phase: PartyStatusResponse["phase"]) {
     return "Party";
 }
 
-type CardMeta = { icon: string };
+type CardMeta = {
+    icon: string;
+    wide: string;
+};
 type TierMeta = { name: string; icon: string };
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
@@ -141,6 +144,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                     if (!item.uuid) continue;
                     m[item.uuid.toLowerCase()] = {
                         icon: item.displayIcon || item.smallArt || "",
+                        wide: item.wideArt || "",
                     };
                 }
                 setCardCache(m);
@@ -169,8 +173,9 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     }, []);
 
     const presences = sortedPresences(social);
-    const onlineCount = presences.filter((presence) => presenceState(presence) !== "offline").length;
+    const onlineCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
+    const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
@@ -231,8 +236,9 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                     label={hasParty ? "Party" : "Friends"}
                     value={hasParty ? `${members.length}/5` : String(social?.friendCount || presences.length)}
                 />
-                <PresenceStat label="Online" value={String(onlineCount)} />
+                <PresenceStat label="VALORANT" value={String(onlineCount)} />
                 <PresenceStat label="In match" value={String(inGameCount)} accent />
+                <PresenceStat label="Riot Client" value={String(chatCount)} />
             </div>
             {hasParty && (
                 <div className="live-party-members">
@@ -321,8 +327,9 @@ function FriendsPill({
     presences: SocialPresence[];
     onOpen: () => void;
 }) {
-    const onlineCount = presences.filter((presence) => presenceState(presence) !== "offline").length;
+    const onlineCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
+    const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     return (
         <button
             type="button"
@@ -338,7 +345,7 @@ function FriendsPill({
                 <span className="live-party-pill-kicker">Party & Friends</span>
                 <span className="live-party-pill-title">{socialTitle(social, presences)}</span>
                 <span className="live-party-pill-sub">
-                    {inGameCount} in match - {social?.friendCount || presences.length} total
+                    {inGameCount} in match - {chatCount} Riot Client - {social?.friendCount || presences.length} total
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">&gt;</span>
@@ -361,6 +368,8 @@ function FriendPresenceList({
     useEffect(() => setShowOffline(showOfflineByDefault), [showOfflineByDefault]);
     const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
     const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
+    const valorantCount = activePresences.filter((presence) => presenceState(presence) !== "chat").length;
+    const chatCount = activePresences.length - valorantCount;
 
     if (!presences.length) {
         return (
@@ -376,7 +385,7 @@ function FriendPresenceList({
             <div className="live-party-section-heading">
                 <div className="live-party-section-title">Friends</div>
                 <div className="live-party-section-counts">
-                    <span>{activePresences.length} active</span>
+                    <span>{valorantCount} VALORANT - {chatCount} Riot Client</span>
                 </div>
             </div>
             <div className="live-party-friend-scroll">
@@ -433,12 +442,16 @@ function FriendPresenceRow({
 }) {
     const state = presenceState(presence);
     const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
+    const useWideAvatar = !!card?.wide;
+    const avatarSrc = card?.wide || card?.icon;
     return (
-        <div
-            className={`live-party-friend-row is-${state}`}
-        >
-            <span className="live-party-friend-avatar" aria-hidden="true">
-                {card?.icon ? <img src={card.icon} alt="" /> : <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>}
+        <div className={`live-party-friend-row is-${state}`}>
+            <span className={`live-party-friend-avatar${useWideAvatar ? " is-wide-art" : ""}`} aria-hidden="true">
+                {avatarSrc ? (
+                    <img src={avatarSrc} alt="" />
+                ) : (
+                    <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>
+                )}
                 <i className="live-party-friend-dot" />
             </span>
             <span className="live-party-friend-main">
@@ -446,7 +459,7 @@ function FriendPresenceRow({
                 <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
             </span>
             <span className="live-party-friend-state">
-                {state === "game" ? "In match" : state === "online" ? "Online" : "Offline"}
+                {state === "game" ? "In match" : state === "online" ? "VALORANT" : state === "chat" ? "Riot Client" : "Offline"}
             </span>
         </div>
     );
@@ -468,7 +481,10 @@ function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
 function socialTitle(social: SocialStatusResponse | null, presences: SocialPresence[]) {
     if (!social) return "Connecting presence";
     if (social.status === "unavailable") return "Presence unavailable";
-    return `${presences.filter((presence) => presenceState(presence) !== "offline").length} online`;
+    const valorantCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
+    if (valorantCount) return `${valorantCount} in VALORANT`;
+    const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
+    return chatCount ? `${chatCount} on Riot Client` : "No active friends";
 }
 
 function socialEmptyLabel(social: SocialStatusResponse | null) {
@@ -483,18 +499,25 @@ function sortedPresences(social: SocialStatusResponse | null) {
         .sort((a, b) => presencePriority(a) - presencePriority(b) || (a.name || "").localeCompare(b.name || ""));
 }
 
-function presenceState(presence: SocialPresence): "game" | "online" | "offline" {
-    if (presence.queueId || /in.?game|pregame|match/i.test(presence.state || "")) return "game";
+type PresenceState = "game" | "online" | "chat" | "offline";
+
+function presenceState(presence: SocialPresence): PresenceState {
     if ((presence.state || "").toLowerCase() === "offline") return "offline";
-    return "online";
+    if ((presence.product || "").toLowerCase() !== "valorant") {
+        return /pc|windows|desktop/i.test(presence.platform || "") ? "chat" : "offline";
+    }
+    return presence.queueId || /in.?game|pregame|match/i.test(presence.state || "") ? "game" : "online";
 }
 
 function presencePriority(presence: SocialPresence) {
     const state = presenceState(presence);
-    return state === "game" ? 0 : state === "online" ? 1 : 2;
+    return state === "game" ? 0 : state === "online" ? 1 : state === "chat" ? 2 : 3;
 }
 
 function presenceLabel(presence: SocialPresence) {
+    if (presenceState(presence) === "chat") {
+        return "Riot Client on PC";
+    }
     const parts = [
         presence.product?.toLowerCase() === "valorant" ? "VALORANT" : presence.product || "Riot",
         presence.queueId ? queueName(presence.queueId) : presence.state,
@@ -511,13 +534,13 @@ function PartyMemberRow({
     card?: CardMeta;
     tier?: TierMeta;
 }) {
+    const useWideAvatar = !!card?.wide;
+    const avatarSrc = card?.wide || card?.icon;
     return (
-        <div
-            className={`live-party-member${member.isLocal ? " is-local" : ""}`}
-        >
-            <div className="live-party-avatar" aria-hidden="true">
-                {card?.icon ? (
-                    <img src={card.icon} alt="" className="live-party-avatar-img" />
+        <div className={`live-party-member${member.isLocal ? " is-local" : ""}`}>
+            <div className={`live-party-avatar${useWideAvatar ? " is-wide-art" : ""}`} aria-hidden="true">
+                {avatarSrc ? (
+                    <img src={avatarSrc} alt="" className="live-party-avatar-img" />
                 ) : (
                     <span className="live-party-avatar-letter">
                         {member.name.slice(0, 1).toUpperCase()}

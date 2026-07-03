@@ -38,6 +38,28 @@ func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeChatPresenceTreatsUnknownChatActivityAsOffline(t *testing.T) {
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid: "friend",
+		State: "away",
+	}, nil)
+	if presence.Product != "riot_chat" || presence.State != "offline" {
+		t.Fatalf("unknown chat-only presence stayed active: %#v", presence)
+	}
+}
+
+func TestNormalizeChatPresenceKeepsExplicitPCClientActive(t *testing.T) {
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid:    "friend",
+		Product:  "riotclient",
+		State:    "away",
+		Platform: "PC",
+	}, nil)
+	if presence.State != "away" || presence.Platform != "PC" {
+		t.Fatalf("explicit PC presence was hidden: %#v", presence)
+	}
+}
+
 func TestXMPPSessionPreservesRecentConnectionError(t *testing.T) {
 	session := &xmppSocialSession{
 		state:       "error",
@@ -52,7 +74,7 @@ func TestXMPPSessionPreservesRecentConnectionError(t *testing.T) {
 	}
 }
 
-func TestXMPPSnapshotCountsAvailableAwayPresenceOnline(t *testing.T) {
+func TestXMPPSnapshotDoesNotCountUnverifiedChatPresenceOnline(t *testing.T) {
 	session := &xmppSocialSession{
 		state: "live",
 		roster: map[string]xmppRosterItem{
@@ -64,8 +86,8 @@ func TestXMPPSnapshotCountsAvailableAwayPresenceOnline(t *testing.T) {
 	}
 
 	snapshot := session.snapshot()
-	if snapshot.OnlineCount != 1 || len(snapshot.Presences) != 1 {
-		t.Fatalf("available presence was not counted online: %#v", snapshot)
+	if snapshot.OnlineCount != 0 || len(snapshot.Presences) != 1 || snapshot.Presences[0].State != "offline" {
+		t.Fatalf("unverified chat presence was counted online: %#v", snapshot)
 	}
 }
 
@@ -110,7 +132,15 @@ func TestReadUntilContainsConsumesWholeXMPPStanza(t *testing.T) {
 
 func TestReadUntilContainsReportsAuthenticationFailure(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(`<failure><not-authorized/></failure>`))
-	if _, err := readUntilContains(reader, "</success>"); err == nil {
+	if _, err := readUntilContains(reader, ">"); err == nil {
 		t.Fatal("expected authentication failure")
+	}
+}
+
+func TestReadUntilContainsAcceptsSelfClosingSASLSuccess(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader(`<success xmlns="urn:ietf:params:xml:ns:xmpp-sasl"/>`))
+	reply, err := readUntilContains(reader, ">")
+	if err != nil || !strings.Contains(reply, "<success") {
+		t.Fatalf("self-closing SASL success was not accepted: %q, %v", reply, err)
 	}
 }

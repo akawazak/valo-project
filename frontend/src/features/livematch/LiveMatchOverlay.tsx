@@ -37,7 +37,7 @@ interface Props {
 type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
 
 export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
-    const { activeAccount, weapons } = useData();
+    const { activeAccount, weapons, playerCards } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
     const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
@@ -45,6 +45,10 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
     const [selectedPlayer, setSelectedPlayer] = useState<LivePlayer | null>(null);
     const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
+    const playerCardIcons = useMemo(
+        () => new Map(playerCards.map((card) => [card.uuid.toLowerCase(), card.displayIcon || card.smallArt || ""])),
+        [playerCards],
+    );
 
     useEffect(() => {
         setSelectedPlayer(null);
@@ -251,10 +255,6 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
     const partyColors = partyGroupColors(partySizes);
     const yourPartySize = partySizes.get("your-party") || 0;
     const yourPartyColor = partyColors.get("your-party");
-    const hasLiveScore = match.phase === "coregame"
-        && Number.isFinite(match.allyScore)
-        && Number.isFinite(match.enemyScore);
-
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
             <div className="overlay-scrim"></div>
@@ -282,13 +282,6 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                 {match.phase === "coregame" && (
                     <div className="live-match-context">
                         <div className="live-badge">LIVE MATCH</div>
-                        {hasLiveScore && (
-                            <div className="live-match-score" aria-label={`Your team ${match.allyScore}, enemy team ${match.enemyScore}`}>
-                                <span><small>Your team</small><strong>{match.allyScore}</strong></span>
-                                <b>:</b>
-                                <span><small>Enemy</small><strong>{match.enemyScore}</strong></span>
-                            </div>
-                        )}
                         {yourPartySize > 1 && (
                             <div
                                 className="live-match-party-summary"
@@ -311,6 +304,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                                 key={player.puuid || `ally-${idx}`}
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
+                                cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
@@ -333,6 +327,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                                 key={player.puuid || `enemy-${idx}`}
                                 player={player}
                                 agent={agentCache[player.agentId?.toLowerCase()]}
+                                cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
@@ -348,6 +343,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                     player={selectedPlayer}
                     match={match}
                     agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
+                    cardIcon={playerCardIcons.get(selectedPlayer.cardId?.toLowerCase())}
                     tier={tierCache[selectedPlayer.competitiveTier]}
                     weapons={weapons}
                     onClose={() => setSelectedPlayer(null)}
@@ -397,6 +393,7 @@ function partyGroupColors(sizes: Map<string, number>) {
 function PlayerCard({
     player,
     agent,
+    cardIcon,
     tier,
     partySize,
     partyColor,
@@ -405,6 +402,7 @@ function PlayerCard({
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
+    cardIcon?: string;
     tier?: { name: string; icon: string };
     partySize?: number;
     partyColor?: string;
@@ -434,8 +432,8 @@ function PlayerCard({
 
             <div className="card-left">
                 <div className="agent-icon-container">
-                    {agent?.icon ? (
-                        <img src={agent.icon} alt={agent.name} className="agent-icon-img" />
+                    {agent?.icon || cardIcon ? (
+                        <img src={agent?.icon || cardIcon} alt={agent?.icon ? agent.name : `${displayName} player card`} className="agent-icon-img" />
                     ) : (
                         <div className="agent-placeholder-icon">?</div>
                     )}
@@ -487,6 +485,7 @@ function LivePlayerModal({
     player,
     match,
     agent,
+    cardIcon,
     tier,
     weapons,
     onClose,
@@ -495,6 +494,7 @@ function LivePlayerModal({
     player: LivePlayer;
     match: LiveMatchResponse;
     agent?: { name: string; icon: string; full: string };
+    cardIcon?: string;
     tier?: { name: string; icon: string };
     weapons: Weapon[];
     onClose: () => void;
@@ -617,8 +617,8 @@ function LivePlayerModal({
                 </button>
                 <div className="live-player-modal-main">
                     <div className="live-player-modal-avatar">
-                        {agent?.icon ? (
-                            <img src={agent.icon} alt={agent.name} />
+                        {agent?.icon || cardIcon ? (
+                            <img src={agent?.icon || cardIcon} alt={agent?.icon ? agent.name : `${displayName} player card`} />
                         ) : (
                             <span>?</span>
                         )}
@@ -661,9 +661,11 @@ function LivePlayerModal({
 
                 {showLoadout && <section className="live-player-loadout" aria-label={`${displayName} equipped skins`}>
                     <div className="live-player-loadout-heading">
-                        <span>Live Loadout</span>
+                        <span>Live Loadout<small>{displayName}</small></span>
+                        <span className={`live-player-loadout-status${loadoutState.status === "loading" || waitingForWeaponMetadata ? " is-loading" : ""}`}>
+                            {loadoutState.status === "loading" || waitingForWeaponMetadata ? "Loading" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}
+                        </span>
                         <button type="button" className="live-player-loadout-close" onClick={() => setShowLoadout(false)}>Close</button>
-                        <small>{loadoutState.status === "loading" || waitingForWeaponMetadata ? "Loading…" : equippedSkins.length ? `${equippedSkins.length} visible` : "Unavailable"}</small>
                     </div>
                     {loadoutColumns.length > 0 ? (
                         <div className="live-player-loadout-board">

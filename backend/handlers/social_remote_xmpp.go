@@ -300,11 +300,13 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 		}
 		// Entries only remain in this map while XMPP reports them available.
 		// "away" and Riot Client presences may omit product metadata.
-		onlineCount++
 		normalized := normalizeChatPresence(entry, map[string]string{
 			puuid: firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid)),
 		})
-		if normalized.QueueID != "" || strings.EqualFold(normalized.State, "ingame") || strings.EqualFold(normalized.State, "pregame") {
+		if socialPresenceIsActive(normalized) {
+			onlineCount++
+		}
+		if socialPresenceIsInGame(normalized) {
 			inGameCount++
 		}
 		out = append(out, normalized)
@@ -418,9 +420,10 @@ func xmppAuthenticate(conn net.Conn, reader *bufio.Reader, domain, accessToken, 
 	steps := []struct {
 		out   string
 		until string
+		want  string
 	}{
 		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "</stream:features>"},
-		{out: fmt.Sprintf(`<auth mechanism="X-Riot-RSO-PAS" xmlns="urn:ietf:params:xml:ns:xmpp-sasl"><rso_token>%s</rso_token><pas_token>%s</pas_token></auth>`, accessToken, pasToken), until: "</success>"},
+		{out: fmt.Sprintf(`<auth mechanism="X-Riot-RSO-PAS" xmlns="urn:ietf:params:xml:ns:xmpp-sasl"><rso_token>%s</rso_token><pas_token>%s</pas_token></auth>`, accessToken, pasToken), until: ">", want: "<success"},
 		{out: fmt.Sprintf(`<?xml version="1.0"?><stream:stream to="%s.pvp.net" version="1.0" xmlns:stream="http://etherx.jabber.org/streams">`, domain), until: "</stream:features>"},
 		{out: `<iq id="_xmpp_bind1" type="set"><bind xmlns="urn:ietf:params:xml:ns:xmpp-bind"></bind></iq>`, until: "</iq>"},
 		{out: `<iq id="_xmpp_session1" type="set"><session xmlns="urn:ietf:params:xml:ns:xmpp-session"/></iq>`, until: "</iq>"},
@@ -431,8 +434,12 @@ func xmppAuthenticate(conn net.Conn, reader *bufio.Reader, domain, accessToken, 
 		if _, err := io.WriteString(conn, step.out); err != nil {
 			return fmt.Errorf("xmpp write failed: %w", err)
 		}
-		if _, err := readUntilContains(reader, step.until); err != nil {
+		reply, err := readUntilContains(reader, step.until)
+		if err != nil {
 			return err
+		}
+		if step.want != "" && !strings.Contains(reply, step.want) {
+			return fmt.Errorf("xmpp authentication rejected")
 		}
 	}
 	_ = conn.SetReadDeadline(time.Time{})
@@ -443,11 +450,11 @@ func readUntilContains(reader *bufio.Reader, needle string) (string, error) {
 	var out strings.Builder
 	for {
 		current := out.String()
+		if strings.Contains(current, "<failure") || strings.Contains(current, "<stream:error") {
+			return current, fmt.Errorf("xmpp authentication rejected")
+		}
 		if len(needle) > 0 && strings.Contains(current, needle) {
 			return current, nil
-		}
-		if strings.Contains(current, "</failure>") || strings.Contains(current, "</stream:error>") {
-			return current, fmt.Errorf("xmpp authentication rejected")
 		}
 		b, err := reader.ReadByte()
 		if err != nil {

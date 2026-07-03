@@ -132,15 +132,40 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	// Step 2: always inspect the newest page, then advance one older page per
 	// sync. This keeps refresh time bounded while repeated syncs still sweep
 	// the full history and retry previously missed match details.
-	history, nextHistoryIndex, err := m.fetchHistoryLane(
-		puuid, region, "", state.LastHistoryEndIndex, 1000,
+	//
+	// The all-queue lane and the competitive-only lane are independent — they
+	// hit different Riot endpoints with no shared state — so we run them in
+	// parallel and merge the results. On a typical sync this saves the full
+	// RTT of the second request (usually 300-900ms).
+	var (
+		history              []historyItem
+		nextHistoryIndex     int
+		competitiveHistory   []historyItem
+		nextCompetitiveIndex int
 	)
-	if err != nil {
-		return err
+	var (
+		historyErr      error
+		competitiveErr  error
+		historyReady    = make(chan struct{})
+		competitiveReady = make(chan struct{})
+	)
+	go func() {
+		history, nextHistoryIndex, historyErr = m.fetchHistoryLane(
+			puuid, region, "", state.LastHistoryEndIndex, 1000,
+		)
+		close(historyReady)
+	}()
+	go func() {
+		competitiveHistory, nextCompetitiveIndex, competitiveErr = m.fetchHistoryLane(
+			puuid, region, "competitive", state.LastCompetitiveEndIndex, 200,
+		)
+		close(competitiveReady)
+	}()
+	<-historyReady
+	<-competitiveReady
+	if historyErr != nil {
+		return historyErr
 	}
-	competitiveHistory, nextCompetitiveIndex, competitiveErr := m.fetchHistoryLane(
-		puuid, region, "competitive", state.LastCompetitiveEndIndex, 200,
-	)
 	if competitiveErr != nil {
 		slog.Warn("tracking: competitive match history fetch failed", "err", competitiveErr)
 	} else {

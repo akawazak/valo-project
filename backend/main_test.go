@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestCorsAllowsTauriProductionOrigin(t *testing.T) {
@@ -40,27 +39,23 @@ func TestCorsRejectsUntrustedOriginBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestCleanupOldLogs(t *testing.T) {
+func TestCleanupLogsKeepsOnlyCurrentFile(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.log")
-	newPath := filepath.Join(dir, "new.log")
+	currentPath := filepath.Join(dir, "valovault.log")
 	otherPath := filepath.Join(dir, "keep.txt")
-	for _, path := range []string{oldPath, newPath, otherPath} {
+	for _, path := range []string{oldPath, currentPath, otherPath} {
 		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	oldTime := time.Now().AddDate(0, 0, -8)
-	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
-		t.Fatal(err)
-	}
 
-	cleanupOldLogs(dir, time.Now().AddDate(0, 0, -7))
+	cleanupLogs(dir, currentPath)
 
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Fatalf("old log was not removed: %v", err)
 	}
-	for _, path := range []string{newPath, otherPath} {
+	for _, path := range []string{currentPath, otherPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to remain: %v", path, err)
 		}

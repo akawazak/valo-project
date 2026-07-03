@@ -27,10 +27,20 @@ func (h *Handler) GetStorageStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.returnAny(w, StorageStatusResponse{
-		MatchCacheBytes: directorySize(filepath.Join(h.trackingAppDir, "valovault")),
+		MatchCacheBytes: trackingDatabaseSize(h.trackingAppDir),
 		LogBytes:        directorySize(filepath.Join(h.trackingAppDir, "logs")),
 		CachedMatches:   count,
 	})
+}
+
+func trackingDatabaseSize(dir string) int64 {
+	var total int64
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if info, err := os.Stat(filepath.Join(dir, "tracking.db"+suffix)); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }
 
 func (h *Handler) ClearStorage(w http.ResponseWriter, r *http.Request) {

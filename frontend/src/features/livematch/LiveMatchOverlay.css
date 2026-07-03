@@ -177,49 +177,6 @@
   margin-top: 0;
 }
 
-.live-match-score {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 172px;
-  padding: 6px 14px;
-  background: rgba(4, 11, 17, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
-  box-shadow: var(--shadow-sm);
-}
-
-.live-match-score span {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.live-match-score small {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.56rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.live-match-score strong {
-  color: var(--text-primary);
-  font-size: 1.15rem;
-}
-
-.live-match-score span:first-child strong {
-  color: var(--green);
-}
-
-.live-match-score span:last-child strong {
-  color: var(--accent);
-}
-
-.live-match-score b {
-  color: var(--text-dim);
-}
-
 .live-match-party-summary {
   display: flex;
   align-items: center;
@@ -777,7 +734,6 @@
 }
 
 .live-player-loadout-close {
-  margin-left: auto;
   padding: 7px 11px;
   color: #dff9ff;
   background: rgba(83, 198, 222, 0.1);
@@ -791,7 +747,8 @@
 
 .live-player-loadout-heading {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 8px;
   color: var(--text-primary);
   font-size: 0.78rem;
@@ -799,9 +756,34 @@
   text-transform: uppercase;
 }
 
-.live-player-loadout-heading small {
+.live-player-loadout-heading > span:first-child {
+  display: grid;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.live-player-loadout-heading small,
+.live-player-loadout-status {
   color: var(--text-secondary);
+  font-size: 0.62rem;
   font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.live-player-loadout-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.live-player-loadout-status.is-loading::before {
+  width: 7px;
+  height: 7px;
+  content: "";
+  border: 2px solid rgba(83, 198, 222, 0.25);
+  border-top-color: #53c6de;
+  border-radius: 50%;
+  animation: live-loadout-spin 0.8s linear infinite;
 }
 
 .live-player-loadout-board {
@@ -895,6 +877,10 @@
   font-size: 0.72rem;
   font-weight: 800;
   cursor: pointer;
+}
+
+@keyframes live-loadout-spin {
+  to { transform: rotate(360deg); }
 }
 
 .live-profile-modal-backdrop {

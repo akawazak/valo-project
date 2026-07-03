@@ -57,12 +57,13 @@ type SocialStatusResponse struct {
 }
 
 type SocialPresence struct {
-	Puuid   string `json:"puuid,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Product string `json:"product,omitempty"`
-	State   string `json:"state,omitempty"`
-	QueueID string `json:"queueId,omitempty"`
-	CardID  string `json:"cardId,omitempty"`
+	Puuid    string `json:"puuid,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Product  string `json:"product,omitempty"`
+	State    string `json:"state,omitempty"`
+	QueueID  string `json:"queueId,omitempty"`
+	CardID   string `json:"cardId,omitempty"`
+	Platform string `json:"platform,omitempty"`
 }
 
 func (h *Handler) GetLiveLoadouts(w http.ResponseWriter, r *http.Request) {

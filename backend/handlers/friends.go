@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"backend/tracking"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -50,6 +51,10 @@ type localFriendsResponse struct {
 
 type localPresencesResponse struct {
 	Presences []chatPresenceEntry `json:"presences"`
+}
+
+type localChatSessionResponse struct {
+	PUUID string `json:"puuid"`
 }
 
 // Cached lockfile snapshot to avoid re-reading the file on every poll.
@@ -106,9 +111,19 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if hasRemoteAuth && !remoteOnly {
+		if session, sessionErr := h.fetchLocalChatSession(); sessionErr == nil && strings.EqualFold(session.PUUID, remoteAuth.Puuid) {
+			if localResp, localErr := h.fetchLocalSocialStatus(); localErr == nil {
+				h.enrichSocialCards(&localResp)
+				h.returnAny(w, localResp)
+				return
+			}
+		}
+	}
 	if hasRemoteAuth {
 		remoteResp := fetchRemoteSocialStatus(remoteAuth)
 		h.enrichRemoteSocialNames(remoteAuth, &remoteResp)
+		h.enrichSocialCards(&remoteResp)
 		remoteProbe = remoteSocialProbe{
 			Status: remoteResp.RemoteStatus,
 			Host:   remoteResp.RemoteChatHost,
@@ -144,7 +159,36 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	resp.RemoteStatus = remoteProbe.Status
 	resp.RemoteChatHost = remoteProbe.Host
 	resp.RemoteChatPort = remoteProbe.Port
+	h.enrichSocialCards(&resp)
 	h.returnAny(w, resp)
+}
+
+func (h *Handler) enrichSocialCards(response *SocialStatusResponse) {
+	if response == nil || len(response.Presences) == 0 {
+		return
+	}
+	missing := make([]string, 0, len(response.Presences))
+	for _, presence := range response.Presences {
+		if presence.CardID == "" && presence.Puuid != "" {
+			missing = append(missing, presence.Puuid)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		return
+	}
+	cards, err := tracking.GetLatestPlayerCards(db, missing)
+	if err != nil {
+		return
+	}
+	for i := range response.Presences {
+		if response.Presences[i].CardID == "" {
+			response.Presences[i].CardID = cards[strings.ToLower(response.Presences[i].Puuid)]
+		}
+	}
 }
 
 func (h *Handler) enrichRemoteSocialNames(auth *remoteAuthHeaders, response *SocialStatusResponse) {
@@ -266,6 +310,20 @@ func (h *Handler) fetchLocalSocialStatus() (SocialStatusResponse, error) {
 	return buildLocalSocialResponse(friends, presences, "local"), nil
 }
 
+func (h *Handler) fetchLocalChatSession() (localChatSessionResponse, error) {
+	port, password, err := readRiotLockfile()
+	if err != nil {
+		return localChatSessionResponse{}, err
+	}
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("riot:%s", password)))
+	url := fmt.Sprintf("https://127.0.0.1:%s/chat/v1/session", port)
+	return doLocalChatRequest(localChatHTTPClient, url, auth, func(body []byte) (localChatSessionResponse, error) {
+		var out localChatSessionResponse
+		err := json.Unmarshal(body, &out)
+		return out, err
+	})
+}
+
 func doLocalChatRequest[T any](client *http.Client, url, auth string, decode func([]byte) (T, error)) (T, error) {
 	var zero T
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -320,15 +378,16 @@ func buildLocalSocialResponse(friends localFriendsResponse, presences localPrese
 			})
 			continue
 		}
-		if productIsActive(presence.Product) {
+		normalized := normalizeChatPresence(presence, map[string]string{
+			f.PUUID: friendDisplayName(f.GameName, f.GameTag, f.PUUID),
+		})
+		if socialPresenceIsActive(normalized) {
 			onlineCount++
-			if strings.EqualFold(presence.Product, "valorant") {
+			if socialPresenceIsInGame(normalized) {
 				inGameCount++
 			}
 		}
-		out = append(out, normalizeChatPresence(presence, map[string]string{
-			f.PUUID: friendDisplayName(f.GameName, f.GameTag, f.PUUID),
-		}))
+		out = append(out, normalized)
 	}
 
 	return SocialStatusResponse{
@@ -478,9 +537,11 @@ func locateRiotLockfile() (string, error) {
 
 func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]string) SocialPresence {
 	p := SocialPresence{
-		Puuid:   entry.Puuid,
-		Product: entry.Product,
-		Name:    resolvePresenceName(entry, nameByPuuid),
+		Puuid:    entry.Puuid,
+		Product:  strings.ToLower(entry.Product),
+		Name:     resolvePresenceName(entry, nameByPuuid),
+		State:    entry.State,
+		Platform: entry.Platform,
 	}
 	if rawPrivate := entry.Private; rawPrivate != "" {
 		if decoded, err := base64.StdEncoding.DecodeString(rawPrivate); err == nil {
@@ -499,6 +560,12 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 	}
 	if p.State == "" && p.Product != "" {
 		p.State = "online"
+	}
+	if p.Product == "" && !strings.EqualFold(p.State, "offline") {
+		p.Product = "riot_chat"
+	}
+	if !socialPresenceIsActive(p) {
+		p.State = "offline"
 	}
 	return p
 }
@@ -530,13 +597,17 @@ func friendDisplayName(gameName, tag, _ string) string {
 	return "Unknown friend"
 }
 
-func productIsActive(product string) bool {
-	switch strings.ToLower(product) {
-	case "valorant", "league_of_legends", "riotclient", "product":
+func socialPresenceIsActive(p SocialPresence) bool {
+	if strings.EqualFold(p.Product, "valorant") {
 		return true
-	default:
-		return product != ""
 	}
+	platform := strings.ToLower(p.Platform)
+	return strings.Contains(platform, "pc") || strings.Contains(platform, "windows") || strings.Contains(platform, "desktop")
+}
+
+func socialPresenceIsInGame(p SocialPresence) bool {
+	state := strings.ToLower(p.State)
+	return p.QueueID != "" || strings.Contains(state, "ingame") || strings.Contains(state, "pregame") || strings.Contains(state, "match")
 }
 
 func firstNonEmpty(values ...string) string {

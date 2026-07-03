@@ -837,10 +837,10 @@ fetch("https://valorant-api.com/v1/seasons")
                     >
                         <div className={s.railHeroScrim} />
                         <div className={s.railAvatar}>
-                            {identityTopAgentMeta?.icon ? (
-                                <img src={identityTopAgentMeta.icon} alt={identityTopAgentMeta.name} className={s.railAvatarImg} />
-                            ) : cardData?.icon ? (
+                            {cardData?.icon ? (
                                 <img src={cardData.icon} alt="Player Card" className={s.railAvatarImg} />
+                            ) : identityTopAgentMeta?.icon ? (
+                                <img src={identityTopAgentMeta.icon} alt={identityTopAgentMeta.name} className={s.railAvatarImg} />
                             ) : (
                                 <div className={`${s.railAvatarImg} ${s.railAvatarFallback}`} />
                             )}

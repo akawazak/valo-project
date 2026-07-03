@@ -139,11 +139,10 @@ func initLogger() {
 		log.Fatalf("error opening file: %v", err)
 	}
 
-	cleanupOldLogs(logDir, time.Now().AddDate(0, 0, -7))
-
-	logPath := filepath.Join(logDir, time.Now().Format("2006-01-02")+".log")
+	logPath := filepath.Join(logDir, "valovault.log")
+	cleanupLogs(logDir, logPath)
 	flags := os.O_WRONLY | os.O_CREATE | os.O_APPEND
-	if info, err := os.Stat(logPath); err == nil && info.Size() >= 5<<20 {
+	if info, err := os.Stat(logPath); err == nil && info.Size() >= 1<<20 {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	}
 	f, err := os.OpenFile(logPath, flags, 0666)
@@ -154,7 +153,7 @@ func initLogger() {
 	log.SetOutput(f)
 }
 
-func cleanupOldLogs(dir string, cutoff time.Time) {
+func cleanupLogs(dir, keep string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -163,7 +162,7 @@ func cleanupOldLogs(dir string, cutoff time.Time) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".log" {
 			continue
 		}
-		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+		if filepath.Join(dir, entry.Name()) != keep {
 			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}

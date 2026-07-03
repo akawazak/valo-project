@@ -100,7 +100,6 @@ func (h *Handler) GetParty(w http.ResponseWriter, r *http.Request) {
 		h.returnAny(w, PartyResponse{Phase: "error", Source: source, Error: err.Error()})
 		return
 	}
-	slog.Info("party status refreshed", "source", response.Source, "phase", response.Phase, "members", len(response.Members))
 	h.returnAny(w, response)
 }
 
@@ -161,19 +160,10 @@ func (h *Handler) getPartyClient(r *http.Request) (*valclient.ValClient, string,
 }
 
 func getCurrentParty(val *valclient.ValClient) (*currentPartyPlayerResponse, error) {
-	return getCurrentPartyByPuuid(val, val.Player.Uuid)
-}
-
-// getCurrentPartyByPuuid looks up the CurrentPartyID for an arbitrary
-// player. Used by the live match overlay to detect every premade in
-// the match, not just the local user. The endpoint is a public
-// lookup; auth is the same entitlements/bearer pair as the local
-// call. Empty CurrentPartyID means the player is solo-queued.
-func getCurrentPartyByPuuid(val *valclient.ValClient, puuid string) (*currentPartyPlayerResponse, error) {
-	if puuid == "" {
+	if val == nil || val.Player == nil || val.Player.Uuid == "" {
 		return &currentPartyPlayerResponse{}, nil
 	}
-	apiURL := val.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/parties/v1/players/{puuid}", "{puuid}", puuid)
+	apiURL := val.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/parties/v1/players/{puuid}", "{puuid}", val.Player.Uuid)
 	resp := new(currentPartyPlayerResponse)
 	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, resp); err != nil {
 		return nil, err

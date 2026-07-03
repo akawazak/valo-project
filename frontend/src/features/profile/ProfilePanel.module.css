@@ -151,16 +151,18 @@
     width: 94px;
     height: 94px;
     border-radius: 20px;
-    overflow: hidden;
+    overflow: visible;
     border: 3px solid var(--bg-surface);
     background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.3));
     box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 0 0 5px rgba(var(--accent-rgb), 0.14);
 }
 
 .railAvatarImg {
+    display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
+    border-radius: 17px;
 }
 
 .railAvatarFallback {
@@ -170,21 +172,23 @@
 
 .railLevel {
     position: absolute;
-    right: -10px;
-    bottom: -10px;
-    min-width: 38px;
-    height: 30px;
-    padding: 0 9px;
+    z-index: 2;
+    right: -7px;
+    bottom: -7px;
+    min-width: 36px;
+    height: 28px;
+    padding: 0 8px;
     display: grid;
     place-items: center;
     border-radius: 999px;
-    background: linear-gradient(135deg, var(--accent), rgba(var(--accent-rgb), 0.7));
+    background: #081017;
     color: #fff;
     font-family: var(--font-mono);
     font-size: 0.82rem;
     font-weight: 800;
-    box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.5);
-    border: 2px solid var(--bg-surface);
+    text-shadow: 0 1px 2px #000;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.72), 0 5px 16px rgba(var(--accent-rgb), 0.55);
+    border: 2px solid var(--accent);
 }
 
 .railBody {
