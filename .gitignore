@@ -21,6 +21,8 @@ scratch/node_modules/
 scratch/package-lock.json
 
 # Agent session files
+AGENTS.md
 MEMORY.md
+/RELEASE_CHECKLIST.md
 memory/
 frontend/.codex-*.png

@@ -94,7 +94,7 @@ Account sessions are stored locally in WebView2 user-data folders and the app co
 
 ## Contributing and releases
 
-Fork the repository, branch from the latest `main`, keep changes focused, run the validation commands above, and open a pull request with the root cause and verification evidence. Maintainer release requirements are in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+Fork the repository, branch from the latest `main`, keep changes focused, run the validation commands above, and open a pull request with the root cause and verification evidence.
 
 ## Credits
 
