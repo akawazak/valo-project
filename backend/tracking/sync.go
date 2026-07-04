@@ -144,9 +144,9 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		nextCompetitiveIndex int
 	)
 	var (
-		historyErr      error
-		competitiveErr  error
-		historyReady    = make(chan struct{})
+		historyErr       error
+		competitiveErr   error
+		historyReady     = make(chan struct{})
 		competitiveReady = make(chan struct{})
 	)
 	go func() {
@@ -399,6 +399,9 @@ func (m *SyncManager) fetchHistoryLane(
 
 	recent, total, err := fetchPage(0)
 	if err != nil {
+		if strings.Contains(err.Error(), "status 404") {
+			return nil, -1, nil
+		}
 		return nil, cursor, err
 	}
 	if len(recent) < pageSize || (total > 0 && total <= pageSize) {

@@ -356,7 +356,9 @@ func doLocalChatRequest[T any](client *http.Client, url, auth string, decode fun
 func buildLocalSocialResponse(friends localFriendsResponse, presences localPresencesResponse, source string) SocialStatusResponse {
 	presencesByPuuid := make(map[string]chatPresenceEntry, len(presences.Presences))
 	for _, p := range presences.Presences {
-		if p.Puuid != "" {
+		current, exists := presencesByPuuid[p.Puuid]
+		if p.Puuid != "" && (!exists || !strings.EqualFold(current.Product, "valorant") ||
+			(strings.EqualFold(p.Product, "valorant") && current.Private == "" && p.Private != "")) {
 			presencesByPuuid[p.Puuid] = p
 		}
 	}

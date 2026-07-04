@@ -191,6 +191,33 @@
     border: 2px solid var(--accent);
 }
 
+.rateLimitPopup {
+    position: fixed;
+    top: 84px;
+    right: 24px;
+    z-index: 60;
+    display: grid;
+    gap: 4px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 14px 16px;
+    border: 1px solid color-mix(in srgb, var(--yellow) 55%, var(--border));
+    border-radius: var(--radius-md);
+    background: var(--menu-bg);
+    box-shadow: var(--shadow-lg);
+    animation: slideIn 0.25s ease;
+}
+
+.rateLimitPopup strong {
+    color: var(--yellow);
+    font-size: 0.86rem;
+}
+
+.rateLimitPopup span {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
 .railBody {
     padding: 40px 20px 22px;
     text-align: center;

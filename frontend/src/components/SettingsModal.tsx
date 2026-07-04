@@ -4,6 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
+import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
+
+const RIOT_WALLPAPERS = [
+    { id: 'evolution', name: 'Evolution', url: '/themes/evolution.jpg' },
+    { id: 'china-launch', name: 'China Launch', url: '/themes/china-launch.jpg' },
+    { id: 'omen-outlaw', name: 'Omen & Outlaw', url: '/themes/omen-outlaw.jpg' },
+    { id: 'cypher-reborn', name: 'Cypher Reborn', url: '/themes/cypher-reborn.jpg' },
+    { id: 'deadlock', name: 'Deadlock', url: '/themes/deadlock.jpg' },
+] as const;
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -28,8 +37,10 @@ interface SettingsModalProps {
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
     accentTheme: string;
+    interfaceTheme: InterfaceTheme;
     onToggleTheme: () => void;
     onAccentThemeChange: (accent: 'valorant' | 'aqua' | 'violet' | 'gold') => void;
+    onInterfaceThemeChange: (theme: InterfaceTheme) => void;
     
     // Client health & active info
     isLocalClientActive: boolean;
@@ -89,8 +100,10 @@ export default function SettingsModal({
     onLaunchAtStartupChange,
     theme,
     accentTheme,
+    interfaceTheme,
     onToggleTheme,
     onAccentThemeChange,
+    onInterfaceThemeChange,
     isLocalClientActive,
     activeAccount,
     appVersion,
@@ -105,6 +118,7 @@ export default function SettingsModal({
     onRestartForUpdate,
     onCheckForUpdates,
 }: SettingsModalProps) {
+    const { appearance, setAppearance, resetAppearance } = useTheme();
     const [storage, setStorage] = useState<StorageStatus | null>(null);
     const [sessionCacheBytes, setSessionCacheBytes] = useState(0);
     const [storageBusy, setStorageBusy] = useState(false);
@@ -236,6 +250,62 @@ export default function SettingsModal({
                                         >
                                             ☾ Dark
                                         </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Interface Theme</div>
+                                    <div className="settings-item-desc">Change the atmosphere, surfaces, and background art without moving your UI.</div>
+                                </div>
+                                <div className="settings-item-control settings-item-control--wide">
+                                    <div className="appearance-theme-gallery" aria-label="Interface theme and wallpaper">
+                                        {[
+                                            { id: 'default', label: 'Tactical', detail: 'Original clean UI' },
+                                            { id: 'protocol', label: 'Protocol', detail: 'Cyan glass & grid' },
+                                            { id: 'cinematic', label: 'Cinematic', detail: 'Official Riot key art' },
+                                        ].map((option) => (
+                                            <button
+                                                key={option.id}
+                                                type="button"
+                                                className={`appearance-theme-tile appearance-theme-tile--${option.id}${interfaceTheme === option.id && !appearance.backgroundId ? ' active' : ''}`}
+                                                onClick={() => onInterfaceThemeChange(option.id as InterfaceTheme)}
+                                                aria-pressed={interfaceTheme === option.id && !appearance.backgroundId}
+                                            >
+                                                <span className="appearance-theme-preview" aria-hidden="true" />
+                                                <strong>{option.label}</strong>
+                                            </button>
+                                        ))}
+                                        {RIOT_WALLPAPERS.map((item) => (
+                                            <button
+                                                key={item.id}
+                                                type="button"
+                                                className={`appearance-theme-tile${appearance.backgroundId === item.id ? ' active' : ''}`}
+                                                onClick={() => setAppearance({ backgroundId: item.id, backgroundUrl: item.url, backgroundName: item.name })}
+                                                aria-pressed={appearance.backgroundId === item.id}
+                                            >
+                                                <img src={item.url} alt="" />
+                                                <strong>{item.name}</strong>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="appearance-customizer">
+                                        <div className="appearance-toolbar">
+                                            <strong>{appearance.backgroundName || 'Interface controls'}</strong>
+                                            {appearance.backgroundId && <button type="button" className="settings-update-now-btn" onClick={resetAppearance}>Clear wallpaper</button>}
+                                        </div>
+                                        <div className="appearance-sliders">
+                                            <AppearanceRange label="Art strength" value={appearance.strength} min={10} max={80} onChange={(strength) => setAppearance({ strength })} />
+                                            <AppearanceRange label="Background blur" value={appearance.blur} min={0} max={18} suffix="px" onChange={(blur) => setAppearance({ blur })} />
+                                            <AppearanceRange label="Saturation" value={appearance.saturation} min={30} max={140} onChange={(saturation) => setAppearance({ saturation })} />
+                                            <AppearanceRange label="Panel opacity" value={appearance.panelOpacity} min={45} max={100} onChange={(panelOpacity) => setAppearance({ panelOpacity })} />
+                                        </div>
+                                        <div className="appearance-position" aria-label="Background position">
+                                            {(['left', 'center', 'right'] as const).map((position) => (
+                                                <button key={position} type="button" className={appearance.position === position ? 'active' : ''} onClick={() => setAppearance({ position })}>{position}</button>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -589,5 +659,14 @@ export default function SettingsModal({
                 </div>
             </div>
         </div>
+    );
+}
+
+function AppearanceRange({ label, value, min, max, suffix = '%', onChange }: { label: string; value: number; min: number; max: number; suffix?: string; onChange: (value: number) => void }) {
+    return (
+        <label className="appearance-range">
+            <span>{label}<strong>{value}{suffix}</strong></span>
+            <input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        </label>
     );
 }

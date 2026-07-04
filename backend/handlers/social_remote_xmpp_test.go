@@ -38,6 +38,31 @@ func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
 	}
 }
 
+func TestBuildLocalSocialResponsePrefersValorantPresenceWithPlayerCard(t *testing.T) {
+	private := base64.StdEncoding.EncodeToString([]byte(`{"matchPresenceData":{"sessionLoopState":"INGAME","playerCardId":"card-in-game"}}`))
+	friends := localFriendsResponse{}
+	friends.Friends = append(friends.Friends, struct {
+		PUUID          string  `json:"puuid"`
+		GameName       string  `json:"game_name"`
+		GameTag        string  `json:"game_tag"`
+		Name           string  `json:"name"`
+		Note           string  `json:"note"`
+		Pid            string  `json:"pid"`
+		Region         string  `json:"region"`
+		LastOnlineTs   *int64  `json:"last_online_ts"`
+		ActivePlatform *string `json:"activePlatform"`
+	}{PUUID: "friend", GameName: "Friend", GameTag: "EUW"})
+	presences := localPresencesResponse{Presences: []chatPresenceEntry{
+		{Puuid: "friend", Product: "valorant", Private: private},
+		{Puuid: "friend", Product: "riotclient", State: "away", Platform: "PC"},
+	}}
+
+	response := buildLocalSocialResponse(friends, presences, "local")
+	if len(response.Presences) != 1 || response.Presences[0].CardID != "card-in-game" || response.InGameCount != 1 {
+		t.Fatalf("Riot Client presence replaced VALORANT player card: %#v", response)
+	}
+}
+
 func TestNormalizeChatPresenceTreatsUnknownChatActivityAsOffline(t *testing.T) {
 	presence := normalizeChatPresence(chatPresenceEntry{
 		Puuid: "friend",

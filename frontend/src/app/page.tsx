@@ -29,6 +29,7 @@ import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
+import HomeScreen from '@/components/HomeScreen';
 
 export default function Home() {
     const {
@@ -54,7 +55,7 @@ export default function Home() {
         ownedChromaIDs,
     } = useData();
 
-    const { theme, accentTheme, toggleTheme, setAccentTheme } = useTheme();
+    const { theme, accentTheme, interfaceTheme, toggleTheme, setAccentTheme, setInterfaceTheme } = useTheme();
 
     const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
     const [dataRevision, setDataRevision] = useState(0);
@@ -70,7 +71,7 @@ export default function Home() {
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     
     // Core Layout State
-    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('profile');
+    const [activeTab, setActiveTab] = useState<'home' | 'skins' | 'store' | 'profile'>('home');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
 
@@ -381,7 +382,7 @@ export default function Home() {
         setIsWorkspaceOpen(true);
     };
 
-    if (isLoading || dataContextLoading) {
+    if ((isLoading || dataContextLoading) && activeTab !== 'home') {
         return (
             <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
                 <div className="spinner-border text-danger" role="status" style={{ width: '3rem', height: '3rem' }}>
@@ -416,7 +417,17 @@ export default function Home() {
 
             <div className="app-content-wrapper">
                 <main className="app-main-content">
-                    {activeTab === 'store' ? (
+                    {activeTab === 'home' ? (
+                        <HomeScreen
+                            activeAccount={activeAccount}
+                            isBackendOnline={isBackendOnline}
+                            isClientHealthy={isClientHealthy}
+                            onNavigate={setActiveTab}
+                            onCustomize={() => setIsSettingsOpen(true)}
+                            onManageAccount={() => setIsAccountsOpen(true)}
+                            playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
+                        />
+                    ) : activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : activeTab === 'profile' ? (
                         <ProfilePanel
@@ -562,8 +573,10 @@ export default function Home() {
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}
                 accentTheme={accentTheme}
+                interfaceTheme={interfaceTheme}
                 onToggleTheme={toggleTheme}
                 onAccentThemeChange={setAccentTheme}
+                onInterfaceThemeChange={setInterfaceTheme}
                 isLocalClientActive={isClientHealthy}
                 activeAccount={activeAccount}
                 appVersion={appVersion}

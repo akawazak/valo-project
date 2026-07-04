@@ -217,6 +217,7 @@ type SyncStatus struct {
 	InFlight       bool   `json:"inFlight"`
 	TotalMatches   int    `json:"totalMatches"`
 	ErrorKind      string `json:"errorKind,omitempty"`
+	RetryAt        int64  `json:"retryAt,omitempty"`
 	LastError      string `json:"lastError,omitempty"`
 }
 
