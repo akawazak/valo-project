@@ -7,8 +7,8 @@ import { useData } from "@/context/DataContext";
 import { getProfileOverview } from "@/services/api";
 
 interface AppTopbarProps {
-    activeTab: "home" | "store" | "skins" | "profile";
-    onTabChange: (tab: "home" | "store" | "skins" | "profile") => void;
+    activeTab: "store" | "skins" | "profile";
+    onTabChange: (tab: "store" | "skins" | "profile") => void;
     activeAccount: RiotAccount | null;
     useLocalSso: boolean;
     isLocalClientActive: boolean;
@@ -19,7 +19,6 @@ interface AppTopbarProps {
 }
 
 const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
-    { key: "home", label: "Home" },
     { key: "store", label: "Storefront" },
     { key: "profile", label: "Profile" },
     { key: "skins", label: "Presets" },
@@ -90,7 +89,7 @@ export default function AppTopbar({
                 </div>
             )}
             <div className="topbar-inner">
-                <button type="button" className="topbar-brand" onClick={() => onTabChange("home")}>
+                <button type="button" className="topbar-brand" onClick={() => onTabChange("store")}>
                     <Image className="brand-mark brand-mark-img" src="/brand-mark.svg" alt="" width={30} height={30} priority />
                     <span>
                         VANTA<span>VAULT</span>

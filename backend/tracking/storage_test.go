@@ -76,3 +76,33 @@ func TestGetLatestPlayerCards(t *testing.T) {
 		t.Fatalf("unexpected cards: %#v", cards)
 	}
 }
+
+func TestOverviewFallsBackToLatestNonEmptyPlayerCard(t *testing.T) {
+	db, err := OpenTrackingDB(filepath.Join(t.TempDir(), "tracking"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		INSERT INTO matches
+			(matchID, queueID, mapID, gameMode, gameStartMillis, seasonId, rawJsonPath, cachedAt, accountPuuid)
+		VALUES
+			('old', 'unrated', 'map', 'mode', 1, 'act', '', 1, 'player'),
+			('new', 'unrated', 'map', 'mode', 2, 'act', '', 2, 'player');
+		INSERT INTO match_players (matchID, subject, teamId, characterId, gameName, playerCardId)
+		VALUES
+			('old', 'player', 'Blue', 'agent', 'Player', 'card-id'),
+			('new', 'player', 'Blue', 'agent', 'Player', '');
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	overview, err := GetOverview(db, "PLAYER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.PlayerCardID != "card-id" {
+		t.Fatalf("player card = %q, want latest non-empty card", overview.PlayerCardID)
+	}
+}

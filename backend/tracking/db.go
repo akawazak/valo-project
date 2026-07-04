@@ -1208,6 +1208,11 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	out.TagLine = tag
 	out.PlayerCardID = playerCardID
 	out.PlayerTitleID = playerTitleID
+	if out.PlayerCardID == "" {
+		if cards, err := GetLatestPlayerCards(db, []string{puuid}); err == nil {
+			out.PlayerCardID = cards[puuid]
+		}
+	}
 
 	// Latest competitive state derived from match_players (competitiveTier
 	// comes from Riot per player per match; we take the freshest value).

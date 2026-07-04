@@ -28,6 +28,7 @@ import s from "./ProfilePanel.module.css";
 
 interface Props {
     onConnectAccount?: () => void;
+    ownPlayerCardId?: string;
     requestedProfile?: { puuid: string; gameName: string; tagLine: string } | null;
     onRequestedProfileChange: (profile: { puuid: string; gameName: string; tagLine: string } | null) => void;
     autoSyncMatches: boolean;
@@ -315,7 +316,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     return tierPromise;
 }
 
-export default function ProfilePanel({ onConnectAccount, requestedProfile, onRequestedProfileChange, autoSyncMatches }: Props) {
+export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, requestedProfile, onRequestedProfileChange, autoSyncMatches }: Props) {
     const { activeAccount, playerCards: playerCardAssets, playerTitles: playerTitleAssets } = useData();
     const ownPuuid = activeAccount?.puuid ?? "";
     const viewedProfile = requestedProfile?.puuid && requestedProfile.puuid !== ownPuuid ? requestedProfile : null;
@@ -778,7 +779,8 @@ fetch("https://valorant-api.com/v1/seasons")
     const selectedAgentGroup = agentPerformanceGroups.find((group) => group.label === agentRole) || agentPerformanceGroups[0];
     const selectedMapGroup = mapPerformanceGroups.find((group) => group.label === mapMode) || mapPerformanceGroups[0];
 
-    const cardData = identity?.playerCardId ? playerCards[identity.playerCardId.toLowerCase()] : null;
+    const playerCardId = identity?.playerCardId || (!viewedProfile ? ownPlayerCardId : "");
+    const cardData = playerCardId ? playerCards[playerCardId.toLowerCase()] : null;
     const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
 
     if (!activeAccount) {

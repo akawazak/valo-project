@@ -29,7 +29,6 @@ import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
-import HomeScreen from '@/components/HomeScreen';
 
 export default function Home() {
     const {
@@ -71,7 +70,7 @@ export default function Home() {
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     
     // Core Layout State
-    const [activeTab, setActiveTab] = useState<'home' | 'skins' | 'store' | 'profile'>('home');
+    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('store');
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
 
@@ -382,7 +381,7 @@ export default function Home() {
         setIsWorkspaceOpen(true);
     };
 
-    if ((isLoading || dataContextLoading) && activeTab !== 'home') {
+    if (isLoading || dataContextLoading) {
         return (
             <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
                 <div className="spinner-border text-danger" role="status" style={{ width: '3rem', height: '3rem' }}>
@@ -418,17 +417,13 @@ export default function Home() {
 
             <div className="app-content-wrapper">
                 <main className="app-main-content">
-                    {activeTab === 'home' ? (
-                        <HomeScreen
-                            activeAccount={activeAccount}
-                            onNavigate={setActiveTab}
-                        />
-                    ) : activeTab === 'store' ? (
+                    {activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     ) : activeTab === 'profile' ? (
                         <ProfilePanel
                             key={`${activeAccount?.puuid || "none"}:${profileTarget?.puuid || "own"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
+                            ownPlayerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
                             requestedProfile={profileTarget}
                             onRequestedProfileChange={setProfileTarget}
                             autoSyncMatches={autoSyncMatches ?? true}
