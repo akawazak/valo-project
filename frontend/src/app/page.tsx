@@ -413,6 +413,7 @@ export default function Home() {
                 isBackendOnline={isBackendOnline}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenAccounts={() => setIsAccountsOpen(true)}
+                playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
             />
 
             <div className="app-content-wrapper">
@@ -420,12 +421,7 @@ export default function Home() {
                     {activeTab === 'home' ? (
                         <HomeScreen
                             activeAccount={activeAccount}
-                            isBackendOnline={isBackendOnline}
-                            isClientHealthy={isClientHealthy}
                             onNavigate={setActiveTab}
-                            onCustomize={() => setIsSettingsOpen(true)}
-                            onManageAccount={() => setIsAccountsOpen(true)}
-                            playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
                         />
                     ) : activeTab === 'store' ? (
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />

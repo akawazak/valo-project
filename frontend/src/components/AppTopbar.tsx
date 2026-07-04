@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import Image from "next/image";
+import { useData } from "@/context/DataContext";
+import { getProfileOverview } from "@/services/api";
 
 interface AppTopbarProps {
     activeTab: "home" | "store" | "skins" | "profile";
@@ -13,6 +15,7 @@ interface AppTopbarProps {
     isBackendOnline?: boolean;
     onOpenSettings: () => void;
     onOpenAccounts: () => void;
+    playerCardId?: string;
 }
 
 const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
@@ -31,8 +34,15 @@ export default function AppTopbar({
     isBackendOnline = true,
     onOpenSettings,
     onOpenAccounts,
+    playerCardId,
 }: AppTopbarProps) {
+    const { playerCards } = useData();
+    const [profileCardId, setProfileCardId] = useState(playerCardId || "");
     const accountLabel = (acc: RiotAccount) => `${acc.gameName}#${acc.tagLine}`;
+    const playerCard = useMemo(
+        () => playerCards.find((card) => card.uuid.toLowerCase() === profileCardId.toLowerCase()),
+        [playerCards, profileCardId],
+    );
     const navRef = useRef<HTMLElement>(null);
     const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
@@ -59,6 +69,18 @@ export default function AppTopbar({
         const raf = requestAnimationFrame(updateIndicator);
         return () => cancelAnimationFrame(raf);
     }, [updateIndicator]);
+
+    useEffect(() => {
+        setProfileCardId(playerCardId || "");
+        if (!activeAccount?.puuid) return;
+        let cancelled = false;
+        void getProfileOverview({ puuid: activeAccount.puuid, region: activeAccount.region })
+            .then((overview) => {
+                if (!cancelled && overview.playerCardId) setProfileCardId(overview.playerCardId);
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [activeAccount?.puuid, activeAccount?.region, playerCardId]);
 
     return (
         <header className="app-topbar">
@@ -99,7 +121,9 @@ export default function AppTopbar({
                         title="Manage Accounts"
                     >
                         <div className="profile-pill-avatar">
-                            {useLocalSso ? (
+                            {playerCard?.displayIcon ? (
+                                <img src={playerCard.displayIcon} alt="" />
+                            ) : useLocalSso ? (
                                 <svg className="pill-avatar-svg local-sso" viewBox="0 0 24 24" fill="currentColor">
                                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                                 </svg>

@@ -1449,8 +1449,7 @@ div#__next>div {
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.72);
 }
 
-.home-welcome span,
-.home-panel-label {
+.home-welcome span {
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 0.65rem;
@@ -1462,87 +1461,12 @@ div#__next>div {
 .home-welcome strong { font-size: 1.45rem; }
 .home-welcome small { color: rgba(238, 241, 244, 0.6); }
 
-.home-account-panel {
-  position: absolute;
-  top: clamp(2rem, 5vh, 4.5rem);
-  right: clamp(1.75rem, 4vw, 4rem);
-  display: grid;
-  width: min(310px, 30vw);
-  gap: 0;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 2px;
-  background: rgba(7, 12, 19, 0.76);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(18px) saturate(1.15);
+.profile-pill-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
-
-.home-account-identity {
-  display: flex;
-  align-items: center;
-  min-height: 112px;
-  gap: 0.85rem;
-  padding: 1.15rem;
-  border: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  background-color: rgba(5, 10, 17, 0.96);
-  background-position: center;
-  background-size: cover;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.home-account-mark {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border: 1px solid var(--border-accent);
-  background: var(--accent-dim);
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-weight: 900;
-  overflow: hidden;
-}
-
-.home-account-mark img { width: 100%; height: 100%; object-fit: cover; }
-.home-account-copy { display: grid; gap: 0.05rem; }
-.home-account-copy small { color: var(--accent); font-size: 0.56rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
-.home-account-copy strong { font-size: 1rem; }
-.home-account-copy span { color: rgba(238, 241, 244, 0.62); font-size: 0.7rem; }
-
-.home-status-strip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.85rem 1.15rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(238, 241, 244, 0.6);
-  font-size: 0.62rem;
-  text-transform: uppercase;
-}
-
-.home-status-strip span::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 0.35rem; border-radius: 50%; background: currentColor; }
-.home-status-strip .online { color: var(--green); }
-.home-status-strip .offline { color: var(--accent); }
-.home-status-strip .idle { color: var(--text-dim); }
-
-.home-customize-btn {
-  margin: 1rem 1.15rem 1.15rem;
-  padding: 0.72rem 0.9rem;
-  border: 1px solid var(--border-strong);
-  background: rgba(7, 12, 19, 0.42);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.home-customize-btn:hover { background: var(--accent); }
 
 .settings-item-control--wide {
   width: 100%;
@@ -1623,12 +1547,10 @@ div#__next>div {
 }
 
 @media (max-width: 920px) {
-  .home-account-panel { width: 260px; }
   .appearance-theme-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
-  .home-account-panel { display: none; }
   .home-screen-content { padding: 2rem 1.25rem 5rem; }
   .home-launch-nav button { font-size: 2.2rem; }
 }
