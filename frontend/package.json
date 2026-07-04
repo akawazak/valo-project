@@ -9,7 +9,10 @@
     "start": "next start",
     "lint": "eslint",
     "predeploy": "npm run build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:info": "tauri info"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.8.0",

@@ -64,16 +64,63 @@ Windows may show a SmartScreen warning for community builds that are not code-si
 
 ## Development
 
-Install [Go 1.25+](https://go.dev/dl/), [Node.js](https://nodejs.org/), [Rust 1.77.2+](https://www.rust-lang.org/tools/install), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+### Windows prerequisites
+
+Install all of the following before launching the app locally:
+
+- [Node.js](https://nodejs.org/) (includes npm)
+- [Go 1.25+](https://go.dev/dl/)
+- [Rust 1.77.2+](https://www.rust-lang.org/tools/install) using the default MSVC toolchain
+- [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload
+  - In the French installer, select **Développement Desktop en C++**
+  - Ensure **MSVC v143 - VS 2022 C++ x64/x86 build tools** and a **Windows 10/11 SDK** are selected
+- Microsoft Edge WebView2 Runtime (already included with current Windows 10/11 installations)
+
+After installing the Build Tools, close and reopen PowerShell so Rust can find `link.exe`. You can verify the setup with:
+
+```powershell
+node --version
+npm --version
+go version
+rustc --version
+cargo --version
+```
+
+### Launch the desktop app
 
 ```powershell
 git clone https://github.com/akawazak/valo-project.git
 cd valo-project\frontend
 npm install
-npm run tauri dev
+npm run desktop
 ```
 
-For browser-only frontend and backend development, use `npm run dev:all` from `frontend`.
+`npm run desktop` is the recommended command. It runs Tauri, starts the Next.js development server, builds the Go API as a sidecar, and opens the desktop window. `npx tauri dev` is equivalent. Do not run `go run .` at the same time—the bundled sidecar already uses port `31719`.
+
+To inspect the installed Tauri prerequisites or create the Windows installer:
+
+```powershell
+npm run desktop:info
+npm run desktop:build
+```
+
+If compilation reports `linker 'link.exe' not found`, install the Visual Studio C++ workload described above, then restart PowerShell.
+
+### Browser-only development
+
+Browser-only development does not use Tauri, so start the backend and frontend in separate PowerShell windows:
+
+```powershell
+# Window 1
+cd valo-project\backend
+go run .
+
+# Window 2
+cd valo-project\frontend
+npm run dev
+```
+
+Do not use this two-command setup for the desktop app; use `npm run desktop` instead.
 
 ### Validation
 
