@@ -864,12 +864,19 @@ func (h *Handler) GetProfileSyncStatus(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
+	lastError := h.syncLastErrorFor(puuid)
+	errorKind := ""
+	if strings.Contains(lastError, "status 429") {
+		errorKind = "rate_limited"
+	}
 	h.returnAny(w, &tracking.SyncStatus{
 		Puuid:        puuid,
 		LastSyncedAt: state.LastSyncedAt,
 		InFlight:     h.isSyncInFlight(puuid),
 		TotalMatches: total,
-		LastError:    h.syncLastErrorFor(puuid),
+		ErrorKind:    errorKind,
+		RetryAt:      h.syncRetryAtFor(puuid),
+		LastError:    lastError,
 	})
 }
 

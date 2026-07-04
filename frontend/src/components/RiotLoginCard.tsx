@@ -177,9 +177,11 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             {/* Glassmorphic Login Sidebar */}
             <div className="login-sidebar-pane">
                 <div className="login-sidebar-header">
-                    <span className="brand-mark-large">V</span>
+                    <span className="brand-mark-large">
+                        <img src="/brand-mark.svg" alt="" />
+                    </span>
                     <h1 className="login-brand-title">
-                        VALO<span>VAULT</span>
+                        VANTA<span>VAULT</span>
                     </h1>
                     <p className="login-brand-subtitle">
                         Connect your Riot account to sync skins, loadouts, and agent presets.

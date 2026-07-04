@@ -316,7 +316,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
 }
 
 export default function ProfilePanel({ onConnectAccount, requestedProfile, onRequestedProfileChange, autoSyncMatches }: Props) {
-    const { activeAccount } = useData();
+    const { activeAccount, playerCards: playerCardAssets, playerTitles: playerTitleAssets } = useData();
     const ownPuuid = activeAccount?.puuid ?? "";
     const viewedProfile = requestedProfile?.puuid && requestedProfile.puuid !== ownPuuid ? requestedProfile : null;
     const puuid = viewedProfile?.puuid || ownPuuid;
@@ -346,12 +346,21 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile, onReq
     const [loading, setLoading] = useState(false);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
-    const [profileFacadeVisible, setProfileFacadeVisible] = useState(Boolean(viewedProfile));
+    const [profileFacadeVisible, setProfileFacadeVisible] = useState(Boolean(puuid));
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
+    const [rateLimitUntil, setRateLimitUntil] = useState(0);
+    const [rateLimitNow, setRateLimitNow] = useState(0);
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
-    const [playerCards, setPlayerCards] = useState<Record<string, { wide: string; icon: string; name: string }>>({});
-    const [playerTitles, setPlayerTitles] = useState<Record<string, string>>({});
+    const playerCards = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), {
+        wide: card.wideArt || "",
+        icon: card.displayIcon || "",
+        name: card.displayName || "",
+    }])), [playerCardAssets]);
+    const playerTitles = useMemo(() => Object.fromEntries(playerTitleAssets.map((title) => [
+        title.uuid.toLowerCase(),
+        title.titleText || title.displayName || "",
+    ])), [playerTitleAssets]);
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
@@ -386,34 +395,6 @@ export default function ProfilePanel({ onConnectAccount, requestedProfile, onReq
             setMaps(mapMap);
             setTierAssets(tiers);
         });
-        fetch("https://valorant-api.com/v1/playercards")
-            .then((res) => res.json())
-            .then((d) => {
-                if (cancelled) return;
-                const cards: Record<string, { wide: string; icon: string; name: string }> = {};
-                for (const c of d.data || []) {
-                    if (c.uuid) {
-                        cards[c.uuid.toLowerCase()] = {
-                            wide: c.wideArt || "",
-                            icon: c.displayIcon || "",
-                            name: c.displayName || "",
-                        };
-                    }
-                }
-                setPlayerCards(cards);
-            })
-            .catch((e) => console.warn("Failed to load player cards metadata", e));
-        fetch("https://valorant-api.com/v1/playertitles")
-            .then((res) => res.json())
-            .then((d) => {
-                if (cancelled) return;
-                const titles: Record<string, string> = {};
-                for (const t of d.data || []) {
-                    if (t.uuid) titles[t.uuid.toLowerCase()] = t.titleText || t.displayName || "";
-                }
-                setPlayerTitles(titles);
-            })
-            .catch((e) => console.warn("Failed to load player titles metadata", e));
 fetch("https://valorant-api.com/v1/seasons")
             .then((res) => res.json())
             .then((d) => {
@@ -501,6 +482,9 @@ fetch("https://valorant-api.com/v1/seasons")
             const st = await getProfileSyncStatus(opts).catch(() => null);
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setSyncStatus(st);
+            if (st?.errorKind === "rate_limited") {
+                setRateLimitUntil(st.retryAt || Date.now() + 30_000);
+            }
 
             const [ov, ag, mp] = await Promise.all([
                 getProfileOverview(opts),
@@ -514,7 +498,7 @@ fetch("https://valorant-api.com/v1/seasons")
             setAgentStats(ag);
             setMapStats(mp);
             setIdentity(ov ? { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" } : null);
-            if (st?.lastError && !viewedProfile) setError(cleanError(st.lastError));
+            if (st?.lastError && st.errorKind !== "rate_limited" && !viewedProfile) setError(cleanError(st.lastError));
         } catch (err) {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
                 if (!viewedProfile || !/404|not found/i.test(String(err))) {
@@ -543,10 +527,11 @@ fetch("https://valorant-api.com/v1/seasons")
         setLoadingDetails(new Set());
         setSyncing(false);
         setError("");
+        setRateLimitUntil(0);
         setLoading(Boolean(puuid));
         setHistoryLoading(Boolean(puuid));
         profileFacadeStartedAtRef.current = Date.now();
-        setProfileFacadeVisible(Boolean(viewedProfile));
+        setProfileFacadeVisible(Boolean(puuid));
         hasCachedProfileRef.current = false;
     }, [puuid, viewedProfile]);
 
@@ -636,6 +621,10 @@ fetch("https://valorant-api.com/v1/seasons")
                 }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
+                    if (finalStatus.errorKind === "rate_limited") {
+                        setRateLimitUntil(finalStatus.retryAt || Date.now() + 30_000);
+                        return;
+                    }
                     if (viewedProfile && !hasCachedProfileRef.current) {
                         onRequestedProfileChange(null);
                         return;
@@ -658,6 +647,21 @@ fetch("https://valorant-api.com/v1/seasons")
         [loadHistory, onRequestedProfileChange, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
     );
 
+    useEffect(() => {
+        if (!rateLimitUntil) return;
+        setRateLimitNow(Date.now());
+        const timer = window.setInterval(() => {
+            const now = Date.now();
+            setRateLimitNow(now);
+            if (now >= rateLimitUntil) {
+                window.clearInterval(timer);
+                setRateLimitUntil(0);
+                void runSync(false);
+            }
+        }, 1000);
+        return () => window.clearInterval(timer);
+    }, [rateLimitUntil, runSync]);
+
     // Auto-sync on first visit if nothing is cached yet.
     useEffect(() => {
         if (!autoSyncMatches || !puuid || loading || syncing || !syncStatus) return;
@@ -674,7 +678,7 @@ fetch("https://valorant-api.com/v1/seasons")
 
     useEffect(() => {
         const ready =
-            !viewedProfile ||
+            Boolean(overview) ||
             history.length > 0 ||
             (!autoSyncMatches && !loading && !historyLoading) ||
             (
@@ -686,11 +690,11 @@ fetch("https://valorant-api.com/v1/seasons")
             );
         if (!ready) return;
 
-        const minimumVisibleMs = viewedProfile ? 650 : 0;
+        const minimumVisibleMs = 650;
         const remaining = Math.max(0, minimumVisibleMs - (Date.now() - profileFacadeStartedAtRef.current));
         const timeout = setTimeout(() => setProfileFacadeVisible(false), remaining);
         return () => clearTimeout(timeout);
-    }, [autoSyncMatches, history.length, historyLoading, loading, puuid, syncing, syncStatus, viewedProfile]);
+    }, [autoSyncMatches, history.length, historyLoading, loading, overview, puuid, syncing, syncStatus]);
 
     useEffect(() => {
         if (!profileFacadeVisible) return;
@@ -794,15 +798,17 @@ fetch("https://valorant-api.com/v1/seasons")
         );
     }
 
-    if (profileFacadeVisible && viewedProfile) {
+    if (profileFacadeVisible) {
         return (
             <div className={s.profileFacade} role="status" aria-live="polite">
-                <button type="button" className={s.profileFacadeBack} onClick={() => onRequestedProfileChange(null)}>
-                    ← Back to my profile
-                </button>
+                {viewedProfile && (
+                    <button type="button" className={s.profileFacadeBack} onClick={() => onRequestedProfileChange(null)}>
+                        ← Back to my profile
+                    </button>
+                )}
                 <div className={s.profileFacadeContent}>
                     <span className={s.profileFacadeSpinner} aria-hidden="true" />
-                    <strong>Loading {viewedProfile.gameName || "player"}…</strong>
+                    <strong>Loading {viewedProfile?.gameName || activeAccount.gameName || "player"}…</strong>
                     <small>Fetching recent matches, rank, and RR details.</small>
                 </div>
             </div>
@@ -825,6 +831,13 @@ fetch("https://valorant-api.com/v1/seasons")
     return (
         <div className={s.shell}>
             {toast && <div className={s.toast}>{toast}</div>}
+
+            {rateLimitUntil > 0 && (
+                <div className={s.rateLimitPopup} role="alert" aria-live="assertive">
+                    <strong>Riot rate limit reached</strong>
+                    <span>Profile loading will retry automatically in {Math.max(1, Math.ceil((rateLimitUntil - rateLimitNow) / 1000))}s.</span>
+                </div>
+            )}
 
             {error && <div className={s.errorBar}>{error}</div>}
 

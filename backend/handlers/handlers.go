@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"backend/presets"
+	"backend/riothttp"
 	"backend/tick"
 	"backend/tracking"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/truearken/valclient/valclient"
 )
@@ -36,6 +39,7 @@ type Handler struct {
 	// so the per-puuid Riot fetcher is request-scoped) are involved.
 	syncInFlight   map[string]struct{}
 	syncLastError  map[string]string
+	syncRetryAt    map[string]int64
 	trackingConn   *sql.DB
 	trackingAppDir string
 
@@ -211,6 +215,9 @@ func (h *Handler) markSyncInFlight(puuid string) bool {
 	if h.syncLastError != nil {
 		delete(h.syncLastError, puuid)
 	}
+	if h.syncRetryAt != nil {
+		delete(h.syncRetryAt, puuid)
+	}
 	return true
 }
 
@@ -230,9 +237,17 @@ func (h *Handler) setSyncLastError(puuid string, err error) {
 	}
 	if err == nil {
 		delete(h.syncLastError, puuid)
+		delete(h.syncRetryAt, puuid)
 		return
 	}
 	h.syncLastError[puuid] = err.Error()
+	var apiErr *riothttp.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+		if h.syncRetryAt == nil {
+			h.syncRetryAt = map[string]int64{}
+		}
+		h.syncRetryAt[puuid] = time.Now().Add(apiErr.RetryAfter).UnixMilli()
+	}
 }
 
 func (h *Handler) syncLastErrorFor(puuid string) string {
@@ -242,6 +257,12 @@ func (h *Handler) syncLastErrorFor(puuid string) string {
 		return ""
 	}
 	return h.syncLastError[puuid]
+}
+
+func (h *Handler) syncRetryAtFor(puuid string) int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.syncRetryAt[puuid]
 }
 
 type OwnedSkinsResponse struct {

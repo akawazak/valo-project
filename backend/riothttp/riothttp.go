@@ -12,6 +12,16 @@ import (
 
 const maxAttempts = 3
 
+type APIError struct {
+	StatusCode int
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("Riot API returned status %d: %s", e.StatusCode, e.Body)
+}
+
 // Do performs a Riot request with bounded retry handling for transient
 // responses. Riot's Retry-After header wins; otherwise retries use 500ms/1s.
 func Do(client *http.Client, req *http.Request) ([]byte, error) {
@@ -40,8 +50,15 @@ func Do(client *http.Client, req *http.Request) ([]byte, error) {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return out, nil
 		}
-		if attempt == maxAttempts-1 || !retryable(resp.StatusCode) {
-			return nil, fmt.Errorf("Riot API returned status %d: %s", resp.StatusCode, truncate(out, 256))
+		if resp.StatusCode == http.StatusTooManyRequests || attempt == maxAttempts-1 || !retryable(resp.StatusCode) {
+			retryAfter := time.Duration(0)
+			if resp.StatusCode == http.StatusTooManyRequests {
+				retryAfter = retryDelay(resp.Header.Get("Retry-After"), attempt)
+				if strings.TrimSpace(resp.Header.Get("Retry-After")) == "" {
+					retryAfter = 30 * time.Second
+				}
+			}
+			return nil, &APIError{StatusCode: resp.StatusCode, RetryAfter: retryAfter, Body: truncate(out, 256)}
 		}
 		if err := wait(req.Context(), retryDelay(resp.Header.Get("Retry-After"), attempt)); err != nil {
 			return nil, err

@@ -463,7 +463,8 @@ export async function getSprays(): Promise<SprayAsset[]> {
 
 export async function getPlayerCards(): Promise<PlayerCardAsset[]> {
     try {
-        const data = await fetchJsonWithTimeout<{ data: PlayerCardAsset[] }>('https://valorant-api.com/v1/playercards');
+        const load = () => fetchJsonWithTimeout<{ data: PlayerCardAsset[] }>('https://valorant-api.com/v1/playercards');
+        const data = await load().catch(load);
         return data.data as PlayerCardAsset[];
     } catch (error) {
         console.error(error);
@@ -904,6 +905,8 @@ export interface ProfileSyncStatus {
     lastSyncedAt: number;
     inFlight: boolean;
     totalMatches: number;
+    errorKind?: "rate_limited";
+    retryAt?: number;
     lastError?: string;
 }
 

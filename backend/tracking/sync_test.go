@@ -116,6 +116,17 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 	}
 }
 
+func TestFetchHistoryLaneTreatsFirstPage404AsEmptyHistory(t *testing.T) {
+	manager := &SyncManager{fetchRiot: func(string, string, []byte) ([]byte, error) {
+		return nil, fmt.Errorf(`Riot API returned status 404: {"errorCode":"RESOURCE_NOT_FOUND"}`)
+	}}
+
+	history, next, err := manager.fetchHistoryLane("new-player", "eu", "", 0, 1000)
+	if err != nil || len(history) != 0 || next != -1 {
+		t.Fatalf("new account history = %#v, next %d, err %v", history, next, err)
+	}
+}
+
 func TestSyncManagerBoundsHistoryWorkForLargeCaches(t *testing.T) {
 	appDir := t.TempDir()
 	db, err := OpenTrackingDB(appDir)
