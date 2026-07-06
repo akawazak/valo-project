@@ -12,15 +12,12 @@ jobs:
     permissions:
       contents: write
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         settings:
           - name: 'Windows'
             platform: 'windows-latest'
             tauri-args: '--bundles nsis'
-          - name: 'Linux'
-            platform: 'ubuntu-22.04'
-            tauri-args: '--bundles deb,appimage'
     runs-on: ${{ matrix.settings.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -34,12 +31,6 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
-
-      - name: Install Linux dependencies
-        if: matrix.settings.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -88,9 +79,7 @@ jobs:
 
             ### Download
             - **Windows Portable (recommended):** `VantaVault-portable.exe` - run directly (no install)
-            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — per-user install, no admin required, includes auto-update
-            - **Linux AppImage:** `VantaVault_*_amd64.AppImage` — portable Linux execution
-            - **Linux Debian Package:** `VantaVault_*_amd64.deb` — standard Linux install
+            - **Windows Installer:** `VantaVault_*_x64-setup.exe` - per-user install, no admin required, includes auto-update
 
             ### Auto-update
             Installed copies check for updates automatically on launch.
