@@ -1,0 +1,12 @@
+# Keep all text files with LF line endings on ALL platforms.
+# This ensures cargo fmt and rustfmt behave consistently in CI (Linux and Windows).
+* text=auto eol=lf
+
+# Binary files must never be converted
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
