@@ -17,11 +17,11 @@ jobs:
         settings:
           - name: 'Windows'
             platform: 'windows-latest'
-            backend-exe: 'valovault-backend.exe'
+            go-target: './tmp/valovault-backend.exe'
             tauri-args: '--bundles nsis'
           - name: 'Linux'
             platform: 'ubuntu-22.04'
-            backend-exe: 'valovault-backend'
+            go-target: './tmp/valovault-backend'
             tauri-args: '--bundles deb,appimage'
     runs-on: ${{ matrix.settings.platform }}
     steps:
@@ -44,16 +44,17 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Build and stage backend sidecar
+        working-directory: backend
         shell: bash
         run: |
-          BACKEND_EXE="${{ matrix.settings.backend-exe }}"
-          mkdir -p frontend/src-tauri/binaries
+          GO_TARGET="${{ matrix.settings.go-target }}"
+          mkdir -p ../frontend/src-tauri/binaries
           if [[ "${{ matrix.settings.platform }}" == "windows-latest" ]]; then
-            go build -ldflags="-H windowsgui" -o "$BACKEND_EXE" ./backend
+            go build -ldflags="-H windowsgui" -o "$GO_TARGET" .
           else
-            go build -o "$BACKEND_EXE" ./backend
+            go build -o "$GO_TARGET" .
           fi
-          cp "$BACKEND_EXE" frontend/src-tauri/binaries/
+          cp "$GO_TARGET" ../frontend/src-tauri/binaries/
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -121,7 +122,7 @@ jobs:
           if (!$version) { Write-Host "No app version output, skipping portable upload."; exit 0 }
           $releaseDir = "frontend/src-tauri/target/release"
           $appExe = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
-          $sidecar = Get-ChildItem "$releaseDir/valovault-backend.exe" | Select-Object -First 1
+          $sidecar = Get-ChildItem "$releaseDir/valovault-backend.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (!$appExe -or !$sidecar) { throw "Portable app or sidecar executable not found." }
           $env:VV_APP_EXE = $appExe.FullName
           $env:VV_BACKEND_EXE = $sidecar.FullName
