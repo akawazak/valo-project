@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { createPortal } from "react-dom";
 import {
     AccessoryStoreOffer, BundleInfo, ContentTier, StorefrontBonusOffer, StorefrontBundleItem,
-    StorefrontOffer, StorefrontResponse, Weapon, SprayAsset, PlayerCardAsset, GunBuddy,
+    StorefrontOffer, StorefrontResponse, Weapon, SprayAsset, PlayerCardAsset, GunBuddy, Skin,
 } from "@/lib/types";
 import { getStorefront, getWallet } from "@/services/api";
 import { useData } from "@/context/DataContext";
@@ -14,9 +15,11 @@ const RP_ID = "e59aa87c-4cbf-517a-5983-6e81511be9b7";
 
 const VP_ICON = "https://media.valorant-api.com/currencies/85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741/displayicon.png";
 const RP_ICON = "https://media.valorant-api.com/currencies/e59aa87c-4cbf-517a-5983-6e81511be9b7/displayicon.png";
+const BUNDLE_ROTATION_MS = 8000;
 
 type StoreOfferCard = {
     uuid: string;
+    wishlistId: string;
     name: string;
     weaponName: string;
     image: string;
@@ -24,9 +27,12 @@ type StoreOfferCard = {
     tierIcon?: string;
     tierColor?: string;
     priceValue: number;
+    basePrice?: number;
+    included?: boolean;
     discount?: number;
     isOwned?: boolean;
     nightMarket?: boolean;
+    skin?: Skin;
 };
 
 type AccessoryOfferCard = {
@@ -73,6 +79,7 @@ function findSkinOffer(
             const tier = tierMap[skin.contentTierUuid];
             return {
                 uuid: `${itemId}-${discount ?? 0}`,
+                wishlistId: target,
                 name: skin.displayName,
                 weaponName: weapon.displayName,
                 image: skin.chromas?.[0]?.fullRender || skin.displayIcon || "",
@@ -82,6 +89,7 @@ function findSkinOffer(
                 priceValue,
                 discount,
                 isOwned: skin.levels.some(l => ownedLevelIDs.includes(l.uuid.toLowerCase())),
+                skin,
             };
         }
     }
@@ -102,6 +110,7 @@ function findBundleOffer(
     if (spray) {
         return {
             uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
             name: spray.displayName,
             weaponName: "Spray",
             image: spray.displayIcon || spray.fullIcon || spray.fullTransparentIcon || "",
@@ -116,6 +125,7 @@ function findBundleOffer(
     if (card) {
         return {
             uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
             name: card.displayName,
             weaponName: "Player Card",
             image: card.largeArt || card.smallArt || card.displayIcon || card.wideArt || "",
@@ -130,6 +140,7 @@ function findBundleOffer(
     if (buddy) {
         return {
             uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
             name: buddy.displayName,
             weaponName: "Gun Buddy",
             image: buddy.levels[0]?.displayIcon || "",
@@ -174,19 +185,34 @@ function accessoryFromOffer(
     return null;
 }
 
-function OfferCard({ offer }: { offer: StoreOfferCard }) {
+function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOfferCard; wished: boolean; onToggleWishlist: (offer: StoreOfferCard) => void; onOpen: (offer: StoreOfferCard) => void }) {
     const tc = offer.tierColor || "ffffff";
+    const categoryClass = offer.weaponName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     return (
         <div
-            className={`store-card${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
+            className={`store-card store-card--${categoryClass}${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
             style={{
                 "--tier-color-border": hexToRgba(tc, 0.25),
                 "--tier-color-hover-border": hexToRgba(tc, 0.6),
                 "--tier-bg-gradient": `linear-gradient(180deg, ${hexToRgba(tc, 0.06)} 0%, rgba(18,22,30,0.9) 100%)`,
                 "--tier-color-raw": hexToRgba(tc, 1),
             } as React.CSSProperties}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpen(offer)}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(offer); }}
         >
             {offer.nightMarket && <div className="night-market-ribbon">Night Market</div>}
+            <button
+                type="button"
+                className={`store-card-wishlist${wished ? " active" : ""}`}
+                onClick={(event) => { event.stopPropagation(); onToggleWishlist(offer); }}
+                aria-label={wished ? `Remove ${offer.name} from wishlist` : `Add ${offer.name} to wishlist`}
+                aria-pressed={wished}
+                title={wished ? "Remove from wishlist" : "Add to wishlist"}
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5 4.2 13A5.2 5.2 0 0 1 11.6 5.7l.4.4.4-.4A5.2 5.2 0 0 1 19.8 13L12 20.5Z" /></svg>
+            </button>
             <div className="store-card-header">
                 <div className="store-card-tier-badge" style={{ color: hexToRgba(tc, 0.9) }}>
                     {offer.tierIcon && (
@@ -206,7 +232,17 @@ function OfferCard({ offer }: { offer: StoreOfferCard }) {
                 )}
             </div>
             <div className="store-card-footer">
-                {offer.discount != null && offer.discount > 0 ? (
+                {offer.included ? (
+                    <div className="store-card-price-group">
+                        <div className="store-card-price-pill included">Included</div>
+                        {offer.basePrice != null && offer.basePrice > 0 && (
+                            <div className="store-card-base-price">
+                                <Image src={VP_ICON} alt="VP" width={12} height={12} unoptimized className="currency-icon" />
+                                {offer.basePrice.toLocaleString()}
+                            </div>
+                        )}
+                    </div>
+                ) : offer.discount != null && offer.discount > 0 ? (
                     <div className="d-flex align-items-center gap-2">
                         <div className="store-card-price-pill">
                             <Image src={VP_ICON} alt="VP" width={14} height={14} unoptimized className="currency-icon" />
@@ -225,6 +261,59 @@ function OfferCard({ offer }: { offer: StoreOfferCard }) {
     );
 }
 
+function StoreItemPreviewModal({ offer, wished, vpBalance, onToggleWishlist, onClose }: { offer: StoreOfferCard; wished: boolean; vpBalance: number; onToggleWishlist: (offer: StoreOfferCard) => void; onClose: () => void }) {
+    const chromas = offer.skin?.chromas || [];
+    const [selectedChromaId, setSelectedChromaId] = useState(chromas[0]?.uuid || "");
+    const selectedChroma = chromas.find((chroma) => chroma.uuid === selectedChromaId) || chromas[0];
+    const previewImage = selectedChroma?.fullRender || selectedChroma?.displayIcon || offer.image;
+    return createPortal(
+        <div className="store-preview-backdrop" role="presentation" onMouseDown={onClose}>
+            <section className="store-preview-modal" role="dialog" aria-modal="true" aria-label={`${offer.name} preview`} onMouseDown={(event) => event.stopPropagation()}>
+                <button type="button" className="store-preview-close" onClick={onClose} aria-label="Close preview">×</button>
+                <div className="store-preview-visual">
+                    {previewImage ? <Image src={previewImage} alt={offer.name} width={900} height={480} unoptimized /> : <div className="store-card-no-image">No preview available</div>}
+                </div>
+                <div className="store-preview-details">
+                    <div className="store-preview-tier">{offer.tierName}</div>
+                    <h2>{offer.name}</h2>
+                    <p>{offer.weaponName}</p>
+                    <div className="store-preview-actions">
+                        <div className="store-card-price-pill"><Image src={VP_ICON} alt="VP" width={15} height={15} unoptimized />{offer.priceValue.toLocaleString()}</div>
+                        <button type="button" className={`store-preview-wishlist${wished ? " active" : ""}`} onClick={() => onToggleWishlist(offer)}>{wished ? "♥ Wishlisted" : "♡ Add to wishlist"}</button>
+                    </div>
+                    {offer.priceValue > 0 && (
+                        <div className={`store-preview-balance${vpBalance >= offer.priceValue ? " can-afford" : " short"}`}>
+                            {vpBalance >= offer.priceValue ? `Affordable — ${Math.max(0, vpBalance - offer.priceValue).toLocaleString()} VP remaining` : `${(offer.priceValue - vpBalance).toLocaleString()} VP needed`}
+                        </div>
+                    )}
+                    {chromas.length > 1 && (
+                        <div className="store-preview-section">
+                            <strong>Variants</strong>
+                            <div className="store-preview-chromas">
+                                {chromas.map((chroma, index) => (
+                                    <button type="button" key={chroma.uuid} className={selectedChroma?.uuid === chroma.uuid ? "active" : ""} onClick={() => setSelectedChromaId(chroma.uuid)} title={index === 0 ? "Default variant" : chroma.displayName}>
+                                        {chroma.swatch || chroma.displayIcon
+                                            ? <Image className={chroma.swatch ? "" : "full-render"} src={chroma.swatch || chroma.displayIcon} alt="" width={64} height={38} unoptimized />
+                                            : <span className="store-preview-chroma-fallback" aria-hidden="true">{index + 1}</span>}
+                                        <small>{index === 0 ? "Default" : chroma.displayName.replace(offer.skin?.displayName || "", "").trim() || `Variant ${index + 1}`}</small>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {(offer.skin?.levels.length || 0) > 1 && (
+                        <div className="store-preview-section">
+                            <strong>Upgrades</strong>
+                            <div className="store-preview-levels">{offer.skin!.levels.map((level, index) => <span key={level.uuid}>{index + 1}. {level.displayName}</span>)}</div>
+                        </div>
+                    )}
+                </div>
+            </section>
+        </div>,
+        document.body,
+    );
+}
+
 interface StorePanelsProps {
     refreshKey?: number;
     onConnectAccount?: () => void;
@@ -237,12 +326,41 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     const [storefrontError, setStorefrontError] = useState("");
     const [isLoadingStorefront, setIsLoadingStorefront] = useState(false);
     const [secondsUntilReset, setSecondsUntilReset] = useState(0);
-    const [bundleSeconds, setBundleSeconds] = useState(0);
+    const [storeResetAt, setStoreResetAt] = useState(0);
+    const [bundleSeconds, setBundleSeconds] = useState<Record<string, number>>({});
     const [nightMarketSeconds, setNightMarketSeconds] = useState(0);
-    const [bundleOpen, setBundleOpen] = useState(false);
+    const [openBundles, setOpenBundles] = useState<Record<string, boolean>>({});
+    const [activeBundleIndex, setActiveBundleIndex] = useState(0);
+    const [previewOffer, setPreviewOffer] = useState<StoreOfferCard | null>(null);
+    const [wishlist, setWishlist] = useState<Record<string, string>>({});
 
     const lastRefreshKeyRef = useRef(-1);
     const didAutoRefreshAtZeroRef = useRef(false);
+    const wishlistStorageKey = `vantavault:wishlist:${activeAccount?.puuid || "guest"}`;
+
+    useEffect(() => {
+        try {
+            const saved = window.localStorage.getItem(wishlistStorageKey);
+            setWishlist(saved ? JSON.parse(saved) as Record<string, string> : {});
+        } catch {
+            setWishlist({});
+        }
+    }, [wishlistStorageKey]);
+
+    const toggleWishlist = useCallback((offer: StoreOfferCard) => {
+        setWishlist(current => {
+            const next = { ...current };
+            if (next[offer.wishlistId]) delete next[offer.wishlistId];
+            else {
+                next[offer.wishlistId] = offer.name;
+                if (typeof Notification !== "undefined" && Notification.permission === "default") {
+                    void Notification.requestPermission();
+                }
+            }
+            window.localStorage.setItem(wishlistStorageKey, JSON.stringify(next));
+            return next;
+        });
+    }, [wishlistStorageKey]);
 
     const tierMap = useMemo(() =>
         contentTiers.reduce<Record<string, ContentTier>>((acc, t) => {
@@ -293,10 +411,18 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             .then(([sf, w]) => {
                 setStorefront(sf);
                 setWallet(w);
-                setSecondsUntilReset(sf.SkinsPanelLayout?.SingleItemOffersRemainingDurationInSeconds || 0);
+                const dailyRemaining = sf.SkinsPanelLayout?.SingleItemOffersRemainingDurationInSeconds || 0;
+                setSecondsUntilReset(dailyRemaining);
+                setStoreResetAt(Date.now() + dailyRemaining * 1000);
                 didAutoRefreshAtZeroRef.current = false;
-                const rawB = sf.FeaturedBundle?.Bundles?.[0] ?? sf.FeaturedBundle?.Bundle;
-                setBundleSeconds(rawB?.DurationRemainingInSeconds || 0);
+                const rawBundles = sf.FeaturedBundle?.Bundles?.length
+                    ? sf.FeaturedBundle.Bundles
+                    : sf.FeaturedBundle?.Bundle ? [sf.FeaturedBundle.Bundle] : [];
+                setBundleSeconds(Object.fromEntries(rawBundles.map((bundle, index) => {
+                    const aliases = bundle as typeof bundle & { ID?: string; id?: string; dataAssetID?: string };
+                    const key = aliases.DataAssetID || aliases.ID || aliases.id || aliases.dataAssetID || `bundle-${index}`;
+                    return [key, bundle.DurationRemainingInSeconds || 0];
+                })));
                 setNightMarketSeconds(sf.BonusStore?.BonusStoreRemainingDurationInSeconds || 0);
             })
             .catch(e => {
@@ -320,7 +446,9 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     useEffect(() => {
         const t = window.setInterval(() => {
             setSecondsUntilReset(s => Math.max(0, s - 1));
-            setBundleSeconds(s => Math.max(0, s - 1));
+            setBundleSeconds(current => Object.fromEntries(
+                Object.entries(current).map(([key, seconds]) => [key, Math.max(0, seconds - 1)])
+            ));
             setNightMarketSeconds(s => Math.max(0, s - 1));
         }, 1000);
         return () => clearInterval(t);
@@ -360,23 +488,82 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         [storefront, sprayMap, playerCardMap, buddyMap]
     );
 
-    const resolvedBundle = useMemo(() => {
-        const rawBundle = storefront?.FeaturedBundle?.Bundles?.[0] ?? storefront?.FeaturedBundle?.Bundle;
-        if (!rawBundle?.Items?.length) return null;
-        const bundleAliases = rawBundle as typeof rawBundle & { ID?: string; id?: string; dataAssetID?: string };
-        const assetId = (bundleAliases.DataAssetID || bundleAliases.ID || bundleAliases.id || bundleAliases.dataAssetID)?.toLowerCase();
-        const meta: BundleInfo | undefined = assetId ? bundles.find(b => b.uuid.toLowerCase() === assetId) : undefined;
-        const items = rawBundle.Items
-            .map((item: StorefrontBundleItem) => {
-                const card = findBundleOffer(item.Item.ItemID, weapons, tierMap, item.DiscountedPrice ?? item.BasePrice, ownedLevelIDs, sprayMap, playerCardMap, buddyMap);
-                return card ? { ...card, priceValue: item.DiscountedPrice ?? item.BasePrice } : null;
-            })
-            .filter((i): i is StoreOfferCard => i !== null);
-        const totalBase = rawBundle.Items.reduce((s, i) => s + i.BasePrice, 0);
-        const totalDisc = rawBundle.Items.reduce((s, i) => s + (i.DiscountedPrice ?? i.BasePrice), 0);
-        const bannerImage = meta?.displayIcon2 || meta?.displayIcon || "";
-        return { name: meta?.displayName || "Featured Bundle", description: meta?.description ?? "", banner: bannerImage, items, totalBase, totalDisc };
+    const resolvedBundles = useMemo(() => {
+        const rawBundles = storefront?.FeaturedBundle?.Bundles?.length
+            ? storefront.FeaturedBundle.Bundles
+            : storefront?.FeaturedBundle?.Bundle ? [storefront.FeaturedBundle.Bundle] : [];
+        return rawBundles.map((rawBundle, index) => {
+            if (!rawBundle.Items?.length) return null;
+            const aliases = rawBundle as typeof rawBundle & { ID?: string; id?: string; dataAssetID?: string };
+            const rawId = aliases.DataAssetID || aliases.ID || aliases.id || aliases.dataAssetID;
+            const key = rawId || `bundle-${index}`;
+            const assetId = rawId?.toLowerCase();
+            const meta: BundleInfo | undefined = assetId ? bundles.find(bundle => bundle.uuid.toLowerCase() === assetId) : undefined;
+            const items = rawBundle.Items.map((item: StorefrontBundleItem) => {
+                const priceValue = item.DiscountedPrice ?? item.BasePrice;
+                const card = findBundleOffer(item.Item.ItemID, weapons, tierMap, priceValue, ownedLevelIDs, sprayMap, playerCardMap, buddyMap);
+                return {
+                    ...(card ?? {
+                        uuid: item.Item.ItemID,
+                        wishlistId: item.Item.ItemID.toLowerCase(),
+                        name: "Bundle Item",
+                        weaponName: "Cosmetic",
+                        image: "",
+                        tierName: "Bundle",
+                        isOwned: false,
+                    }),
+                    uuid: `${key}-${item.Item.ItemID}`,
+                    wishlistId: card?.wishlistId || item.Item.ItemID.toLowerCase(),
+                    priceValue,
+                    basePrice: item.BasePrice,
+                    included: priceValue === 0 && item.BasePrice > 0,
+                } satisfies StoreOfferCard;
+            });
+            const totalBase = rawBundle.Items.reduce((sum, item) => sum + item.BasePrice, 0);
+            const totalDisc = rawBundle.Items.reduce((sum, item) => sum + (item.DiscountedPrice ?? item.BasePrice), 0);
+            return {
+                key,
+                name: meta?.displayName || `Featured Bundle${rawBundles.length > 1 ? ` ${index + 1}` : ""}`,
+                description: meta?.description ?? "",
+                banner: meta?.displayIcon2 || meta?.displayIcon || "",
+                items,
+                totalBase,
+                totalDisc,
+            };
+        }).filter((bundle): bundle is NonNullable<typeof bundle> => bundle !== null);
     }, [storefront, weapons, tierMap, ownedLevelIDs, bundles, sprayMap, playerCardMap, buddyMap]);
+
+    useEffect(() => {
+        setActiveBundleIndex(current => resolvedBundles.length ? Math.min(current, resolvedBundles.length - 1) : 0);
+    }, [resolvedBundles.length]);
+
+    useEffect(() => {
+        if (resolvedBundles.length < 2) return;
+        const timer = window.setTimeout(() => {
+            setOpenBundles({});
+            setActiveBundleIndex((activeBundleIndex + 1) % resolvedBundles.length);
+        }, BUNDLE_ROTATION_MS);
+        return () => window.clearTimeout(timer);
+    }, [activeBundleIndex, resolvedBundles.length]);
+
+    const activeBundle = resolvedBundles[activeBundleIndex] ?? null;
+    const selectBundle = useCallback((index: number) => {
+        if (!resolvedBundles.length) return;
+        setOpenBundles({});
+        setActiveBundleIndex((index + resolvedBundles.length) % resolvedBundles.length);
+    }, [resolvedBundles.length]);
+
+    useEffect(() => {
+        if (!storefront || !Object.keys(wishlist).length || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+        const visibleOffers = [...dailyOffers, ...nightMarket];
+        const matches = visibleOffers.filter(offer => wishlist[offer.wishlistId]);
+        if (!matches.length) return;
+        const signature = matches.map(offer => offer.wishlistId).sort().join(",");
+        const noticeKey = `${wishlistStorageKey}:notified:${signature}:${Math.round(storeResetAt / 60_000)}`;
+        if (window.sessionStorage.getItem(noticeKey)) return;
+        window.sessionStorage.setItem(noticeKey, "1");
+        new Notification("Wishlist item available", { body: matches.map(offer => offer.name).join(", ") });
+    }, [dailyOffers, nightMarket, storeResetAt, storefront, wishlist, wishlistStorageKey]);
 
     const vpBalance = wallet?.[VP_ID] ?? 0;
     const rpBalance = wallet?.[RP_ID] ?? 0;
@@ -461,40 +648,47 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     </div>
                 ) : dailyOffers.length > 0 ? (
                     <div className="store-grid">
-                        {dailyOffers.map(o => <OfferCard key={o.uuid} offer={o} />)}
+                        {dailyOffers.map(o => <OfferCard key={o.uuid} offer={o} wished={Boolean(wishlist[o.wishlistId])} onToggleWishlist={toggleWishlist} onOpen={setPreviewOffer} />)}
                     </div>
                 ) : !isLoadingStorefront && !isTokenExpired && (
                     <p className="text-muted small">No daily offers found. Make sure you are logged in.</p>
                 )}
             </div>
 
-            {resolvedBundle && resolvedBundle.items.length > 0 && !isTokenExpired && (
-                <div className="mb-5 storefront-bundle-card">
-                    <button type="button" className="storefront-bundle-toggle" onClick={() => setBundleOpen(v => !v)}>
-                        {resolvedBundle.banner && (
+            {activeBundle && !isTokenExpired && (
+                <section
+                    className="storefront-bundle-carousel"
+                    aria-label="Featured bundles"
+                >
+                {(() => {
+                    const bundle = activeBundle;
+                    const bundleOpen = Boolean(openBundles[bundle.key]);
+                    return <div className="storefront-bundle-card" key={bundle.key}>
+                    <button type="button" className="storefront-bundle-toggle" onClick={() => setOpenBundles(current => ({ ...current, [bundle.key]: !current[bundle.key] }))}>
+                        {bundle.banner && (
                             <div className="storefront-bundle-banner">
-                                <Image src={resolvedBundle.banner} alt={resolvedBundle.name} fill unoptimized style={{ objectFit: "contain", objectPosition: "center" }} />
+                                <Image src={bundle.banner} alt={bundle.name} fill unoptimized style={{ objectFit: "contain", objectPosition: "center" }} />
                                 <div className="storefront-bundle-banner-overlay" />
                             </div>
                         )}
                         <div className="storefront-bundle-header-content">
                             <div className="storefront-bundle-left">
                                 <div className="storefront-bundle-label">FEATURED BUNDLE</div>
-                                <div className="storefront-bundle-name">{resolvedBundle.name}</div>
-                                {resolvedBundle.description && (
-                                    <div className="storefront-bundle-description">{resolvedBundle.description}</div>
+                                <div className="storefront-bundle-name">{bundle.name}</div>
+                                {bundle.description && (
+                                    <div className="storefront-bundle-description">{bundle.description}</div>
                                 )}
-                                {bundleSeconds > 0 && (
-                                    <div className="storefront-bundle-timer">Ends in {formatDuration(bundleSeconds)}</div>
+                                {(bundleSeconds[bundle.key] ?? 0) > 0 && (
+                                    <div className="storefront-bundle-timer">Ends in {formatDuration(bundleSeconds[bundle.key])}</div>
                                 )}
                             </div>
                             <div className="storefront-bundle-right">
                                 <div className="storefront-bundle-price">
                                     <Image src={VP_ICON} alt="VP" width={18} height={18} unoptimized className="currency-icon" />
-                                    {resolvedBundle.totalDisc.toLocaleString()}
+                                    {bundle.totalDisc.toLocaleString()}
                                 </div>
-                                {resolvedBundle.totalBase > resolvedBundle.totalDisc && (
-                                    <div className="storefront-bundle-orig-price">{resolvedBundle.totalBase.toLocaleString()}</div>
+                                {bundle.totalBase > bundle.totalDisc && (
+                                    <div className="storefront-bundle-orig-price">{bundle.totalBase.toLocaleString()}</div>
                                 )}
                                 <div className={`storefront-bundle-chevron${bundleOpen ? " open" : ""}`}>⌄</div>
                             </div>
@@ -503,11 +697,29 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     {bundleOpen && (
                         <div className="storefront-bundle-items-panel">
                             <div className="store-bundle-row">
-                                {resolvedBundle.items.map(o => <OfferCard key={o.uuid} offer={o} />)}
+                                {bundle.items.map(o => <OfferCard key={o.uuid} offer={o} wished={Boolean(wishlist[o.wishlistId])} onToggleWishlist={toggleWishlist} onOpen={setPreviewOffer} />)}
                             </div>
                         </div>
                     )}
-                </div>
+                </div>;
+                })()}
+                {resolvedBundles.length > 1 && (
+                    <div className="storefront-carousel-controls">
+                        <button type="button" className="storefront-carousel-arrow" onClick={() => selectBundle(activeBundleIndex - 1)} aria-label="Previous bundle">
+                            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg>
+                        </button>
+                        <div className="storefront-carousel-dots" role="tablist" aria-label="Choose featured bundle">
+                            {resolvedBundles.map((bundle, index) => (
+                                <button type="button" key={bundle.key} className={`storefront-carousel-dot${index === activeBundleIndex ? " active" : ""}`} onClick={() => selectBundle(index)} aria-label={`Show ${bundle.name}`} aria-selected={index === activeBundleIndex} role="tab"><span /></button>
+                            ))}
+                        </div>
+                        <span className="storefront-carousel-count">{activeBundleIndex + 1} / {resolvedBundles.length}</span>
+                        <button type="button" className="storefront-carousel-arrow" onClick={() => selectBundle(activeBundleIndex + 1)} aria-label="Next bundle">
+                            <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+                        </button>
+                    </div>
+                )}
+                </section>
             )}
 
             {nightMarket.length > 0 && !isTokenExpired && (
@@ -522,7 +734,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                         )}
                     </div>
                     <div className="store-grid">
-                        {nightMarket.map(o => <OfferCard key={o.uuid} offer={o} />)}
+                        {nightMarket.map(o => <OfferCard key={o.uuid} offer={o} wished={Boolean(wishlist[o.wishlistId])} onToggleWishlist={toggleWishlist} onOpen={setPreviewOffer} />)}
                     </div>
                 </div>
             )}
@@ -548,6 +760,16 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                         ))}
                     </div>
                 </div>
+            )}
+            {previewOffer && typeof document !== "undefined" && (
+                <StoreItemPreviewModal
+                    key={previewOffer.uuid}
+                    offer={previewOffer}
+                    wished={Boolean(wishlist[previewOffer.wishlistId])}
+                    vpBalance={vpBalance}
+                    onToggleWishlist={toggleWishlist}
+                    onClose={() => setPreviewOffer(null)}
+                />
             )}
         </div>
     );

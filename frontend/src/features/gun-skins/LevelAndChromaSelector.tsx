@@ -24,7 +24,8 @@ const TIER_COLORS: Record<string, string> = {
 
 export default function LevelAndChromaSelector({ skin, ownedLevelIDs, ownedChromaIDs, onSelect, show, onClose }: LevelAndChromaSelectorProps) {
     const ownedLevels = skin.levels.filter(level => ownedLevelIDs.includes(level.uuid));
-    const ownedChromas = skin.chromas.filter(chroma => ownedChromaIDs.includes(chroma.uuid));
+    const ownsSkin = ownedLevels.length > 0;
+    const ownedChromas = skin.chromas.filter((chroma, index) => (index === 0 && ownsSkin) || ownedChromaIDs.includes(chroma.uuid));
 
     const allLevelsOwned = ownedLevels.length === skin.levels.length;
     const displayLevels = allLevelsOwned ? ownedLevels.slice(0, -1) : ownedLevels;
@@ -60,7 +61,7 @@ export default function LevelAndChromaSelector({ skin, ownedLevelIDs, ownedChrom
                         <>
                             <div className="lc-section-title">Variants</div>
                             <div className="lc-grid">
-                                {allLevelsOwned && (
+                                {allLevelsOwned && !ownedChromas.some((chroma) => chroma.uuid === skin.chromas[0]?.uuid) && (
                                     <button
                                         className="lc-card"
                                         onClick={() => onSelect(skin.uuid, lastLevel.uuid, skin.chromas[0].uuid)}

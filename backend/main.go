@@ -16,6 +16,10 @@ import (
 )
 
 func main() {
+	apiKey := strings.TrimSpace(os.Getenv("VANTAVAULT_API_KEY"))
+	if apiKey == "" {
+		log.Fatal("VANTAVAULT_API_KEY is required; start VantaVault with `npm.cmd run desktop` from the frontend directory instead of running the backend directly")
+	}
 	// Set a global timeout on the default HTTP client so that valclient's
 	// RunRequest (which uses http.DefaultClient internally) won't hang
 	// forever when the Riot API or local client is unreachable.
@@ -122,9 +126,22 @@ func main() {
 	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
 
 	slog.Info("starting server")
-	if err := http.ListenAndServe("127.0.0.1:31719", corsMiddleware(mux)); err != nil {
+	// CORS must handle trusted browser preflights before API authentication:
+	// OPTIONS requests do not include the per-launch key. Actual API requests
+	// still pass through apiKeyMiddleware and require the desktop secret.
+	if err := http.ListenAndServe("127.0.0.1:31719", corsMiddleware(apiKeyMiddleware(apiKey, mux))); err != nil {
 		panic(err)
 	}
+}
+
+func apiKeyMiddleware(expected string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if expected == "" || r.Header.Get("X-VantaVault-Key") != expected {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func initLogger() {
@@ -179,7 +196,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-VantaVault-Key, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return

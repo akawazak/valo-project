@@ -13,6 +13,7 @@ export function useLoadout() {
             await applyLoadout(request);
             setToastMessage(`Successfully applied ${presetName}.`);
             setShowToast(true);
+            return true;
         } catch (error) {
             if (error instanceof LocalClientError) {
                 setErrorMessage(error.message);
@@ -22,6 +23,7 @@ export function useLoadout() {
                 setErrorMessage('An unexpected error occurred.');
                 setShowErrorModal(true);
             }
+            return false;
         }
     };
 

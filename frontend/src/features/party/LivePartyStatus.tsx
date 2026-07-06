@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
     getPartyStatus,
+    fetchCachedPublicJson,
     getSocialStatus,
     PartyMember,
     PartyStatusResponse,
@@ -10,9 +12,12 @@ import {
     SocialStatusResponse,
 } from "@/services/api";
 import { useData } from "@/context/DataContext";
+import ProfilePanel from "@/features/profile/ProfilePanel";
 import "./LivePartyStatus.css";
 
 const POLL_MS = 5000;
+type PartyPublicCard = { uuid?: string; displayIcon?: string; smallArt?: string; wideArt?: string };
+type PartyPublicTierSet = { tiers?: Array<{ tier: number; tierName?: string; smallIcon?: string; largeIcon?: string }> };
 
 function phaseLabel(phase: PartyStatusResponse["phase"], queueId?: string) {
     const queue = queueId ? queueName(queueId) : "";
@@ -44,11 +49,22 @@ function phaseShort(phase: PartyStatusResponse["phase"]) {
     return "Party";
 }
 
-type CardMeta = {
-    icon: string;
-    wide: string;
-};
+type CardMeta = { images: string[] };
 type TierMeta = { name: string; icon: string };
+type PartyProfileTarget = { puuid: string; gameName: string; tagLine: string };
+type PartyContextMenu = { x: number; y: number; profile: PartyProfileTarget };
+
+function SafePartyImage({ sources, className, fallback, fallbackClassName, eager = false }: { sources: string[]; className?: string; fallback: string; fallbackClassName?: string; eager?: boolean }) {
+    const [sourceIndex, setSourceIndex] = useState(0);
+    const src = sources[sourceIndex];
+    if (!src) return <span className={fallbackClassName}>{fallback}</span>;
+    return <img src={src} alt="" className={className} loading={eager ? "eager" : "lazy"} decoding="async" onError={() => setSourceIndex(index => index + 1)} />;
+}
+
+function profileFromIdentity(puuid: string, displayName: string): PartyProfileTarget {
+    const [gameName, tagLine = ""] = displayName.split("#");
+    return { puuid, gameName: gameName || "Player", tagLine };
+}
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
     const { activeAccount, isBackendOnline } = useData();
@@ -57,11 +73,35 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     const [stale, setStale] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [expanded, setExpanded] = useState(false);
+    const [profileTarget, setProfileTarget] = useState<PartyProfileTarget | null>(null);
+    const [contextMenu, setContextMenu] = useState<PartyContextMenu | null>(null);
     const latestPartyRef = useRef<PartyStatusResponse | null>(null);
     const lastPartyIdRef = useRef<string | null>(null);
 
     const [cardCache, setCardCache] = useState<Record<string, CardMeta>>({});
     const [tierCache, setTierCache] = useState<Record<number, TierMeta>>({});
+
+    useEffect(() => {
+        if (!contextMenu) return;
+        const close = () => setContextMenu(null);
+        window.addEventListener("pointerdown", close);
+        window.addEventListener("blur", close);
+        return () => {
+            window.removeEventListener("pointerdown", close);
+            window.removeEventListener("blur", close);
+        };
+    }, [contextMenu]);
+
+    const openProfile = (profile: PartyProfileTarget) => {
+        setContextMenu(null);
+        setProfileTarget(profile);
+    };
+
+    const openContextMenu = (event: React.MouseEvent, profile: PartyProfileTarget) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenu({ x: event.clientX, y: event.clientY, profile });
+    };
 
     useEffect(() => {
         if (!activeAccount || !isBackendOnline) {
@@ -135,24 +175,21 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     useEffect(() => {
         let cancelled = false;
 
-        fetch("https://valorant-api.com/v1/playercards")
-            .then((res) => res.json())
+        fetchCachedPublicJson<{ data?: PartyPublicCard[] }>("https://valorant-api.com/v1/playercards")
             .then((d) => {
                 if (cancelled) return;
                 const m: Record<string, CardMeta> = {};
                 for (const item of d.data || []) {
                     if (!item.uuid) continue;
                     m[item.uuid.toLowerCase()] = {
-                        icon: item.displayIcon || item.smallArt || "",
-                        wide: item.wideArt || "",
+                        images: [item.displayIcon, item.smallArt, item.wideArt].filter((image): image is string => Boolean(image)),
                     };
                 }
                 setCardCache(m);
             })
             .catch((err) => console.error("Error loading playercards API", err));
 
-        fetch("https://valorant-api.com/v1/competitivetiers")
-            .then((res) => res.json())
+        fetchCachedPublicJson<{ data?: PartyPublicTierSet[] }>("https://valorant-api.com/v1/competitivetiers")
             .then((d) => {
                 if (cancelled) return;
                 const latestEpisode = d.data?.[d.data.length - 1];
@@ -248,6 +285,8 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                             member={member}
                             card={cardCache[member.cardId?.toLowerCase()]}
                             tier={tierCache[member.competitiveTier]}
+                            onOpenProfile={() => openProfile(profileFromIdentity(member.puuid, member.name))}
+                            onContextMenu={(event) => openContextMenu(event, profileFromIdentity(member.puuid, member.name))}
                         />
                     ))}
                 </div>
@@ -258,7 +297,38 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 presences={presences}
                 cardCache={cardCache}
                 showOfflineByDefault={showOfflineByDefault}
+                onOpenProfile={openProfile}
+                onContextMenu={openContextMenu}
             />
+            {contextMenu && (
+                <div
+                    className="live-party-context-menu"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    role="menu"
+                    onPointerDown={(event) => event.stopPropagation()}
+                >
+                    <button type="button" role="menuitem" onClick={() => {
+                        setProfileTarget(contextMenu.profile);
+                        setContextMenu(null);
+                    }}>Open Profile</button>
+                </div>
+            )}
+            {profileTarget && typeof document !== "undefined" && createPortal(
+                <div className="live-party-profile-backdrop" role="presentation" onMouseDown={() => setProfileTarget(null)}>
+                    <section className="live-party-profile-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+                        <button type="button" className="live-party-profile-close" onClick={() => setProfileTarget(null)} aria-label="Close profile">×</button>
+                        <div className="live-party-profile-content">
+                            <ProfilePanel
+                                key={profileTarget.puuid}
+                                requestedProfile={profileTarget}
+                                onRequestedProfileChange={setProfileTarget}
+                                autoSyncMatches={true}
+                            />
+                        </div>
+                    </section>
+                </div>,
+                document.body,
+            )}
         </aside>
     );
 }
@@ -297,13 +367,7 @@ function PartyPill({
             title="Open party"
         >
             <span className="live-party-pill-avatar" aria-hidden="true">
-                {card?.icon ? (
-                    <img src={card.icon} alt="" className="live-party-pill-avatar-img" />
-                ) : (
-                    <span className="live-party-pill-avatar-letter">
-                        {local.name.slice(0, 1).toUpperCase()}
-                    </span>
-                )}
+                <SafePartyImage key={(card?.images || []).join("|") || local.name} sources={card?.images || []} className="live-party-pill-avatar-img" fallback={local.name.slice(0, 1).toUpperCase()} fallbackClassName="live-party-pill-avatar-letter" eager />
             </span>
             <span className="live-party-pill-body">
                 <span className="live-party-pill-kicker">{phaseShort(party.phase)}</span>
@@ -358,16 +422,31 @@ function FriendPresenceList({
     presences,
     cardCache,
     showOfflineByDefault,
+    onOpenProfile,
+    onContextMenu,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
     cardCache: Record<string, CardMeta>;
     showOfflineByDefault: boolean;
+    onOpenProfile: (profile: PartyProfileTarget) => void;
+    onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
 }) {
-    const [showOffline, setShowOffline] = useState(showOfflineByDefault);
-    useEffect(() => setShowOffline(showOfflineByDefault), [showOfflineByDefault]);
+    const [showOffline, setShowOffline] = useState(() => showOfflineByDefault || (typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:offline-open") === "true"));
+    const [friendSearch, setFriendSearch] = useState("");
+    const [valorantOnly, setValorantOnly] = useState(false);
+    const [compactRows, setCompactRows] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:compact") === "true");
+    useEffect(() => { if (showOfflineByDefault) setShowOffline(true); }, [showOfflineByDefault]);
+    useEffect(() => { window.localStorage.setItem("vantavault:friends:offline-open", String(showOffline)); }, [showOffline]);
+    useEffect(() => { window.localStorage.setItem("vantavault:friends:compact", String(compactRows)); }, [compactRows]);
     const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
     const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
+    const matchesFilters = (presence: SocialPresence) => {
+        if (valorantOnly && !["game", "online"].includes(presenceState(presence))) return false;
+        return (presence.name || "").toLowerCase().includes(friendSearch.trim().toLowerCase());
+    };
+    const visibleActivePresences = activePresences.filter(matchesFilters);
+    const visibleOfflinePresences = offlinePresences.filter(matchesFilters);
     const valorantCount = activePresences.filter((presence) => presenceState(presence) !== "chat").length;
     const chatCount = activePresences.length - valorantCount;
 
@@ -385,20 +464,28 @@ function FriendPresenceList({
             <div className="live-party-section-heading">
                 <div className="live-party-section-title">Friends</div>
                 <div className="live-party-section-counts">
-                    <span>{valorantCount} VALORANT - {chatCount} Riot Client</span>
+                    <span>{valorantCount} VALORANT</span>
+                    <span>{chatCount} Riot Client</span>
                 </div>
             </div>
-            <div className="live-party-friend-scroll">
+            <div className="live-party-friend-tools">
+                <input value={friendSearch} onChange={(event) => setFriendSearch(event.target.value)} placeholder="Search friends" aria-label="Search friends" />
+                <button type="button" className={valorantOnly ? "active" : ""} onClick={() => setValorantOnly((current) => !current)}>VALORANT</button>
+                <button type="button" className={compactRows ? "active" : ""} onClick={() => setCompactRows((current) => !current)} aria-label="Toggle compact friend rows">Compact</button>
+            </div>
+            <div className={`live-party-friend-scroll${compactRows ? " is-compact" : ""}`}>
                 <div className="live-party-friend-list">
-                    {activePresences.map((presence, index) => (
+                    {visibleActivePresences.map((presence, index) => (
                         <FriendPresenceRow
                             key={presence.puuid || `${presence.name}-${index}`}
                             presence={presence}
                             cardCache={cardCache}
+                            onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+                            onContextMenu={onContextMenu}
                         />
                     ))}
-                    {activePresences.length === 0 && (
-                        <div className="live-party-friend-empty">No friends are active right now.</div>
+                    {visibleActivePresences.length === 0 && (
+                        <div className="live-party-friend-empty">No friends match these filters.</div>
                     )}
                 </div>
                 {offlinePresences.length > 0 && (
@@ -417,13 +504,16 @@ function FriendPresenceList({
                         </button>
                         {showOffline && (
                             <div className="live-party-friend-list is-offline-list">
-                                {offlinePresences.map((presence, index) => (
+                                {visibleOfflinePresences.map((presence, index) => (
                                     <FriendPresenceRow
                                         key={presence.puuid || `${presence.name}-offline-${index}`}
                                         presence={presence}
                                         cardCache={cardCache}
+                                        onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+                                        onContextMenu={onContextMenu}
                                     />
                                 ))}
+                                {visibleOfflinePresences.length === 0 && <div className="live-party-friend-empty">No offline friends match.</div>}
                             </div>
                         )}
                     </div>
@@ -436,22 +526,28 @@ function FriendPresenceList({
 function FriendPresenceRow({
     presence,
     cardCache,
+    onOpenProfile,
+    onContextMenu,
 }: {
     presence: SocialPresence;
     cardCache: Record<string, CardMeta>;
+    onOpenProfile: () => void;
+    onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
 }) {
     const state = presenceState(presence);
     const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
-    const useWideAvatar = !!card?.wide;
-    const avatarSrc = card?.wide || card?.icon;
+    const avatarSources = card?.images || [];
     return (
-        <div className={`live-party-friend-row is-${state}`}>
-            <span className={`live-party-friend-avatar${useWideAvatar ? " is-wide-art" : ""}`} aria-hidden="true">
-                {avatarSrc ? (
-                    <img src={avatarSrc} alt="" />
-                ) : (
-                    <span>{(presence.name || "?").slice(0, 1).toUpperCase()}</span>
-                )}
+        <div
+            className={`live-party-friend-row is-${state}`}
+            role="button"
+            tabIndex={0}
+            onClick={onOpenProfile}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenProfile(); }}
+            onContextMenu={(event) => onContextMenu(event, profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+        >
+            <span className="live-party-friend-avatar" aria-hidden="true">
+                <SafePartyImage key={avatarSources.join("|") || presence.name} sources={avatarSources} fallback={(presence.name || "?").slice(0, 1).toUpperCase()} eager={state !== "offline"} />
                 <i className="live-party-friend-dot" />
             </span>
             <span className="live-party-friend-main">
@@ -529,23 +625,27 @@ function PartyMemberRow({
     member,
     card,
     tier,
+    onOpenProfile,
+    onContextMenu,
 }: {
     member: PartyMember;
     card?: CardMeta;
     tier?: TierMeta;
+    onOpenProfile: () => void;
+    onContextMenu: (event: React.MouseEvent) => void;
 }) {
-    const useWideAvatar = !!card?.wide;
-    const avatarSrc = card?.wide || card?.icon;
+    const avatarSources = card?.images || [];
     return (
-        <div className={`live-party-member${member.isLocal ? " is-local" : ""}`}>
-            <div className={`live-party-avatar${useWideAvatar ? " is-wide-art" : ""}`} aria-hidden="true">
-                {avatarSrc ? (
-                    <img src={avatarSrc} alt="" className="live-party-avatar-img" />
-                ) : (
-                    <span className="live-party-avatar-letter">
-                        {member.name.slice(0, 1).toUpperCase()}
-                    </span>
-                )}
+        <div
+            className={`live-party-member${member.isLocal ? " is-local" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={onOpenProfile}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenProfile(); }}
+            onContextMenu={onContextMenu}
+        >
+            <div className="live-party-avatar" aria-hidden="true">
+                <SafePartyImage key={avatarSources.join("|") || member.name} sources={avatarSources} className="live-party-avatar-img" fallback={member.name.slice(0, 1).toUpperCase()} fallbackClassName="live-party-avatar-letter" eager />
             </div>
 
             <div className="live-party-member-main">
@@ -562,13 +662,7 @@ function PartyMemberRow({
             </div>
 
             <div className="live-party-rank" aria-hidden="true">
-                {tier?.icon ? (
-                    <img src={tier.icon} alt="" className="live-party-rank-img" />
-                ) : (
-                    <span className="live-party-rank-letter">
-                        {tier?.name ? tier.name.slice(0, 1) : "?"}
-                    </span>
-                )}
+                <SafePartyImage key={tier?.icon || tier?.name || "rank"} sources={tier?.icon ? [tier.icon] : []} className="live-party-rank-img" fallback={tier?.name ? tier.name.slice(0, 1) : "?"} fallbackClassName="live-party-rank-letter" eager />
             </div>
         </div>
     );

@@ -124,8 +124,9 @@ export default function UnifiedSkinSelectorModal({
         const ownedLevels = skin.levels.filter(l => ownedLevelIDs.includes(l.uuid));
         const defaultLevel = ownedLevels[ownedLevels.length - 1]?.uuid || skin.levels[0]?.uuid || "";
         
-        const ownedChromas = skin.chromas.filter(c => ownedChromaIDs.includes(c.uuid));
-        const defaultChroma = ownedChromas[0]?.uuid || skin.chromas[0]?.uuid || "";
+        const ownsSkin = skin.uuid === weapon.defaultSkinUuid || ownedLevels.length > 0;
+        const availableChromas = skin.chromas.filter((c, index) => index === 0 && ownsSkin || ownedChromaIDs.includes(c.uuid));
+        const defaultChroma = availableChromas[0]?.uuid || skin.chromas[0]?.uuid || "";
         
         setSelectedLevelId(defaultLevel);
         setSelectedChromaId(defaultChroma);
@@ -170,7 +171,8 @@ export default function UnifiedSkinSelectorModal({
 
     // Filter levels / chromas that the user actually owns
     const ownedLevels = selectedSkin.levels.filter(l => ownedLevelIDs.includes(l.uuid) || selectedSkin.uuid === weapon.defaultSkinUuid);
-    const ownedChromas = selectedSkin.chromas.filter(c => ownedChromaIDs.includes(c.uuid) || selectedSkin.uuid === weapon.defaultSkinUuid);
+    const ownsSelectedSkin = selectedSkin.uuid === weapon.defaultSkinUuid || ownedLevels.length > 0;
+    const ownedChromas = selectedSkin.chromas.filter((c, index) => (index === 0 && ownsSelectedSkin) || ownedChromaIDs.includes(c.uuid) || selectedSkin.uuid === weapon.defaultSkinUuid);
 
     const isMelee = weapon.category === "EEquippableCategory::Melee";
 
@@ -209,7 +211,7 @@ export default function UnifiedSkinSelectorModal({
                             <div>
                                 <div className="unified-modal-section-title">Variants</div>
                                 <div className="chroma-swatches-grid">
-                                    {ownedChromas.map((chroma) => (
+                                    {ownedChromas.map((chroma, index) => (
                                         <button
                                             key={chroma.uuid}
                                             type="button"
@@ -218,7 +220,9 @@ export default function UnifiedSkinSelectorModal({
                                             title={chroma.displayName}
                                         >
                                             <div className="chroma-swatch-inner">
-                                                <img src={chroma.swatch || chroma.displayIcon || previewRenderUrl} alt="" />
+                                                {index === 0 && !chroma.swatch
+                                                    ? <span className="chroma-base-mark" aria-hidden="true" />
+                                                    : <img src={chroma.swatch || chroma.displayIcon || previewRenderUrl} alt="" />}
                                             </div>
                                         </button>
                                     ))}

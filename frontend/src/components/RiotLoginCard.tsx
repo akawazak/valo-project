@@ -28,7 +28,7 @@ type Stage = "start" | "paste";
  * login because DataContext.startLoginFlow() will reject with an error.
  */
 export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCardProps) {
-    const { startLoginFlow, cancelLoginFlow, loginInFlight } = useData();
+    const { startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight } = useData();
 
     const [stage, setStage] = useState<Stage>("start");
     const [pastedUrl, setPastedUrl] = useState("");
@@ -107,7 +107,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         setError(null);
         try {
             setStage("paste");
-            const account = await startLoginFlow();
+            const account = await finalizePastedLogin(pastedUrl);
             // We didn't actually open a popup (user pasted), so we need to
             // hand the URL to the same completeLoginFlow path. Easiest:
             // emulate by calling the backend directly, then doing the
@@ -239,6 +239,27 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                             <p className="login-stack-disclaimer">
                                 Clicking sign in opens a secure authorization window. Complete your Riot credentials there.
                             </p>
+                            <button
+                                type="button"
+                                className="btn-link-advanced"
+                                onClick={() => setShowAdvanced(!showAdvanced)}
+                            >
+                                {showAdvanced ? "Hide manual login" : "Advanced: Paste Redirect URL Manually"}
+                            </button>
+                            {showAdvanced && (
+                                <form onSubmit={handleSubmitUrl} className="login-advanced-form">
+                                    <textarea
+                                        className="form-control-tactical mb-2"
+                                        rows={3}
+                                        value={pastedUrl}
+                                        onChange={(e) => setPastedUrl(e.target.value)}
+                                        placeholder="http://localhost/redirect#access_token=..."
+                                    />
+                                    <button type="submit" className="btn-tactical btn-tactical-secondary w-100" disabled={!pastedUrl.trim()}>
+                                        <span className="btn-inner">CONNECT MANUALLY</span>
+                                    </button>
+                                </form>
+                            )}
                         </div>
                     ) : (
                         <div className="login-actions-stack">

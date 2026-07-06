@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -38,6 +39,9 @@ func SaveRaw(data []byte) error {
 
 	saveMu.Lock()
 	defer saveMu.Unlock()
+	if existing, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(existing, data) {
+		return nil
+	}
 	return writeFileAtomically(path, data)
 }
 
@@ -64,7 +68,7 @@ func writeFileAtomically(path string, data []byte) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	return replaceFile(tempPath, path)
 }
 
 func getPath() (string, error) {

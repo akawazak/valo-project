@@ -178,6 +178,83 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 	return nil
 }
 
+// Restore replaces the player's loadout with a previously captured snapshot.
+// Keeping this here ensures automatic presets restore guns, buddies, sprays,
+// identity, and privacy settings together rather than only restoring skins.
+func Restore(val *valclient.ValClient, loadout *valclient.GetPlayerLoadoutRequest) error {
+	if loadout == nil {
+		return nil
+	}
+
+	_, err := val.SetPlayerLoadout(&valclient.SetPlayerLoadoutRequest{
+		Guns:              loadout.Guns,
+		ActiveExpressions: loadout.ActiveExpressions,
+		Identity:          loadout.Identity,
+		Incognito:         loadout.Incognito,
+	})
+	return err
+}
+
+func SaveRestoreSnapshot(owner string, loadout *valclient.GetPlayerLoadoutRequest) error {
+	path, err := restoreSnapshotPath(owner)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(loadout)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func LoadRestoreSnapshot(owner string) (*valclient.GetPlayerLoadoutRequest, error) {
+	path, err := restoreSnapshotPath(owner)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	loadout := new(valclient.GetPlayerLoadoutRequest)
+	if err := json.Unmarshal(data, loadout); err != nil {
+		return nil, err
+	}
+	return loadout, nil
+}
+
+func ClearRestoreSnapshot(owner string) error {
+	path, err := restoreSnapshotPath(owner)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func restoreSnapshotPath(owner string) (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(configDir, "valovault", "restore")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	owner = sanitizeOwner(owner)
+	if owner == "" {
+		owner = "default"
+	}
+	return filepath.Join(dir, "loadout_"+owner+".json"), nil
+}
+
 func getPath(owner string) (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {

@@ -9,8 +9,162 @@ use tauri::{
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+#[cfg(target_os = "windows")]
+fn write_discord_frame(
+    pipe: &mut std::fs::File,
+    opcode: u32,
+    payload: &serde_json::Value,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let body = serde_json::to_vec(payload)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    pipe.write_all(&opcode.to_le_bytes())?;
+    pipe.write_all(&(body.len() as u32).to_le_bytes())?;
+    pipe.write_all(&body)?;
+    pipe.flush()
+}
+
+#[cfg(target_os = "windows")]
+fn read_discord_frame(pipe: &mut std::fs::File) -> std::io::Result<(u32, serde_json::Value)> {
+    use std::io::Read;
+    let mut header = [0_u8; 8];
+    pipe.read_exact(&mut header)?;
+    let opcode = u32::from_le_bytes(header[0..4].try_into().unwrap());
+    let length = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+    if length > 1024 * 1024 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Discord IPC frame is too large"));
+    }
+    let mut body = vec![0_u8; length];
+    pipe.read_exact(&mut body)?;
+    let payload = serde_json::from_slice(&body)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    Ok((opcode, payload))
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, serde::Deserialize)]
+struct DiscordActivity {
+    details: String,
+    state: String,
+}
+
+#[cfg(target_os = "windows")]
+fn discord_activity_payload(activity: &DiscordActivity, started_at: u64) -> serde_json::Value {
+    serde_json::json!({
+        "cmd": "SET_ACTIVITY",
+        "args": {
+            "pid": std::process::id(),
+            "activity": {
+                "details": activity.details,
+                "state": activity.state,
+                "timestamps": { "start": started_at },
+                "assets": { "large_image": "logo", "large_text": "VantaVault" }
+            }
+        },
+        "nonce": uuid::Uuid::new_v4().to_string()
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordActivity> {
+    let (sender, receiver) = std::sync::mpsc::channel::<DiscordActivity>();
+    std::thread::spawn(move || loop {
+        let mut current = DiscordActivity {
+            details: "Browsing VantaVault".to_string(),
+            state: "Desktop companion".to_string(),
+        };
+        let mut started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        while let Ok(update) = receiver.try_recv() {
+            if update.details != current.details {
+                started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            }
+            current = update;
+        }
+        let mut pipe = None;
+        for index in 0..10 {
+            let path = format!(r"\\.\pipe\discord-ipc-{index}");
+            let Ok(candidate) = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            else {
+                continue;
+            };
+            pipe = Some(candidate);
+            break;
+        }
+        let Some(mut pipe) = pipe else {
+            log::debug!("Discord Rich Presence: IPC pipe not found; retrying");
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            continue;
+        };
+        let handshake = serde_json::json!({"v": 1, "client_id": client_id});
+        if let Err(error) = write_discord_frame(&mut pipe, 0, &handshake) {
+            log::warn!("Discord Rich Presence handshake write failed: {error}");
+            continue;
+        }
+        match read_discord_frame(&mut pipe) {
+            Ok((1, payload)) if payload.get("evt").and_then(|value| value.as_str()) == Some("READY") => {}
+            Ok((opcode, payload)) => {
+                log::warn!("Discord Rich Presence handshake rejected (opcode {opcode}): {payload}");
+                continue;
+            }
+            Err(error) => {
+                log::warn!("Discord Rich Presence handshake read failed: {error}");
+                continue;
+            }
+        }
+        if let Err(error) = write_discord_frame(&mut pipe, 1, &discord_activity_payload(&current, started_at)) {
+            log::warn!("Discord Rich Presence initial activity failed: {error}");
+            continue;
+        }
+        if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
+            if opcode == 2 || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR") {
+                log::warn!("Discord Rich Presence activity rejected: {payload}");
+                continue;
+            }
+        }
+        log::info!("Discord Rich Presence connected");
+        loop {
+            match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(update) => {
+                    if update.details != current.details {
+                        started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    }
+                    current = update;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+            if let Err(error) = write_discord_frame(&mut pipe, 1, &discord_activity_payload(&current, started_at)) {
+                log::warn!("Discord Rich Presence update failed: {error}");
+                break;
+            }
+            if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
+                if opcode == 2 || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR") {
+                    log::warn!("Discord Rich Presence update rejected: {payload}");
+                    break;
+                }
+            }
+        }
+    });
+    sender
+}
+
+fn configured_discord_client_id(config_dir: &std::path::Path) -> Option<String> {
+    std::env::var("VANTAVAULT_DISCORD_CLIENT_ID")
+        .ok()
+        .or_else(|| std::fs::read_to_string(config_dir.join("discord_client_id.txt")).ok())
+        .or_else(|| Some("1523476232501727354".to_string()))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+}
+
 struct AppState {
     child: Mutex<Option<CommandChild>>,
+    backend_token: String,
+    #[cfg(target_os = "windows")]
+    discord_sender: Mutex<Option<std::sync::mpsc::Sender<DiscordActivity>>>,
     /// Per-window-label mutex map. Each label (`riot_login_<session_id>`)
     /// gets its own `Arc<Mutex<()>>` so concurrent calls to
     /// `open_login_window` with the SAME label queue up instead of
@@ -18,6 +172,24 @@ struct AppState {
     /// cookie loss that happens when two windows try to read the same
     /// SQLite file simultaneously.
     window_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+#[tauri::command]
+fn get_backend_token(state: State<'_, AppState>) -> String {
+    state.backend_token.clone()
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn set_discord_presence(state: State<'_, AppState>, details: String, activity_state: String) {
+    if let Ok(sender) = state.discord_sender.lock() {
+        if let Some(sender) = sender.as_ref() {
+            let _ = sender.send(DiscordActivity {
+                details,
+                state: activity_state,
+            });
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -918,10 +1090,18 @@ fn dpapi_decrypt(data: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let backend_token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             child: Mutex::new(None),
+            backend_token,
+            #[cfg(target_os = "windows")]
+            discord_sender: Mutex::new(None),
             window_locks: Mutex::new(HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
@@ -936,6 +1116,8 @@ pub fn run() {
             claim_login_session,
             delete_login_session,
             get_ssid_cookie,
+            get_backend_token,
+            set_discord_presence,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -949,10 +1131,23 @@ pub fn run() {
             // Safe cleanup: only remove stale temp session dirs at startup
             if let Ok(config_dir) = app.handle().path().app_config_dir() {
                 cleanup_stale_sessions(&config_dir);
+                #[cfg(target_os = "windows")]
+                if let Some(client_id) = configured_discord_client_id(&config_dir) {
+                    let sender = start_discord_presence(client_id);
+                    if let Ok(mut slot) = app.state::<AppState>().discord_sender.lock() {
+                        *slot = Some(sender);
+                    }
+                } else {
+                    log::warn!("Discord Rich Presence is disabled: configure VANTAVAULT_DISCORD_CLIENT_ID or discord_client_id.txt");
+                }
             }
 
             let state = app.state::<AppState>();
-            let sidecar_command = app.shell().sidecar("valovault-backend").unwrap();
+            let sidecar_command = app
+                .shell()
+                .sidecar("valovault-backend")
+                .unwrap()
+                .env("VANTAVAULT_API_KEY", &state.backend_token);
             let (_rx, child) = sidecar_command
                 .spawn()
                 .expect("Failed to spawn backend sidecar");

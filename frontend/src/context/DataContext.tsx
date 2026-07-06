@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { accountRequiresManualRepair, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount } from '@/lib/types';
-import { getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl } from '@/services/api';
+import { appFetch, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl } from '@/services/api';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
@@ -278,6 +278,7 @@ interface DataContextType {
      * UI components should show a loading overlay for the entire duration.
      */
     startLoginFlow: () => Promise<RiotAccount>;
+    finalizePastedLogin: (redirectUrl: string) => Promise<RiotAccount>;
     cancelLoginFlow: () => void;
     /** True while a login (or any per-session refresh that needs the WebView) is in flight. */
     loginInFlight: LoginFlowState | null;
@@ -651,7 +652,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // token without opening a popup.
         if (acc.ssid) {
             try {
-                const res = await fetch("http://localhost:31719/v1/auth/ssid-reauth", {
+                const res = await appFetch("http://localhost:31719/v1/auth/ssid-reauth", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ cookies: acc.ssid }),
@@ -1032,6 +1033,33 @@ export function DataProvider({ children }: { children: ReactNode }) {
         });
     }, [settleLoginFlow]);
 
+    const finalizePastedLogin = useCallback(async (redirectUrl: string): Promise<RiotAccount> => {
+        let parsed: URL;
+        try {
+            parsed = new URL(redirectUrl.trim());
+        } catch {
+            throw new Error("Paste the complete Riot redirect URL.");
+        }
+        if (!(["localhost", "127.0.0.1"].includes(parsed.hostname) && parsed.pathname === "/redirect")) {
+            throw new Error("That is not a valid Riot localhost redirect URL.");
+        }
+        const res = await submitTokenUrl(parsed.toString());
+        if (!res?.puuid || !res?.access_token || !res?.entitlements_token) {
+            throw new Error("Riot did not return a complete session.");
+        }
+        return {
+            puuid: res.puuid,
+            accessToken: res.access_token,
+            entitlementsToken: res.entitlements_token,
+            expiresAt: Date.now() + Math.max(0, (res.expires_in || 3600) - 60) * 1000,
+            region: res.region,
+            gameName: res.game_name || "Unknown",
+            tagLine: res.tag_line || "",
+            lastRenewedAt: Date.now(),
+            lastRefreshAttemptAt: Date.now(),
+        };
+    }, []);
+
     // Auto-refresh the active account token shortly before expiry to avoid
     // user-visible expiration. Schedule a refresh 90 seconds before expiry.
     useEffect(() => {
@@ -1191,7 +1219,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             sprays, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,
-            startLoginFlow, cancelLoginFlow, loginInFlight,
+            startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight,
             storefrontRefreshKey,
             pendingLocalAccount,
             showLocalAccountChooser: pendingLocalAccount !== null,

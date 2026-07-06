@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { Weapon } from '@/lib/types';
 import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
@@ -17,6 +17,9 @@ import './LiveMatchOverlay.css';
 //   4. Display name ascending (used when PUUID is hidden, e.g. enemy
 //      pregame placeholders)
 const SELECTION_RANK: Record<string, number> = { locked: 0, selected: 1, none: 2 };
+type LivePublicMap = { uuid?: string; displayName: string; splash?: string; mapUrl?: string };
+type LivePublicAgent = { uuid?: string; displayName: string; displayIcon?: string; fullPortrait?: string };
+type LivePublicTierSet = { tiers?: Array<{ tier: number; tierName?: string; largeIcon?: string }> };
 
 function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
     if (!players || players.length === 0) return [];
@@ -30,13 +33,9 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
     });
 }
 
-interface Props {
-    autoSyncMatches: boolean;
-}
-
 type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
 
-export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
+export default function LiveMatchOverlay() {
     const { activeAccount, weapons, playerCards } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
@@ -49,11 +48,29 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
         () => new Map(playerCards.map((card) => [card.uuid.toLowerCase(), card.displayIcon || card.smallArt || ""])),
         [playerCards],
     );
+    const discordLocalAgentId = match?.allyTeam?.find((player) => player.isLocal)?.agentId || "";
+    const discordAgentName = discordLocalAgentId ? agentCache[discordLocalAgentId.toLowerCase()]?.name || "" : "";
+    const discordMapName = match?.mapId ? mapCache[match.mapId.toLowerCase()]?.name || "" : "";
 
     useEffect(() => {
         setSelectedPlayer(null);
         setProfileTarget(null);
     }, [activeAccount?.puuid]);
+
+    useEffect(() => {
+        window.dispatchEvent(new CustomEvent("vantavault:match-phase", {
+            detail: {
+                phase: match?.phase || "none",
+                queueId: match?.queueId || "",
+                mapName: discordMapName,
+                agentName: discordAgentName,
+                timeLeft: match?.timeLeft || 0,
+            },
+        }));
+        return () => {
+            window.dispatchEvent(new CustomEvent("vantavault:match-phase", { detail: { phase: "none", queueId: "" } }));
+        };
+    }, [discordAgentName, discordMapName, match?.phase, match?.queueId, match?.timeLeft]);
 
     // ---- Local countdown timer ----
     // The backend only emits timeLeft at each 5s poll. We capture the
@@ -142,8 +159,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
 
     // Load Valorant-API metadata
     useEffect(() => {
-        fetch("https://valorant-api.com/v1/maps")
-            .then(res => res.json())
+        fetchCachedPublicJson<{ data?: LivePublicMap[] }>("https://valorant-api.com/v1/maps")
             .then(d => {
                 const m: Record<string, { name: string; splash: string }> = {};
                 for (const item of d.data || []) {
@@ -156,8 +172,7 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                 setMapCache(m);
             }).catch(err => console.error("Error loading maps API", err));
 
-        fetch("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
-            .then(res => res.json())
+        fetchCachedPublicJson<{ data?: LivePublicAgent[] }>("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
             .then(d => {
                 const a: Record<string, { name: string; icon: string; full: string }> = {};
                 for (const item of d.data || []) {
@@ -172,14 +187,13 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
                 setAgentCache(a);
             }).catch(err => console.error("Error loading agents API", err));
 
-        fetch("https://valorant-api.com/v1/competitivetiers")
-            .then(res => res.json())
+        fetchCachedPublicJson<{ data?: LivePublicTierSet[] }>("https://valorant-api.com/v1/competitivetiers")
             .then(d => {
                 const latestEpisode = d.data?.[d.data.length - 1];
                 const t: Record<number, { name: string; icon: string }> = {};
                 for (const tier of latestEpisode?.tiers || []) {
                     t[tier.tier] = {
-                        name: tier.tierName,
+                        name: tier.tierName || "Unranked",
                         icon: tier.largeIcon || ""
                     };
                 }
@@ -356,7 +370,6 @@ export default function LiveMatchOverlay({ autoSyncMatches }: Props) {
             {profileTarget && (
                 <LiveProfileModal
                     profile={profileTarget}
-                    autoSyncMatches={autoSyncMatches}
                     onProfileChange={setProfileTarget}
                     onClose={() => setProfileTarget(null)}
                 />
@@ -750,12 +763,10 @@ function resolveLiveLoadout(response: LiveLoadoutsResponse, puuid: string): Load
 
 function LiveProfileModal({
     profile,
-    autoSyncMatches,
     onProfileChange,
     onClose,
 }: {
     profile: ProfileTarget;
-    autoSyncMatches: boolean;
     onProfileChange: (profile: ProfileTarget | null) => void;
     onClose: () => void;
 }) {
@@ -776,7 +787,7 @@ function LiveProfileModal({
                         key={profile.puuid}
                         requestedProfile={profile}
                         onRequestedProfileChange={onProfileChange}
-                        autoSyncMatches={autoSyncMatches}
+                        autoSyncMatches={true}
                     />
                 </div>
             </section>

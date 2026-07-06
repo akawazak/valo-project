@@ -28,9 +28,7 @@ func TestCorsRejectsUntrustedOriginBeforeMutation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/accounts", strings.NewReader("[]"))
 	req.Header.Set("Origin", "https://attacker.example")
 	res := httptest.NewRecorder()
-
 	handler.ServeHTTP(res, req)
-
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", res.Code, http.StatusForbidden)
 	}
@@ -49,9 +47,7 @@ func TestCleanupLogsKeepsOnlyCurrentFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-
 	cleanupLogs(dir, currentPath)
-
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Fatalf("old log was not removed: %v", err)
 	}
@@ -59,5 +55,64 @@ func TestCleanupLogsKeepsOnlyCurrentFile(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to remain: %v", path, err)
 		}
+	}
+}
+
+func TestAPIKeyMiddlewareRejectsMissingOrWrongKey(t *testing.T) {
+	handler := apiKeyMiddleware("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, key := range []string{"", "wrong"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/accounts", nil)
+		req.Header.Set("X-VantaVault-Key", key)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusUnauthorized {
+			t.Fatalf("key %q: got %d, want 401", key, res.Code)
+		}
+	}
+}
+
+func TestAPIKeyMiddlewareAllowsDesktopKey(t *testing.T) {
+	handler := apiKeyMiddleware("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	req.Header.Set("X-VantaVault-Key", "secret")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("got %d, want 204", res.Code)
+	}
+}
+
+func TestDesktopCORSPreflightThenAuthenticatedRequest(t *testing.T) {
+	called := 0
+	handler := corsMiddleware(apiKeyMiddleware("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/v1/health", nil)
+	preflight.Header.Set("Origin", "http://tauri.localhost")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	preflight.Header.Set("Access-Control-Request-Headers", "X-VantaVault-Key")
+	preflightResult := httptest.NewRecorder()
+	handler.ServeHTTP(preflightResult, preflight)
+	if preflightResult.Code != http.StatusOK {
+		t.Fatalf("preflight got %d, want 200", preflightResult.Code)
+	}
+	if called != 0 {
+		t.Fatal("preflight unexpectedly reached the API handler")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	request.Header.Set("Origin", "http://tauri.localhost")
+	request.Header.Set("X-VantaVault-Key", "secret")
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	if result.Code != http.StatusNoContent || called != 1 {
+		t.Fatalf("authenticated request got status %d and called=%d", result.Code, called)
 	}
 }

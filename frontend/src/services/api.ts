@@ -3,9 +3,30 @@ import { LocalClientError } from '@/lib/errors';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
 const PUBLIC_API_TIMEOUT_MS = 8000;
+let backendTokenPromise: Promise<string> | null = null;
+
+export function reportAppError(message: string) {
+    if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("vantavault:error", { detail: message }));
+    }
+}
+
+async function getBackendToken(): Promise<string> {
+    if (!backendTokenPromise) {
+        backendTokenPromise = import("@tauri-apps/api/core")
+            .then(({ invoke }) => invoke<string>("get_backend_token"))
+            .catch(() => "");
+    }
+    return backendTokenPromise;
+}
 
 export async function appFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-    return window.fetch(input, init);
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.startsWith(LOCAL_URL)) return window.fetch(input, init);
+    const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+    const token = await getBackendToken();
+    if (token) headers.set("X-VantaVault-Key", token);
+    return window.fetch(input, { ...init, headers });
 }
 
 /**
@@ -49,10 +70,25 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEO
         if (!response.ok) {
             throw new Error(`Request failed with status ${response.status}`);
         }
-        return await response.json() as T;
+        const data = await response.json() as T;
+        try {
+            localStorage.setItem(`vv-public-cache:${url}`, JSON.stringify({ savedAt: Date.now(), data }));
+        } catch { /* Cache is best-effort. */ }
+        return data;
+    } catch (error) {
+        try {
+            const cached = localStorage.getItem(`vv-public-cache:${url}`);
+            if (cached) return JSON.parse(cached).data as T;
+        } catch { /* Preserve the original network error. */ }
+        reportAppError("Some game artwork and metadata could not be loaded. Check your connection and retry.");
+        throw error;
     } finally {
         clearTimeout(timeoutId);
     }
+}
+
+export function fetchCachedPublicJson<T>(url: string): Promise<T> {
+    return fetchJsonWithTimeout<T>(url);
 }
 
 async function fetchWithAuth(
@@ -1316,6 +1352,7 @@ export interface SocialPresence {
     queueId?: string;
     cardId?: string;
     platform?: string;
+    partyGroup?: string;
 }
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {

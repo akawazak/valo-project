@@ -8,6 +8,9 @@ import (
 	"log/slog"
 	"maps"
 	"math/rand/v2"
+	"net/http"
+	"os"
+	"time"
 
 	"github.com/truearken/valclient/valclient"
 )
@@ -15,9 +18,18 @@ import (
 const TICK_SPEED_SECONDS = 1
 
 type Ticker struct {
-	Val     *valclient.ValClient
-	stopCh  chan struct{}
-	running bool
+	Val             *valclient.ValClient
+	stopCh          chan struct{}
+	running         bool
+	originalLoadout *valclient.GetPlayerLoadoutRequest
+	inactiveChecks  int
+}
+
+// Allow for temporary Riot API failures and the pregame-to-core-game handoff.
+const inactiveChecksBeforeRestore = 30
+
+type coreGamePlayer struct {
+	MatchID string `json:"MatchID"`
 }
 
 func NewTicker(val *valclient.ValClient) *Ticker {
@@ -34,6 +46,12 @@ func (t *Ticker) Start() {
 	}
 
 	slog.Info("ticker started")
+	if snapshot, err := presets.LoadRestoreSnapshot(t.Val.Player.Uuid); err == nil {
+		t.originalLoadout = snapshot
+		slog.Info("recovered pending loadout restoration")
+	} else if !os.IsNotExist(err) {
+		slog.Error("unable to recover pending loadout restoration", "err", err)
+	}
 
 	ws, err := t.Val.GetLocalWebsocket()
 	if err != nil {
@@ -59,10 +77,15 @@ func (t *Ticker) Start() {
 	t.running = true
 
 	fired := false
+	phaseTicker := time.NewTicker(TICK_SPEED_SECONDS * time.Second)
+	defer phaseTicker.Stop()
 	for {
 		select {
 		case <-t.stopCh:
+			t.restoreOriginalLoadout()
 			return
+		case <-phaseTicker.C:
+			t.checkForMatchEnd()
 		case event := <-events:
 			if event.Payload.Data == nil {
 				continue
@@ -185,14 +208,83 @@ func (t *Ticker) Start() {
 				sprays = selectedPreset.Sprays
 			}
 
-			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays); err != nil {
-				slog.Error("error when applying", "err", err)
+			originalLoadout, err := t.Val.GetPlayerLoadout()
+			if err != nil {
+				slog.Error("error when saving original loadout", "err", err)
 				continue
 			}
+			if t.originalLoadout == nil {
+				if err := presets.SaveRestoreSnapshot(t.Val.Player.Uuid, originalLoadout); err != nil {
+					slog.Error("error when persisting original loadout", "err", err)
+					continue
+				}
+			}
+
+			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays); err != nil {
+				slog.Error("error when applying", "err", err)
+				if t.originalLoadout == nil {
+					_ = presets.ClearRestoreSnapshot(t.Val.Player.Uuid)
+				}
+				continue
+			}
+			if t.originalLoadout == nil {
+				t.originalLoadout = originalLoadout
+			}
+			t.inactiveChecks = 0
 
 			slog.Info("applied preset with variant", "name", selectedPreset.Name, "uuid", selectedPreset.Uuid, "variant", selectedVariant.Name, "variantUuid", selectedVariant.Uuid)
 		}
 	}
+}
+
+func (t *Ticker) checkForMatchEnd() {
+	if t.originalLoadout == nil {
+		return
+	}
+
+	// Pregame disappears when the match starts, so only restore after both the
+	// pregame and core-game endpoints agree the player is no longer in a match.
+	active := false
+	if _, err := t.Val.GetPreGamePlayer(); err == nil || t.inCoreGame() {
+		active = true
+	}
+	if t.recordMatchActivity(active) {
+		t.restoreOriginalLoadout()
+	}
+}
+
+func (t *Ticker) recordMatchActivity(active bool) bool {
+	if active {
+		t.inactiveChecks = 0
+		return false
+	}
+	t.inactiveChecks++
+	return t.inactiveChecks >= inactiveChecksBeforeRestore
+}
+
+func (t *Ticker) inCoreGame() bool {
+	player := new(coreGamePlayer)
+	url := t.Val.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/core-game/v1/players/{puuid}")
+	if err := t.Val.RunRequest(http.MethodGet, url, nil, player); err != nil {
+		return false
+	}
+	return player.MatchID != ""
+}
+
+func (t *Ticker) restoreOriginalLoadout() {
+	if t.originalLoadout == nil {
+		return
+	}
+	if err := presets.Restore(t.Val, t.originalLoadout); err != nil {
+		slog.Error("error when restoring original loadout", "err", err)
+		return
+	}
+	slog.Info("restored original loadout after match")
+	if err := presets.ClearRestoreSnapshot(t.Val.Player.Uuid); err != nil {
+		slog.Error("unable to clear restored loadout snapshot", "err", err)
+	}
+	t.originalLoadout = nil
+	t.inactiveChecks = 0
 }
 
 func (t *Ticker) Stop() {

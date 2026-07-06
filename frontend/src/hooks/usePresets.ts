@@ -304,6 +304,24 @@ export function usePresets(
         setOriginalPreset(null);
     };
 
+    const handleApplyComplete = (appliedPreset: Preset) => {
+        const appliedLoadout = mergePresetLoadout(appliedPreset, presets, appliedPreset.loadout);
+        setGameLoadout(appliedLoadout);
+        setGameMeta({
+            identity: appliedPreset.identity || gameMeta.identity,
+            sprays: appliedPreset.sprays || gameMeta.sprays,
+        });
+        setCurrentLoadout(appliedLoadout);
+        setSelectedPreset(
+            appliedPreset.uuid === DEFAULT_PRESET_ID
+                ? { ...defaultPreset, loadout: appliedLoadout, identity: appliedPreset.identity, sprays: appliedPreset.sprays }
+                : appliedPreset,
+        );
+        setIsEditing(false);
+        setEditingPreset(null);
+        setOriginalPreset(null);
+    };
+
     const handleOpenPresetNameModal = (mode: NamingMode) => {
         setNamingMode(mode);
         setShowPresetNameModal(true);
@@ -503,6 +521,7 @@ export function usePresets(
         handleConfirmDelete,
         handleCloseConfirmationModal,
         handleCancel,
+        handleApplyComplete,
         handleOpenPresetNameModal,
         handleOpenRenameModal,
         handleDropdownVariant,

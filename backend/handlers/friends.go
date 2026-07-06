@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"backend/tracking"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -102,6 +103,7 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	remoteProbe := remoteSocialProbe{Status: "missing"}
+	var pendingRemote *SocialStatusResponse
 	if remoteOnly && !hasRemoteAuth {
 		h.returnAny(w, SocialStatusResponse{
 			Status:       "unavailable",
@@ -110,15 +112,6 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			Error:        "Riot access token is missing. Refresh or reconnect this account.",
 		})
 		return
-	}
-	if hasRemoteAuth && !remoteOnly {
-		if session, sessionErr := h.fetchLocalChatSession(); sessionErr == nil && strings.EqualFold(session.PUUID, remoteAuth.Puuid) {
-			if localResp, localErr := h.fetchLocalSocialStatus(); localErr == nil {
-				h.enrichSocialCards(&localResp)
-				h.returnAny(w, localResp)
-				return
-			}
-		}
 	}
 	if hasRemoteAuth {
 		remoteResp := fetchRemoteSocialStatus(remoteAuth)
@@ -130,7 +123,7 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			Port:   remoteResp.RemoteChatPort,
 			Error:  remoteResp.Error,
 		}
-		if remoteResp.Status == "ok" || remoteResp.RemoteStatus == "connecting" || remoteResp.RemoteStatus == "live" {
+		if remoteResp.Status == "ok" && remoteResp.RemoteStatus == "live" {
 			h.returnAny(w, remoteResp)
 			return
 		}
@@ -138,10 +131,15 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			h.returnAny(w, remoteResp)
 			return
 		}
+		pendingRemote = &remoteResp
 	}
 
 	resp, err := h.fetchLocalSocialStatus()
 	if err != nil {
+		if pendingRemote != nil && (pendingRemote.RemoteStatus == "connecting" || pendingRemote.Status == "ok") {
+			h.returnAny(w, *pendingRemote)
+			return
+		}
 		source := "remote"
 		if !hasRemoteAuth {
 			source = "local"
@@ -546,17 +544,16 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 		Platform: entry.Platform,
 	}
 	if rawPrivate := entry.Private; rawPrivate != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(rawPrivate); err == nil {
-			var private map[string]any
-			if json.Unmarshal(decoded, &private) == nil {
-				p.State = firstString(private, "sessionLoopState", "SessionLoopState")
-				p.QueueID = firstString(private, "queueId", "QueueID")
-				p.CardID = firstString(private, "playerCardId", "PlayerCardID")
-				if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
-					p.State = firstNonEmpty(firstString(mpd, "sessionLoopState", "SessionLoopState"), p.State)
-					p.QueueID = firstNonEmpty(firstString(mpd, "queueId", "QueueID"), p.QueueID)
-					p.CardID = firstNonEmpty(firstString(mpd, "playerCardId", "PlayerCardID"), p.CardID)
-				}
+		if private, ok := decodePresencePayload(rawPrivate); ok {
+			p.State = firstString(private, "sessionLoopState", "SessionLoopState")
+			p.QueueID = firstString(private, "queueId", "QueueID")
+			p.CardID = firstString(private, "playerCardId", "PlayerCardID")
+			p.PartyGroup = anonymousPartyGroup(firstString(private, "partyId", "PartyID", "partyID"))
+			if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
+				p.State = firstNonEmpty(firstString(mpd, "sessionLoopState", "SessionLoopState"), p.State)
+				p.QueueID = firstNonEmpty(firstString(mpd, "queueId", "QueueID"), p.QueueID)
+				p.CardID = firstNonEmpty(firstString(mpd, "playerCardId", "PlayerCardID"), p.CardID)
+				p.PartyGroup = firstNonEmpty(anonymousPartyGroup(firstString(mpd, "partyId", "PartyID", "partyID")), p.PartyGroup)
 			}
 		}
 	}
@@ -570,6 +567,45 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 		p.State = "offline"
 	}
 	return p
+}
+
+func decodePresencePayload(raw string) (map[string]any, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+	decodeJSON := func(data []byte) (map[string]any, bool) {
+		var payload map[string]any
+		if json.Unmarshal(data, &payload) != nil {
+			return nil, false
+		}
+		return payload, true
+	}
+	if strings.HasPrefix(raw, "{") {
+		return decodeJSON([]byte(raw))
+	}
+	for _, encoding := range []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	} {
+		if decoded, err := encoding.DecodeString(raw); err == nil {
+			if payload, ok := decodeJSON(decoded); ok {
+				return payload, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func anonymousPartyGroup(partyID string) string {
+	partyID = strings.TrimSpace(partyID)
+	if partyID == "" || partyID == "00000000-0000-0000-0000-000000000000" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(partyID))
+	return fmt.Sprintf("party-%x", sum[:6])
 }
 
 func resolvePresenceName(entry chatPresenceEntry, nameByPuuid map[string]string) string {

@@ -42,3 +42,35 @@ func TestEnrichKnownPlayerNamesOnlyRevealsKnownPrivatePlayers(t *testing.T) {
 		t.Fatal("unknown or already-public identities must stay unchanged")
 	}
 }
+
+func TestMarkKnownPartyGroupsPreservesYourParty(t *testing.T) {
+	response := &LiveMatchResponse{
+		AllyTeam: []*LivePlayer{
+			{Puuid: "local", PartyGroup: "your-party"},
+			{Puuid: "friend-a"},
+			{Puuid: "friend-b"},
+		},
+	}
+	markKnownPartyGroups(response, map[string]string{
+		"local":    "party-other",
+		"friend-a": "party-known",
+		"friend-b": "party-known",
+	})
+	if response.AllyTeam[0].PartyGroup != "your-party" {
+		t.Fatal("presence grouping replaced the signed-in player's confirmed party")
+	}
+	if response.AllyTeam[1].PartyGroup != "party-known" || response.AllyTeam[2].PartyGroup != "party-known" {
+		t.Fatal("known friend premade was not grouped")
+	}
+}
+
+func TestAnonymousPartyGroupDoesNotExposeRiotPartyID(t *testing.T) {
+	raw := "12345678-1234-1234-1234-123456789abc"
+	group := anonymousPartyGroup(raw)
+	if group == "" || group == raw {
+		t.Fatalf("party group was not anonymized: %q", group)
+	}
+	if anonymousPartyGroup("") != "" {
+		t.Fatal("empty party ID must stay ungrouped")
+	}
+}

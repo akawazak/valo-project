@@ -4,11 +4,55 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestXMPPDirectMessageSendEscapesAndStores(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	session := &xmppSocialSession{
+		state:    "live",
+		domain:   "eu1",
+		conn:     client,
+		auth:     remoteAuthHeaders{Puuid: "local-player"},
+		messages: map[string][]ChatMessage{},
+	}
+	stanza := make(chan string, 1)
+	go func() {
+		_ = server.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 2048)
+		n, _ := server.Read(buf)
+		stanza <- string(buf[:n])
+	}()
+	message, err := session.sendMessage("FRIEND", "hello <team> & you")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := <-stanza
+	if !strings.Contains(got, `to="friend@eu1.pvp.net"`) || !strings.Contains(got, "hello &lt;team&gt; &amp; you") {
+		t.Fatalf("unexpected stanza: %s", got)
+	}
+	if history := session.conversation("friend"); len(history) != 1 || history[0].ID != message.ID {
+		t.Fatalf("sent message was not stored: %#v", history)
+	}
+}
+
+func TestXMPPIncomingMessageStoredByPeer(t *testing.T) {
+	session := &xmppSocialSession{
+		auth:     remoteAuthHeaders{Puuid: "local-player"},
+		messages: map[string][]ChatMessage{},
+	}
+	session.applyMessage(xmppMessage{From: "friend@eu1.pvp.net/mobile", To: "local-player@eu1.pvp.net", Type: "chat", ID: "m1", Body: "hi"})
+	history := session.conversation("FRIEND")
+	if len(history) != 1 || history[0].Body != "hi" || history[0].FromPuuid != "friend" {
+		t.Fatalf("unexpected incoming history: %#v", history)
+	}
+}
 
 func TestNormalizeChatPresenceKeepsPlayerCard(t *testing.T) {
 	private := base64.StdEncoding.EncodeToString([]byte(`{"matchPresenceData":{"sessionLoopState":"MENUS","playerCardId":"card-123"}}`))
@@ -35,6 +79,23 @@ func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
 	}, nil)
 	if presence.State != "INGAME" || presence.QueueID != "competitive" || presence.CardID != "card-top-level" {
 		t.Fatalf("top-level presence fields were dropped: %#v", presence)
+	}
+}
+
+func TestNormalizeChatPresenceAcceptsUnpaddedURLBase64PlayerCard(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sessionLoopState":"MENUS","playerCardId":"card-url-safe"}`))
+	presence := normalizeChatPresence(chatPresenceEntry{Puuid: "friend", Product: "valorant", Private: payload}, nil)
+	if presence.CardID != "card-url-safe" {
+		t.Fatalf("URL-safe player card payload was dropped: %#v", presence)
+	}
+}
+
+func TestNormalizeChatPresenceAcceptsRawJSONPlayerCard(t *testing.T) {
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid: "friend", Product: "valorant", Private: `{"sessionLoopState":"MENUS","playerCardId":"card-json"}`,
+	}, nil)
+	if presence.CardID != "card-json" {
+		t.Fatalf("raw JSON player card payload was dropped: %#v", presence)
 	}
 }
 
@@ -113,6 +174,33 @@ func TestXMPPSnapshotDoesNotCountUnverifiedChatPresenceOnline(t *testing.T) {
 	snapshot := session.snapshot()
 	if snapshot.OnlineCount != 0 || len(snapshot.Presences) != 1 || snapshot.Presences[0].State != "offline" {
 		t.Fatalf("unverified chat presence was counted online: %#v", snapshot)
+	}
+}
+
+func TestXMPPPresenceKeepsOtherResourcesAndPrefersValorant(t *testing.T) {
+	private := base64.StdEncoding.EncodeToString([]byte(`{"sessionLoopState":"INGAME","queueId":"competitive"}`))
+	session := &xmppSocialSession{
+		state: "live",
+		roster: map[string]xmppRosterItem{
+			"friend": {PUUID: "friend", GameName: "Friend", GameTag: "EUW"},
+		},
+		presences: map[string]chatPresenceEntry{},
+	}
+	session.applyPresence(xmppPresence{From: "friend@eu1.pvp.net/riot-client"})
+	valorant := xmppPresence{From: "friend@eu1.pvp.net/valorant"}
+	valorant.Games = &struct {
+		Valorant *struct {
+			Payload string `xml:"p"`
+		} `xml:"valorant"`
+	}{Valorant: &struct {
+		Payload string `xml:"p"`
+	}{Payload: private}}
+	session.applyPresence(valorant)
+	session.applyPresence(xmppPresence{From: "friend@eu1.pvp.net/riot-client", Type: "unavailable"})
+
+	snapshot := session.snapshot()
+	if snapshot.OnlineCount != 1 || snapshot.InGameCount != 1 || len(snapshot.Presences) != 1 || snapshot.Presences[0].Product != "valorant" {
+		t.Fatalf("closing Riot Client resource erased VALORANT presence: %#v", snapshot)
 	}
 }
 

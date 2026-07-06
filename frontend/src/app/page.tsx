@@ -4,15 +4,35 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Update } from '@tauri-apps/plugin-updater';
 import ArsenalView from '@/features/arsenal/ArsenalView';
 import PresetList from '@/features/presets/PresetList';
-import Footer from '@/components/Footer';
 import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { getPlayerLoadoutData, getPresets } from '@/services/api';
+import { getPlayerLoadoutData, getPresets, reportAppError } from '@/services/api';
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
+
+const DISCORD_QUEUE_LABELS: Record<string, string> = {
+    competitive: "Competitive",
+    unrated: "Unrated",
+    swiftplay: "Swiftplay",
+    spikerush: "Spike Rush",
+    deathmatch: "Deathmatch",
+    teamdeathmatch: "Team Deathmatch",
+    hurm: "Team Deathmatch",
+    escalation: "Escalation",
+    ggteam: "Escalation",
+    onefa: "Replication",
+    premier: "Premier",
+    custom: "Custom Game",
+};
+
+function discordQueueLabel(queueId: string) {
+    const key = queueId.trim().toLowerCase();
+    if (!key) return "VALORANT";
+    return DISCORD_QUEUE_LABELS[key] || key.charAt(0).toUpperCase() + key.slice(1);
+}
 import { useData } from '@/context/DataContext';
 import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
 import { GameLoadoutMeta } from '@/lib/effectivePreset';
@@ -71,12 +91,38 @@ export default function Home() {
     
     // Core Layout State
     const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('store');
+    const [discordMatchPhase, setDiscordMatchPhase] = useState<{ phase: string; queueId: string; mapName: string; agentName: string; timeLeft: number }>({ phase: "none", queueId: "", mapName: "", agentName: "", timeLeft: 0 });
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
 
     useEffect(() => {
         setProfileTarget(null);
     }, [activeAccount?.puuid]);
+
+    useEffect(() => {
+        const onMatchPhase = (event: Event) => {
+            const detail = (event as CustomEvent<{ phase?: string; queueId?: string; mapName?: string; agentName?: string; timeLeft?: number }>).detail;
+            setDiscordMatchPhase({ phase: detail?.phase || "none", queueId: detail?.queueId || "", mapName: detail?.mapName || "", agentName: detail?.agentName || "", timeLeft: detail?.timeLeft || 0 });
+        };
+        window.addEventListener("vantavault:match-phase", onMatchPhase);
+        return () => window.removeEventListener("vantavault:match-phase", onMatchPhase);
+    }, []);
+
+    useEffect(() => {
+        let details = activeTab === "store" ? "Browsing Store" : activeTab === "profile" ? "Viewing Profiles" : "Building a Loadout";
+        let activityState = "VantaVault desktop companion";
+        const queueName = discordQueueLabel(discordMatchPhase.queueId);
+        if (discordMatchPhase.phase === "pregame") {
+            details = discordMatchPhase.agentName ? `Agent Select — ${discordMatchPhase.agentName}` : "Agent Select";
+            activityState = [queueName, discordMatchPhase.mapName, discordMatchPhase.timeLeft > 0 ? `${discordMatchPhase.timeLeft}s left` : ""].filter(Boolean).join(" • ");
+        } else if (discordMatchPhase.phase === "coregame") {
+            details = discordMatchPhase.agentName ? `In Match — ${discordMatchPhase.agentName}` : "In Match";
+            activityState = discordMatchPhase.mapName ? `${queueName} on ${discordMatchPhase.mapName}` : queueName;
+        }
+        void import("@tauri-apps/api/core")
+            .then(({ invoke }) => invoke("set_discord_presence", { details, activityState }))
+            .catch(() => {});
+    }, [activeTab, discordMatchPhase]);
     
     // Modals
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -96,12 +142,23 @@ export default function Home() {
         setShowErrorModal, setErrorMessage, setShowToast, setToastMessage
     } = useLoadout();
 
+    useEffect(() => {
+        const onAppError = (event: Event) => {
+            const message = (event as CustomEvent<string>).detail;
+            if (!message) return;
+            setToastMessage(message);
+            setShowToast(true);
+        };
+        window.addEventListener("vantavault:error", onAppError);
+        return () => window.removeEventListener("vantavault:error", onAppError);
+    }, [setShowToast, setToastMessage]);
+
     const {
-        presets, selectedPreset, isEditing, editingPreset, originalPreset,
+        presets, selectedPreset, isEditing, editingPreset,
         showPresetNameModal, dropdownPreset, namingMode, showConfirmationModal, currentLoadout,
         handleSave, handleSavePresetName, handlePresetSelect, handlePresetDelete, handleConfirmDelete,
-        handleCloseConfirmationModal, handleCancel, handleOpenPresetNameModal, handleOpenRenameModal,
-        handleDropdownVariant, handleVariant, handleClosePresetNameModal, handleTogglePreset,
+        handleCloseConfirmationModal, handleCancel, handleApplyComplete, handleOpenPresetNameModal, handleOpenRenameModal,
+        handleDropdownVariant, handleClosePresetNameModal, handleTogglePreset,
         handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange,
         handleImportPresetAction, gameMeta,
     } = usePresets(initialData.presets, initialData.playerLoadout, (error) => {
@@ -273,7 +330,10 @@ export default function Home() {
         if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
-        }).catch((error) => console.error("Failed to save settings:", error));
+        }).catch((error) => {
+            console.error("Failed to save settings:", error);
+            reportAppError("Settings could not be saved. Please try again.");
+        });
     }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, useLocalSso]);
 
     const handleToggleLocalSso = (val: boolean) => {
@@ -315,8 +375,8 @@ export default function Home() {
             await handleSave();
         }
         const requestToApply = buildApplyRequest(presetToApply);
-        await handleApplyLoadout(requestToApply, presetToApply.name);
-        if (isEditing && editingPreset?.uuid !== defaultPreset.uuid) handleCancel();
+        const applied = await handleApplyLoadout(requestToApply, presetToApply.name);
+        if (applied && isEditing) handleApplyComplete(presetToApply);
     };
 
     const handlePresetApply = (preset: Preset) => {
@@ -461,7 +521,6 @@ export default function Home() {
                                 onCancel={handleCancel}
                                 onSaveAsNew={() => handleOpenPresetNameModal(NamingMode.SaveAsNew)}
                                 onApply={handleApply}
-                                onVariant={handleVariant}
                                 currentCardId={activePreset?.identity?.playerCardId || ""}
                                 currentTitleId={activePreset?.identity?.playerTitleId || ""}
                                 onSelectCard={(cardId) => handleIdentityChange(cardId, activePreset?.identity?.playerTitleId || "")}
@@ -493,18 +552,6 @@ export default function Home() {
                     )}
                 </main>
             </div>
-
-            {activeTab === 'skins' && isWorkspaceOpen && isEditing && (
-                <Footer
-                    onSaveAction={handleSave}
-                    onCancelAction={handleCancel}
-                    onSaveAsNewAction={() => handleOpenPresetNameModal(NamingMode.SaveAsNew)}
-                    onApplyAction={handleApply}
-                    onVariantAction={handleVariant}
-                    isVariant={!!originalPreset?.parentUuid}
-                    isDefaultPreset={originalPreset?.uuid === defaultPreset.uuid}
-                />
-            )}
 
             <PresetNameModal
                 show={showPresetNameModal}
@@ -614,7 +661,7 @@ export default function Home() {
                 onClose={() => handleResolveLocalAccount(false)}
             />
 
-            {(showLiveMatch ?? true) && <LiveMatchOverlay autoSyncMatches={autoSyncMatches ?? true} />}
+            {(showLiveMatch ?? true) && <LiveMatchOverlay />}
             {(showPartyWidget ?? true) && <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} />}
         </div>
     );

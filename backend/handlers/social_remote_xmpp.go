@@ -17,6 +17,15 @@ import (
 
 var remoteSocialHub = &xmppSocialHub{sessions: map[string]*xmppSocialSession{}}
 
+// ChatMessage remains internal to the XMPP transport so incoming message
+// stanzas can be safely consumed. VantaVault no longer exposes chat routes.
+type ChatMessage struct {
+	ID        string `json:"id"`
+	FromPuuid string `json:"fromPuuid"`
+	Body      string `json:"body"`
+	Time      int64  `json:"time"`
+}
+
 type xmppSocialHub struct {
 	mu       sync.Mutex
 	sessions map[string]*xmppSocialSession
@@ -24,6 +33,7 @@ type xmppSocialHub struct {
 
 type xmppSocialSession struct {
 	mu          sync.RWMutex
+	writeMu     sync.Mutex
 	key         string
 	auth        remoteAuthHeaders
 	host        string
@@ -36,6 +46,15 @@ type xmppSocialSession struct {
 	presences   map[string]chatPresenceEntry
 	running     bool
 	conn        net.Conn
+	messages    map[string][]ChatMessage
+}
+
+type xmppMessage struct {
+	From string `xml:"from,attr"`
+	To   string `xml:"to,attr"`
+	Type string `xml:"type,attr"`
+	ID   string `xml:"id,attr"`
+	Body string `xml:"body"`
 }
 
 type xmppRosterItem struct {
@@ -85,6 +104,7 @@ func (h *xmppSocialHub) ensure(auth *remoteAuthHeaders) *xmppSocialSession {
 			roster:    map[string]xmppRosterItem{},
 			presences: map[string]chatPresenceEntry{},
 			state:     "connecting",
+			messages:  map[string][]ChatMessage{},
 		}
 		h.sessions[key] = session
 	}
@@ -166,7 +186,9 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 
 	go s.keepAlive(conn)
 
+	s.writeMu.Lock()
 	_, _ = io.WriteString(conn, `<iq type="get" id="1"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq><presence/>`)
+	s.writeMu.Unlock()
 
 	decoder := xml.NewDecoder(reader)
 	for {
@@ -191,6 +213,11 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 			if err := decoder.DecodeElement(&presence, &start); err == nil {
 				s.applyPresence(presence)
 			}
+		case "message":
+			var message xmppMessage
+			if err := decoder.DecodeElement(&message, &start); err == nil {
+				s.applyMessage(message)
+			}
 		default:
 			_ = decoder.Skip()
 		}
@@ -207,10 +234,98 @@ func (s *xmppSocialSession) keepAlive(conn net.Conn) {
 		if !sameConn {
 			return
 		}
-		if _, err := io.WriteString(conn, " "); err != nil {
+		s.writeMu.Lock()
+		_, err := io.WriteString(conn, " ")
+		s.writeMu.Unlock()
+		if err != nil {
 			return
 		}
 	}
+}
+
+func (s *xmppSocialSession) applyMessage(message xmppMessage) {
+	body := strings.TrimSpace(message.Body)
+	if body == "" || (message.Type != "" && message.Type != "chat") {
+		return
+	}
+	from := jidLocalpart(message.From)
+	to := jidLocalpart(message.To)
+	peer := from
+	if strings.EqualFold(from, s.auth.Puuid) {
+		peer = to
+	}
+	if peer == "" {
+		return
+	}
+	s.appendMessage(peer, ChatMessage{
+		ID:        firstNonEmpty(message.ID, fmt.Sprintf("xmpp-%d", time.Now().UnixNano())),
+		FromPuuid: from,
+		Body:      body,
+		Time:      time.Now().UnixMilli(),
+	})
+}
+
+func (s *xmppSocialSession) appendMessage(peer string, message ChatMessage) {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.messages == nil {
+		s.messages = map[string][]ChatMessage{}
+	}
+	for i, existing := range s.messages[peer] {
+		if message.ID != "" && existing.ID == message.ID {
+			s.messages[peer][i] = message
+			return
+		}
+	}
+	history := append(s.messages[peer], message)
+	if len(history) > 100 {
+		history = history[len(history)-100:]
+	}
+	s.messages[peer] = history
+}
+
+func (s *xmppSocialSession) conversation(peer string) []ChatMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := s.messages[strings.ToLower(strings.TrimSpace(peer))]
+	return append([]ChatMessage(nil), history...)
+}
+
+func (s *xmppSocialSession) sendMessage(peer, body string) (ChatMessage, error) {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	body = strings.TrimSpace(body)
+	if peer == "" || body == "" {
+		return ChatMessage{}, fmt.Errorf("chat recipient and message are required")
+	}
+	s.mu.RLock()
+	conn := s.conn
+	domain := s.domain
+	localPuuid := s.auth.Puuid
+	live := s.state == "live"
+	s.mu.RUnlock()
+	if !live || conn == nil || domain == "" {
+		return ChatMessage{}, fmt.Errorf("Riot XMPP chat is still connecting")
+	}
+	message := ChatMessage{
+		ID:        fmt.Sprintf("vv-%d", time.Now().UnixNano()),
+		FromPuuid: strings.ToLower(localPuuid),
+		Body:      body,
+		Time:      time.Now().UnixMilli(),
+	}
+	var escaped strings.Builder
+	if err := xml.EscapeText(&escaped, []byte(body)); err != nil {
+		return ChatMessage{}, err
+	}
+	stanza := fmt.Sprintf(`<message to="%s@%s.pvp.net" type="chat" id="%s"><body>%s</body></message>`, peer, domain, message.ID, escaped.String())
+	s.writeMu.Lock()
+	_, err := io.WriteString(conn, stanza)
+	s.writeMu.Unlock()
+	if err != nil {
+		return ChatMessage{}, fmt.Errorf("send XMPP chat: %w", err)
+	}
+	s.appendMessage(peer, message)
+	return message, nil
 }
 
 func (s *xmppSocialSession) fail(err error) {
@@ -256,8 +371,16 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 		Puuid: puuid,
 		State: "offline",
 	}
+	resourceKey := strings.ToLower(strings.TrimSpace(p.From))
+	if resourceKey == "" {
+		resourceKey = puuid
+	}
 	if p.Type == "" || p.Type == "available" {
 		entry.State = firstNonEmpty(p.Status, p.Show, "online")
+		// Receiving an available XMPP stanza proves that this particular
+		// desktop resource is online even when Riot omits game metadata.
+		entry.Product = "riot_chat"
+		entry.Platform = "desktop"
 	}
 	if p.Type == "unavailable" {
 		entry.State = "offline"
@@ -275,10 +398,12 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 		entry.Name = firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid))
 	}
 	if entry.State == "offline" {
-		delete(s.presences, puuid)
+		// A friend can have Riot Client and VALORANT resources connected at
+		// once. Closing one resource must not erase the other one.
+		delete(s.presences, resourceKey)
 		return
 	}
-	s.presences[puuid] = entry
+	s.presences[resourceKey] = entry
 }
 
 func (s *xmppSocialSession) snapshot() SocialStatusResponse {
@@ -289,7 +414,17 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 	onlineCount := 0
 	inGameCount := 0
 	for puuid, roster := range s.roster {
-		entry, ok := s.presences[puuid]
+		var entry chatPresenceEntry
+		ok := false
+		for _, candidate := range s.presences {
+			if !strings.EqualFold(candidate.Puuid, puuid) {
+				continue
+			}
+			if !ok || (strings.EqualFold(candidate.Product, "valorant") && !strings.EqualFold(entry.Product, "valorant")) {
+				entry = candidate
+				ok = true
+			}
+		}
 		if !ok {
 			out = append(out, SocialPresence{
 				Puuid: puuid,

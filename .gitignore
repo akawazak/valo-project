@@ -1,4 +1,7 @@
 # Build artifacts
+/.gocache/
+/.cargo-target-check/
+frontend/src-tauri/.cargo-target-check/
 backend/*.exe
 backend/*.exe~
 backend/bin/

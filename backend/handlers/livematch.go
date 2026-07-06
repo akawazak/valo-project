@@ -177,12 +177,30 @@ func (h *Handler) enrichFriendNames(val *valclient.ValClient, source string, res
 		h.enrichRemoteSocialNames(auth, &social)
 	}
 	names := make(map[string]string, len(social.Presences))
+	partyGroups := make(map[string]string, len(social.Presences))
 	for _, presence := range social.Presences {
 		if presence.Puuid != "" && presence.Name != "" {
 			names[strings.ToLower(presence.Puuid)] = presence.Name
 		}
+		if presence.Puuid != "" && presence.PartyGroup != "" {
+			partyGroups[strings.ToLower(presence.Puuid)] = presence.PartyGroup
+		}
 	}
 	enrichKnownPlayerNames(response, names)
+	markKnownPartyGroups(response, partyGroups)
+}
+
+func markKnownPartyGroups(response *LiveMatchResponse, groups map[string]string) {
+	if response == nil {
+		return
+	}
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player != nil && player.PartyGroup == "" {
+				player.PartyGroup = groups[strings.ToLower(player.Puuid)]
+			}
+		}
+	}
 }
 
 func enrichKnownPlayerNames(response *LiveMatchResponse, names map[string]string) {

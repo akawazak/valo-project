@@ -64,6 +64,14 @@ Windows may show a SmartScreen warning for community builds that are not code-si
 
 ## Development
 
+### Discord Rich Presence
+
+Create an application in the Discord Developer Portal, copy its Application ID,
+and either set `VANTAVAULT_DISCORD_CLIENT_ID` before starting VantaVault or put
+the ID alone in `discord_client_id.txt` inside VantaVault's app configuration
+directory. Add a Rich Presence art asset named `logo` to show the large app
+image. Presence reconnects automatically when Discord starts after VantaVault.
+
 ### Windows prerequisites
 
 Install all of the following before launching the app locally:

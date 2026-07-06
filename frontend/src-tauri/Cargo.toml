@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.5.16"
+version = "0.5.17"
 description = "VantaVault desktop companion for VALORANT loadouts and profile data"
 authors = ["akawazak"]
 license = "MIT"
@@ -30,6 +30,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

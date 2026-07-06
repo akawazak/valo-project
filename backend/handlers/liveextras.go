@@ -64,6 +64,9 @@ type SocialPresence struct {
 	QueueID  string `json:"queueId,omitempty"`
 	CardID   string `json:"cardId,omitempty"`
 	Platform string `json:"platform,omitempty"`
+	// PartyGroup is an anonymous, process-local grouping key derived from
+	// Riot presence data. Raw party IDs are never returned to the frontend.
+	PartyGroup string `json:"partyGroup,omitempty"`
 }
 
 func (h *Handler) GetLiveLoadouts(w http.ResponseWriter, r *http.Request) {

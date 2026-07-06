@@ -53,6 +53,7 @@ export default function AccountManagerModal({
     const [bulkProgressTotal, setBulkProgressTotal] = useState(0);
     const [bulkCurrentAccount, setBulkCurrentAccount] = useState("");
     const [bulkSummary, setBulkSummary] = useState("");
+    const [displayOrder, setDisplayOrder] = useState<string[]>([]);
     const bulkCancelRef = useRef(false);
     const refreshTimeoutMs = 30_000;
     const bulkAttemptIntervalMs = 2_000;
@@ -69,6 +70,24 @@ export default function AccountManagerModal({
         setBulkCurrentAccount("");
         setBulkSummary("");
     }, [accounts, isOpen, onCancelRefresh]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setDisplayOrder([]);
+            return;
+        }
+        setDisplayOrder((current) => {
+            const existing = new Set(accounts.map((account) => account.puuid));
+            const preserved = current.filter((puuid) => existing.has(puuid));
+            const preservedSet = new Set(preserved);
+            const newAccounts = accounts.filter((account) => !preservedSet.has(account.puuid));
+            const additions = [
+                ...newAccounts.filter((account) => account.favorite),
+                ...newAccounts.filter((account) => !account.favorite),
+            ].map((account) => account.puuid);
+            return [...preserved, ...additions];
+        });
+    }, [accounts, isOpen]);
 
     if (!isOpen) return null;
 
@@ -173,11 +192,16 @@ export default function AccountManagerModal({
         }
     };
 
-    // Sort accounts: favorites first
-    const sortedAccounts = [
-        ...accounts.filter((a) => a.favorite),
-        ...accounts.filter((a) => !a.favorite),
-    ];
+    // Keep rows stable while this popup is open. Favorites are persisted
+    // immediately, then appear pinned the next time the popup opens.
+    const accountByPuuid = new Map(accounts.map((account) => [account.puuid, account]));
+    const effectiveOrder = displayOrder.length > 0 ? displayOrder : [
+        ...accounts.filter((account) => account.favorite),
+        ...accounts.filter((account) => !account.favorite),
+    ].map((account) => account.puuid);
+    const sortedAccounts = effectiveOrder
+        .map((puuid) => accountByPuuid.get(puuid))
+        .filter((account): account is RiotAccount => Boolean(account));
 
     return (
         <div className="settings-modal-overlay" onClick={onClose}>

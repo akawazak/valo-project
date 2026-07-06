@@ -14,6 +14,7 @@ import {
     getProfileSyncStatus,
     getRRHistory,
     postProfileSync,
+    fetchCachedPublicJson,
     type ProfileAgentStatsResponse,
     type ProfileMapStatsResponse,
     type ProfileMatchDetails,
@@ -41,6 +42,11 @@ interface AgentMeta {
     role: string;
     roleIcon: string;
 }
+
+interface PublicAgent { uuid?: string; displayName: string; displayIcon?: string; killfeedPortrait?: string; fullPortrait?: string; role?: { displayName?: string; displayIcon?: string } }
+interface PublicMap { uuid?: string; displayName: string; splash?: string; assetPath?: string; mapUrl?: string }
+interface PublicTierSet { tiers?: Array<{ tier?: number; smallIcon?: string }> }
+interface PublicSeason { uuid?: string; displayName?: string; parentUuid?: string; startTime?: string; assetPath?: string }
 interface MapMeta {
     name: string;
     splash: string;
@@ -226,9 +232,7 @@ async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
     if (agentPromise) return agentPromise;
     agentPromise = (async () => {
         try {
-            const res = await fetch("https://valorant-api.com/v1/agents?isPlayableCharacter=true");
-            if (!res.ok) throw new Error(`agents ${res.status}`);
-            const d = await res.json();
+            const d = await fetchCachedPublicJson<{ data?: PublicAgent[] }>("https://valorant-api.com/v1/agents?isPlayableCharacter=true");
             const m: Record<string, AgentMeta> = {};
             for (const a of d?.data ?? []) {
                 if (!a.uuid) continue;
@@ -258,9 +262,7 @@ async function loadMaps(): Promise<Record<string, MapMeta>> {
     if (mapPromise) return mapPromise;
     mapPromise = (async () => {
         try {
-            const res = await fetch("https://valorant-api.com/v1/maps");
-            if (!res.ok) throw new Error(`maps ${res.status}`);
-            const d = await res.json();
+            const d = await fetchCachedPublicJson<{ data?: PublicMap[] }>("https://valorant-api.com/v1/maps");
             const m: Record<string, MapMeta> = {};
             for (const mp of d?.data ?? []) {
                 if (!mp.uuid) continue;
@@ -292,9 +294,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
     if (tierPromise) return tierPromise;
     tierPromise = (async () => {
         try {
-            const res = await fetch("https://valorant-api.com/v1/competitivetiers");
-            if (!res.ok) throw new Error(`competitivetiers ${res.status}`);
-            const d = await res.json();
+            const d = await fetchCachedPublicJson<{ data?: PublicTierSet[] }>("https://valorant-api.com/v1/competitivetiers");
             const m = new Map<number, { smallIcon: string }>();
             for (const season of d?.data ?? []) {
                 for (const tier of season?.tiers ?? []) {
@@ -396,8 +396,7 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
             setMaps(mapMap);
             setTierAssets(tiers);
         });
-fetch("https://valorant-api.com/v1/seasons")
-            .then((res) => res.json())
+fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/seasons")
             .then((d) => {
                 if (cancelled) return;
                 const next: Record<string, SeasonMeta> = {};
@@ -626,10 +625,6 @@ fetch("https://valorant-api.com/v1/seasons")
                         setRateLimitUntil(finalStatus.retryAt || Date.now() + 30_000);
                         return;
                     }
-                    if (viewedProfile && !hasCachedProfileRef.current) {
-                        onRequestedProfileChange(null);
-                        return;
-                    }
                     if (manual || viewedProfile) setError(cleanError(finalStatus.lastError));
                 } else if (manual) {
                     showToast("Profile synced.");
@@ -638,14 +633,13 @@ fetch("https://valorant-api.com/v1/seasons")
                 await loadHistory();
             } catch (err) {
                 if (currentPuuidRef.current === targetPuuid) {
-                    if (viewedProfile && !hasCachedProfileRef.current) onRequestedProfileChange(null);
-                    else if (manual) setError(cleanError(err));
+                    if (manual || viewedProfile) setError(cleanError(err));
                 }
             } finally {
                 if (currentPuuidRef.current === targetPuuid) setSyncing(false);
             }
         },
-        [loadHistory, onRequestedProfileChange, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
+        [loadHistory, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
     );
 
     useEffect(() => {
@@ -663,7 +657,9 @@ fetch("https://valorant-api.com/v1/seasons")
         return () => window.clearInterval(timer);
     }, [rateLimitUntil, runSync]);
 
-    // Auto-sync on first visit if nothing is cached yet.
+    // Auto-sync every profile once per visit/account. The backend deduplicates
+    // a sync that is already running, and this ref prevents render-driven
+    // repeats while the same profile remains open.
     useEffect(() => {
         if (!autoSyncMatches || !puuid || loading || syncing || !syncStatus) return;
         if (syncStatus.inFlight) {
@@ -671,7 +667,7 @@ fetch("https://valorant-api.com/v1/seasons")
             void runSync(false);
             return;
         }
-        if ((viewedProfile || syncStatus.totalMatches === 0) && autoSyncPuuidRef.current !== puuid) {
+        if (autoSyncPuuidRef.current !== puuid) {
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
         }

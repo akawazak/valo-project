@@ -63,7 +63,6 @@ interface ArsenalViewProps {
     onCancel: () => void;
     onSaveAsNew: () => void;
     onApply: () => void;
-    onVariant: () => void;
     currentCardId?: string;
     currentTitleId?: string;
     onSelectCard?: (cardId: string) => void;
