@@ -34,7 +34,8 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "externalBin": [
-      "binaries/valovault-backend"
+      "binaries/valovault-backend",
+      "binaries/valovault-backend.exe"
     ],
     "targets": ["nsis"],
     "windows": {
