@@ -32,7 +32,10 @@ fn read_discord_frame(pipe: &mut std::fs::File) -> std::io::Result<(u32, serde_j
     let opcode = u32::from_le_bytes(header[0..4].try_into().unwrap());
     let length = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
     if length > 1024 * 1024 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Discord IPC frame is too large"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Discord IPC frame is too large",
+        ));
     }
     let mut body = vec![0_u8; length];
     pipe.read_exact(&mut body)?;
@@ -73,10 +76,16 @@ fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordA
             details: "Browsing VantaVault".to_string(),
             state: "Desktop companion".to_string(),
         };
-        let mut started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let mut started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         while let Ok(update) = receiver.try_recv() {
             if update.details != current.details {
-                started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                started_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
             }
             current = update;
         }
@@ -104,7 +113,8 @@ fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordA
             continue;
         }
         match read_discord_frame(&mut pipe) {
-            Ok((1, payload)) if payload.get("evt").and_then(|value| value.as_str()) == Some("READY") => {}
+            Ok((1, payload))
+                if payload.get("evt").and_then(|value| value.as_str()) == Some("READY") => {}
             Ok((opcode, payload)) => {
                 log::warn!("Discord Rich Presence handshake rejected (opcode {opcode}): {payload}");
                 continue;
@@ -114,7 +124,11 @@ fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordA
                 continue;
             }
         }
-        if let Err(error) = write_discord_frame(&mut pipe, 1, &discord_activity_payload(&current, started_at)) {
+        if let Err(error) = write_discord_frame(
+            &mut pipe,
+            1,
+            &discord_activity_payload(&current, started_at),
+        ) {
             log::warn!("Discord Rich Presence initial activity failed: {error}");
             continue;
         }
@@ -129,19 +143,28 @@ fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordA
             match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
                 Ok(update) => {
                     if update.details != current.details {
-                        started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                        started_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
                     }
                     current = update;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             }
-            if let Err(error) = write_discord_frame(&mut pipe, 1, &discord_activity_payload(&current, started_at)) {
+            if let Err(error) = write_discord_frame(
+                &mut pipe,
+                1,
+                &discord_activity_payload(&current, started_at),
+            ) {
                 log::warn!("Discord Rich Presence update failed: {error}");
                 break;
             }
             if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
-                if opcode == 2 || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR") {
+                if opcode == 2
+                    || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR")
+                {
                     log::warn!("Discord Rich Presence update rejected: {payload}");
                     break;
                 }
