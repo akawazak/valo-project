@@ -17,11 +17,9 @@ jobs:
         settings:
           - name: 'Windows'
             platform: 'windows-latest'
-            go-target: './tmp/valovault-backend.exe'
             tauri-args: '--bundles nsis'
           - name: 'Linux'
             platform: 'ubuntu-22.04'
-            go-target: './tmp/valovault-backend'
             tauri-args: '--bundles deb,appimage'
     runs-on: ${{ matrix.settings.platform }}
     steps:
@@ -32,29 +30,11 @@ jobs:
         with:
           node-version: lts/*
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-
       - name: Install Linux dependencies
         if: matrix.settings.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Build and stage backend sidecar
-        working-directory: backend
-        shell: bash
-        run: |
-          GO_TARGET="${{ matrix.settings.go-target }}"
-          mkdir -p ../frontend/src-tauri/binaries
-          if [[ "${{ matrix.settings.platform }}" == "windows-latest" ]]; then
-            go build -ldflags="-H windowsgui" -o "$GO_TARGET" .
-          else
-            go build -o "$GO_TARGET" .
-          fi
-          cp "$GO_TARGET" ../frontend/src-tauri/binaries/
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -120,13 +100,17 @@ jobs:
         run: |
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (!$version) { Write-Host "No app version output, skipping portable upload."; exit 0 }
-          $releaseDir = "frontend/src-tauri/target/release"
-          $appExe = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
-          $sidecar = Get-ChildItem "$releaseDir/valovault-backend.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          # build.rs already placed the backend in binaries/ with the full triple.
+          # Copy it to the release dir so portable.exe can find both app + backend.
+          $binariesDir = "frontend/src-tauri/binaries"
+          $releaseDir  = "frontend/src-tauri/target/release"
+          Copy-Item "$binariesDir/valovault-backend-x86_64-pc-windows-msvc.exe" "$releaseDir/valovault-backend.exe" -Force
+          $appExe   = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
+          $sidecar  = Get-ChildItem "$releaseDir/valovault-backend.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (!$appExe -or !$sidecar) { throw "Portable app or sidecar executable not found." }
-          $env:VV_APP_EXE = $appExe.FullName
+          $env:VV_APP_EXE    = $appExe.FullName
           $env:VV_BACKEND_EXE = $sidecar.FullName
-          $env:VV_VERSION = $version
+          $env:VV_VERSION     = $version
           rustc frontend/src-tauri/portable.rs -O -o VantaVault-portable.exe
           if (!(Test-Path VantaVault-portable.exe)) { throw "Portable exe not created." }
           gh release upload "v$version" VantaVault-portable.exe --repo akawazak/valo-project --clobber
