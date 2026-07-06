@@ -30,6 +30,11 @@ jobs:
         with:
           node-version: lts/*
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+
       - name: Install Linux dependencies
         if: matrix.settings.platform == 'ubuntu-22.04'
         run: |
@@ -100,13 +105,14 @@ jobs:
         run: |
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (!$version) { Write-Host "No app version output, skipping portable upload."; exit 0 }
-          # build.rs already placed the backend in binaries/ with the full triple.
-          # Copy it to the release dir so portable.exe can find both app + backend.
           $binariesDir = "frontend/src-tauri/binaries"
           $releaseDir  = "frontend/src-tauri/target/release"
-          Copy-Item "$binariesDir/valovault-backend-x86_64-pc-windows-msvc.exe" "$releaseDir/valovault-backend.exe" -Force
+          $builtSidecar = Get-ChildItem "$binariesDir/valovault-backend*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$builtSidecar) { throw "Built backend sidecar not found in $binariesDir." }
+          Copy-Item $builtSidecar.FullName "$releaseDir/valovault-backend.exe" -Force
+          Copy-Item $builtSidecar.FullName "$releaseDir/valovault-backend-x86_64-pc-windows-msvc.exe" -Force
           $appExe   = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
-          $sidecar  = Get-ChildItem "$releaseDir/valovault-backend.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $sidecar  = Get-ChildItem "$releaseDir/valovault-backend*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (!$appExe -or !$sidecar) { throw "Portable app or sidecar executable not found." }
           $env:VV_APP_EXE    = $appExe.FullName
           $env:VV_BACKEND_EXE = $sidecar.FullName

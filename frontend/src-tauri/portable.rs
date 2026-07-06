@@ -4,6 +4,7 @@ use std::{env, fs, io, path::Path, process::Command};
 
 const APP: &[u8] = include_bytes!(env!("VV_APP_EXE"));
 const BACKEND: &[u8] = include_bytes!(env!("VV_BACKEND_EXE"));
+const BACKEND_TRIPLE_NAME: &str = "valovault-backend-x86_64-pc-windows-msvc.exe";
 
 fn write_if_changed(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if !matches!(fs::read(path), Ok(existing) if existing == bytes) {
@@ -22,6 +23,7 @@ fn run() -> io::Result<()> {
     let app = dir.join("VantaVault.exe");
     write_if_changed(&app, APP)?;
     write_if_changed(&dir.join("valovault-backend.exe"), BACKEND)?;
+    write_if_changed(&dir.join(BACKEND_TRIPLE_NAME), BACKEND)?;
     Command::new(app).current_dir(dir).spawn()?.wait()?;
     Ok(())
 }
