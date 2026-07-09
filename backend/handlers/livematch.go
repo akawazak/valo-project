@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"backend/tracking"
 	"fmt"
 	"net/http"
 	"strings"
@@ -31,6 +32,8 @@ type LivePlayer struct {
 	IsLocal         bool   `json:"isLocal"`
 	CompetitiveTier int    `json:"competitiveTier"`
 	RankedRating    int    `json:"rankedRating"`
+	PeakTier        int    `json:"peakTier,omitempty"`
+	PeakRankName    string `json:"peakRankName,omitempty"`
 	PartyGroup      string `json:"partyGroup,omitempty"`
 	TeamID          string `json:"teamId,omitempty"`
 }
@@ -103,6 +106,7 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 			response := h.buildPregameResponse(val, preMatch)
 			h.markCurrentParty(val, &response)
 			h.enrichFriendNames(val, source, &response)
+			h.enrichLiveRanks(&response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			return response
@@ -118,6 +122,7 @@ func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMa
 			response := h.buildCoregameResponse(val, coreMatch)
 			h.markCurrentParty(val, &response)
 			h.enrichFriendNames(val, source, &response)
+			h.enrichLiveRanks(&response)
 			h.fillLiveQueueID(val, &response)
 			response.Source = source
 			return response
@@ -198,6 +203,48 @@ func markKnownPartyGroups(response *LiveMatchResponse, groups map[string]string)
 		for _, player := range team {
 			if player != nil && player.PartyGroup == "" {
 				player.PartyGroup = groups[strings.ToLower(player.Puuid)]
+			}
+		}
+	}
+}
+
+func (h *Handler) enrichLiveRanks(response *LiveMatchResponse) {
+	if response == nil {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player == nil || player.Puuid == "" {
+				continue
+			}
+			key := strings.ToLower(player.Puuid)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			overview, err := tracking.GetOverview(db, player.Puuid)
+			if err != nil || overview == nil {
+				continue
+			}
+			for _, updateTeam := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+				for _, update := range updateTeam {
+					if update == nil || !strings.EqualFold(update.Puuid, player.Puuid) {
+						continue
+					}
+					if update.CompetitiveTier <= 0 && overview.CurrentRank.CompetitiveTier > 0 {
+						update.CompetitiveTier = overview.CurrentRank.CompetitiveTier
+						update.RankedRating = overview.CurrentRank.RankedRating
+					}
+					if overview.PeakRank.CompetitiveTier > 0 {
+						update.PeakTier = overview.PeakRank.CompetitiveTier
+						update.PeakRankName = overview.PeakRank.TierName
+					}
+				}
 			}
 		}
 	}

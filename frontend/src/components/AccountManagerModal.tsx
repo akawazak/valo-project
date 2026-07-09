@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { accountRequiresManualRepair, RiotAccount } from "@/lib/types";
+import { buildAuthDebugSnapshot } from "@/lib/authDebug";
 
 function relativeTime(timestamp?: number) {
     if (!timestamp) return "never";
@@ -54,6 +55,7 @@ export default function AccountManagerModal({
     const [bulkCurrentAccount, setBulkCurrentAccount] = useState("");
     const [bulkSummary, setBulkSummary] = useState("");
     const [displayOrder, setDisplayOrder] = useState<string[]>([]);
+    const [authDebugCopied, setAuthDebugCopied] = useState(false);
     const bulkCancelRef = useRef(false);
     const refreshTimeoutMs = 30_000;
     const bulkAttemptIntervalMs = 2_000;
@@ -192,6 +194,18 @@ export default function AccountManagerModal({
         }
     };
 
+    const handleCopyAuthDebug = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        const snapshot = buildAuthDebugSnapshot(accounts, activeAccount);
+        try {
+            await navigator.clipboard.writeText(snapshot);
+            setAuthDebugCopied(true);
+            window.setTimeout(() => setAuthDebugCopied(false), 2000);
+        } catch (err) {
+            console.error("Failed to copy auth debug snapshot:", err);
+        }
+    };
+
     // Keep rows stable while this popup is open. Favorites are persisted
     // immediately, then appear pinned the next time the popup opens.
     const accountByPuuid = new Map(accounts.map((account) => [account.puuid, account]));
@@ -202,6 +216,8 @@ export default function AccountManagerModal({
     const sortedAccounts = effectiveOrder
         .map((puuid) => accountByPuuid.get(puuid))
         .filter((account): account is RiotAccount => Boolean(account));
+    const expiredCount = renewableAccounts.length;
+    const readyCount = Math.max(0, accounts.length - expiredCount);
 
     return (
         <div className="settings-modal-overlay" onClick={onClose}>
@@ -211,8 +227,15 @@ export default function AccountManagerModal({
                 </button>
 
                 <div className="account-manager-header">
-                    <div className="tactical-kicker">// PROFILE & ACCOUNTS</div>
-                    <h2 className="account-manager-title">Account Manager</h2>
+                    <div>
+                        <div className="tactical-kicker">// PROFILE & ACCOUNTS</div>
+                        <h2 className="account-manager-title">Account Manager</h2>
+                    </div>
+                    <div className="account-manager-summary">
+                        <span><strong>{accounts.length}</strong> connected</span>
+                        <span><strong>{readyCount}</strong> ready</span>
+                        <span><strong>{expiredCount}</strong> need renewal</span>
+                    </div>
                 </div>
 
                 <div className="account-manager-body">
@@ -229,7 +252,7 @@ export default function AccountManagerModal({
                                 ? `Refreshing (${bulkProgressCurrent}/${bulkProgressTotal})`
                                 : renewableAccounts.length
                                     ? `↻ Renew Access (${renewableAccounts.length})`
-                                    : "Access current"}
+                                    : "All access current"}
                         </button>
                         {isBulkRefreshing && (
                             <button
@@ -248,7 +271,15 @@ export default function AccountManagerModal({
                                 onClose();
                             }}
                         >
-                            + Add Account
+                            Add Account
+                        </button>
+                        <button
+                            type="button"
+                            className="btn-tactical btn-tactical-secondary btn-tactical-sm"
+                            onClick={handleCopyAuthDebug}
+                            title="Copies a sanitized auth snapshot without tokens or cookies"
+                        >
+                            {authDebugCopied ? "Copied debug" : "Copy Auth Debug"}
                         </button>
                     </div>
 

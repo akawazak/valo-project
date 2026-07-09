@@ -1,8 +1,9 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { accountRequiresManualRepair, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount } from '@/lib/types';
-import { appFetch, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl } from '@/services/api';
+import { accountRequiresManualRepair, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount, FlexAsset } from '@/lib/types';
+import { appFetch, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl, getFlexes } from '@/services/api';
+import { pushAuthDebugEvent } from '@/lib/authDebug';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
@@ -73,10 +74,22 @@ async function completeLoginFlow(
     const submitTokenUrl = (await import("@/services/api")).submitTokenUrl;
 
     // 1. Exchange the redirect URL for an access token + entitlements.
+    pushAuthDebugEvent("login.exchange", null, { outcome: "start", extra: { hasRedirectUrl: Boolean(redirectUrl) } });
     const res = await submitTokenUrl(redirectUrl);
     if (!res?.puuid || !res?.access_token || !res?.entitlements_token) {
+        pushAuthDebugEvent("login.exchange", null, { outcome: "failed", message: "Token exchange returned an incomplete Riot session." });
         throw new Error("Token exchange did not return a valid Riot session.");
     }
+    pushAuthDebugEvent("login.exchange", {
+        puuid: res.puuid,
+        accessToken: res.access_token,
+        entitlementsToken: res.entitlements_token,
+        expiresAt: Date.now() + Math.max(0, (res.expires_in || 3600) - 60) * 1000,
+        region: res.region,
+        gameName: res.game_name || "Unknown",
+        tagLine: res.tag_line || "",
+        sessionId: ctx.sessionId,
+    }, { outcome: "success" });
 
     const sessionId = ctx.sessionId;
     const existingAccount = getStoredAccounts().find((account) => account.puuid === res.puuid);
@@ -90,6 +103,7 @@ async function completeLoginFlow(
     let ssid: string | undefined;
     if (sessionId) {
         try {
+            pushAuthDebugEvent("login.cookie_read", { puuid: res.puuid, sessionId }, { outcome: "start", extra: { capturedCookieEvent: hasSsidCookie(ctx.capturedCookies) } });
             const raw = hasSsidCookie(ctx.capturedCookies)
                 ? ctx.capturedCookies
                 : await invoke<string | null>("get_ssid_cookie", {
@@ -97,8 +111,10 @@ async function completeLoginFlow(
                       waitMs: 15000,
                   });
             ssid = raw ?? undefined;
+            pushAuthDebugEvent("login.cookie_read", { puuid: res.puuid, sessionId, ssid }, { outcome: hasSsidCookie(ssid) ? "success" : "failed", code: hasSsidCookie(ssid) ? undefined : "ssid_missing" });
         } catch (err) {
             console.error("Failed to read ssid cookie:", err);
+            pushAuthDebugEvent("login.cookie_read", { puuid: res.puuid, sessionId }, { outcome: "failed", code: "cookie_read_error", message: err instanceof Error ? err.message : String(err) });
             // Non-fatal — we still have OAuth tokens. Silent reauth just
             // won't work until the user manually signs in again.
         }
@@ -108,6 +124,7 @@ async function completeLoginFlow(
     //    copying it after close races the browser process and can silently lose
     //    cookies during rapid multi-account login.
     await invoke("claim_login_session", { sessionId });
+    pushAuthDebugEvent("login.session_claimed", { puuid: res.puuid, sessionId, ssid }, { outcome: "success" });
 
     const finalSsid: string | undefined =
         ssid || (existingAccount && !accountRequiresManualRepair(existingAccount) ? existingAccount.ssid : undefined);
@@ -239,6 +256,7 @@ interface DataContextType {
     ownedBuddyIDs: OwnedBuddy[];
     bundles: BundleInfo[];
     sprays: SprayAsset[];
+    flexes: FlexAsset[];
     playerCards: PlayerCardAsset[];
     playerTitles: PlayerTitleAsset[];
     ownedSprayIDs: string[];
@@ -320,6 +338,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [ownedBuddyIDs, setOwnedBuddyIDs] = useState<OwnedBuddy[]>([]);
     const [bundles, setBundles] = useState<BundleInfo[]>([]);
     const [sprays, setSprays] = useState<SprayAsset[]>([]);
+    const [flexes, setFlexes] = useState<FlexAsset[]>([]);
     const [playerCards, setPlayerCards] = useState<PlayerCardAsset[]>([]);
     const [playerTitles, setPlayerTitles] = useState<PlayerTitleAsset[]>([]);
     const [ownedSprayIDs, setOwnedSprayIDs] = useState<string[]>([]);
@@ -385,13 +404,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         staticLoadPromiseRef.current = (async () => {
             try {
-                const [agentsData, weaponsData, gunBuddiesData, contentTiersData, bundlesData, spraysData, cardsData, titlesData] = await Promise.all([
+                const [agentsData, weaponsData, gunBuddiesData, contentTiersData, bundlesData, spraysData, flexesData, cardsData, titlesData] = await Promise.all([
                     getAgents(),
                     getWeapons(),
                     getGunBuddies(),
                     getContentTiers(),
                     getBundles(),
                     getSprays(),
+                    getFlexes(),
                     getPlayerCards(),
                     getPlayerTitles(),
                 ]);
@@ -404,6 +424,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 setContentTiers(contentTiersData);
                 setBundles(bundlesData);
                 setSprays(spraysData);
+                setFlexes(flexesData);
                 setPlayerCards(cardsData);
                 setPlayerTitles(titlesData);
                 setAgents(agentsData.filter(a => a.isBaseContent));
@@ -582,13 +603,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
         visible: boolean = false,
         allowPopup: boolean = true,
     ): Promise<boolean> {
+        pushAuthDebugEvent("refresh.start", acc, { outcome: "start", allowPopup, visible });
         const sessionKey = acc.sessionId || `session_${acc.puuid}`;
         if (loginInFlightRef.current) {
             // A brand-new login is in flight — don't compete with it for the
             // WebView lock.
+            pushAuthDebugEvent("refresh.blocked", acc, { outcome: "skipped", code: "login_in_flight" });
             return false;
         }
         if (globalRefreshInFlightRef.current || refreshInFlightRef.current.has(sessionKey)) {
+            pushAuthDebugEvent("refresh.wait", acc, { outcome: "info", code: "refresh_in_flight" });
             const retry = await new Promise<boolean>((resolve) => {
                 refreshWaitersRef.current.push({ sessionKey, resolve });
             });
@@ -618,6 +642,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         const recordFailure = (message: string, code: string = "temporary") => {
             const safeMessage = String(message || "Account renewal failed.").replace(/\s+/g, " ").slice(0, 240);
+            pushAuthDebugEvent("refresh.failure_recorded", acc, { outcome: "failed", code, message: safeMessage });
             const updated = getStoredAccounts().map((account) => account.puuid === acc.puuid ? {
                 ...account,
                 lastRefreshAttemptAt: Date.now(),
@@ -652,6 +677,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // token without opening a popup.
         if (acc.ssid) {
             try {
+                pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "start" });
                 const res = await appFetch("http://localhost:31719/v1/auth/ssid-reauth", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -665,6 +691,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     if (data.access_token) {
                         if (data.puuid && data.puuid.toLowerCase() !== acc.puuid.toLowerCase()) {
                             failureCode = "account_mismatch";
+                            pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "failed", code: failureCode, message: "Saved Riot session belongs to a different account." });
                             throw new Error("Saved Riot session belongs to a different account.");
                         }
                         const updatedAcc: RiotAccount = {
@@ -692,6 +719,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             setIsTokenExpired(false);
                             setStorefrontRefreshKey(k => k + 1);
                         }
+                        pushAuthDebugEvent("refresh.ssid_reauth", updatedAcc, { outcome: "success" });
                         releaseLock();
                         return true;
                     }
@@ -707,12 +735,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         failureCode = "temporary";
                     }
                 }
+                pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "failed", code: failureCode, message: failureReason });
             } catch (error) {
                 if (!cancelled) {
                     failureReason = error instanceof Error ? error.message : String(error || failureReason);
                     if (failureCode !== "account_mismatch") failureCode = "temporary";
+                    pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "failed", code: failureCode, message: failureReason });
                 }
             }
+        } else {
+            pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "skipped", code: "missing_cookies" });
         }
         if (cancelled) return false;
         if (!allowPopup) {
@@ -726,6 +758,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const { auth_url } = await getAuthUrl();
             const { invoke } = await import("@tauri-apps/api/core");
             const { listen } = await import("@tauri-apps/api/event");
+            pushAuthDebugEvent("refresh.popup", acc, { outcome: "start", allowPopup, visible });
 
             return new Promise<boolean>((resolve) => {
                 let resolved = false;
@@ -770,6 +803,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     if (event.payload?.sessionId !== sessionId) return;
                     if (hasSsidCookie(event.payload.cookies)) {
                         capturedCookies = event.payload.cookies;
+                        pushAuthDebugEvent("refresh.popup_cookie_event", acc, { outcome: "success" });
                     }
                 }).then(fn => { unlistenCookiesFn = fn; });
 
@@ -780,10 +814,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                     try {
                         const redirectUrl = event.payload.url;
+                        pushAuthDebugEvent("refresh.popup_redirect", acc, { outcome: "success" });
                         const res = await submitTokenUrl(redirectUrl);
                         if (resolved) return;
                         if (res.puuid.toLowerCase() !== acc.puuid.toLowerCase()) {
                             failureCode = "account_mismatch";
+                            pushAuthDebugEvent("refresh.popup_exchange", acc, { outcome: "failed", code: failureCode, message: "Signed into a different Riot account." });
                             throw new Error("You signed into a different Riot account. Refresh the selected account instead.");
                         }
 
@@ -809,6 +845,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
                         saveStoredAccounts(updated);
                         setAccounts(updated);
+                        pushAuthDebugEvent("refresh.popup_exchange", updatedAcc, { outcome: "success" });
                         if (activeAccount?.puuid === acc.puuid) {
                             activateAccount(updatedAcc);
                             setActiveAccount(updatedAcc);
@@ -844,6 +881,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             : await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
                         if (resolved) return;
                         const finalAcc = { ...updatedAcc, ssid: hasSsidCookie(raw) ? raw : updatedAcc.ssid };
+                        pushAuthDebugEvent("refresh.popup_cookie_read", finalAcc, { outcome: hasSsidCookie(raw) ? "success" : "failed", code: hasSsidCookie(raw) ? undefined : "ssid_missing" });
                         const finalUpdated = getStoredAccounts().map(a => a.puuid === acc.puuid ? finalAcc : a);
                         saveStoredAccounts(finalUpdated);
                         setAccounts(finalUpdated);
@@ -868,12 +906,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 listen<LoginSessionPayload>("riot-login-closed-v2", (event) => {
                     if (event.payload?.sessionId !== sessionId) return;
                     if (resolved) return;
+                    pushAuthDebugEvent("refresh.popup_closed", acc, { outcome: "failed", code: "cancelled" });
                     recordFailure("Sign-in window was closed before renewal completed.", "cancelled");
                     finish(false);
                 }).then(fn => { unlistenCloseFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
                     console.error("Failed to open login window:", err);
+                    pushAuthDebugEvent("refresh.popup_open", acc, { outcome: "failed", message: err instanceof Error ? err.message : String(err || "Failed to open Riot sign-in.") });
                     recordFailure(err instanceof Error ? err.message : String(err || "Failed to open Riot sign-in."));
                     finish(false);
                 });
@@ -1216,7 +1256,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return (
         <DataContext.Provider value={{
             agents, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
-            sprays, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
+            sprays, flexes, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,
             startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight,

@@ -9,13 +9,14 @@ import (
 )
 
 type Settings struct {
-	AutoSelectAgent    bool `json:"autoSelectAgent"`
-	UseLocalSso        bool `json:"useLocalSso"`
-	AutoSyncMatches    bool `json:"autoSyncMatches"`
-	MatchRetentionDays int  `json:"matchRetentionDays"`
-	ShowOfflineFriends bool `json:"showOfflineFriends"`
-	ShowLiveMatch      bool `json:"showLiveMatch"`
-	ShowPartyWidget    bool `json:"showPartyWidget"`
+	AutoSelectAgent      bool `json:"autoSelectAgent"`
+	UseLocalSso          bool `json:"useLocalSso"`
+	AutoSyncMatches      bool `json:"autoSyncMatches"`
+	MatchRetentionDays   int  `json:"matchRetentionDays"`
+	ShowOfflineFriends   bool `json:"showOfflineFriends"`
+	ShowLiveMatch        bool `json:"showLiveMatch"`
+	ShowPartyWidget      bool `json:"showPartyWidget"`
+	ShowUnownedCosmetics bool `json:"showUnownedCosmetics"`
 }
 
 func (s *Settings) Marshal() ([]byte, error) {
@@ -23,13 +24,14 @@ func (s *Settings) Marshal() ([]byte, error) {
 }
 
 var DefaultSettings = &Settings{
-	AutoSelectAgent:    true,
-	UseLocalSso:        false,
-	AutoSyncMatches:    true,
-	MatchRetentionDays: 365,
-	ShowOfflineFriends: false,
-	ShowLiveMatch:      true,
-	ShowPartyWidget:    true,
+	AutoSelectAgent:      true,
+	UseLocalSso:          false,
+	AutoSyncMatches:      true,
+	MatchRetentionDays:   365,
+	ShowOfflineFriends:   false,
+	ShowLiveMatch:        true,
+	ShowPartyWidget:      true,
+	ShowUnownedCosmetics: false,
 }
 
 func Get() (*Settings, error) {

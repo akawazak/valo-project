@@ -1,4 +1,4 @@
-import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot, RiotAccount } from '@/lib/types';
+import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot, RiotAccount, ExpressionSlot, FlexAsset } from '@/lib/types';
 import { LocalClientError } from '@/lib/errors';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
@@ -198,6 +198,8 @@ export async function getContentTiers(): Promise<ContentTier[]> {
 export type PlayerLoadoutData = {
     loadout: Record<string, LoadoutItemV1>;
     sprays: SpraySlot[];
+    flexes: ExpressionSlot[];
+    expressions: ExpressionSlot[];
     identity?: IdentityV1;
 };
 
@@ -208,9 +210,16 @@ export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
             throw new Error('Failed to fetch player loadout. The local client might not be running or there was a server error.');
         }
         const data = await response.json();
+        const expressions = (data.expressions ?? []) as ExpressionSlot[];
+        const [sprayCatalog, flexCatalog] = await Promise.all([getSprays(), getFlexes()]);
+        const sprayIds = new Set(sprayCatalog.map((spray) => spray.uuid.toLowerCase()));
+        const flexIds = new Set(flexCatalog.map((flex) => flex.uuid.toLowerCase()));
         return {
             loadout: (data.loadout ?? data) as Record<string, LoadoutItemV1>,
-            sprays: (data.sprays ?? []) as SpraySlot[],
+            sprays: ((data.sprays ?? []) as SpraySlot[])
+                .filter((slot) => sprayIds.has(slot.sprayId.toLowerCase())),
+            flexes: expressions.filter((expr) => flexIds.has(expr.assetId.toLowerCase())),
+            expressions,
             identity: data.identity as IdentityV1 | undefined,
         };
     } catch {
@@ -345,6 +354,8 @@ export interface ApplyLoadoutRequest {
     loadout: Record<string, LoadoutItemV1>;
     identity?: IdentityV1;
     sprays?: SpraySlot[];
+    flexes?: ExpressionSlot[];
+    expressions?: ExpressionSlot[];
 }
 
 export async function applyLoadout(request: ApplyLoadoutRequest): Promise<void> {
@@ -1133,6 +1144,8 @@ export interface LivePlayer {
     isLocal: boolean;
     competitiveTier: number;
     rankedRating: number;
+    peakTier?: number;
+    peakRankName?: string;
     /** Opaque grouping only; raw Riot party IDs are never returned. */
     partyGroup?: string;
     teamId?: string;
@@ -1149,6 +1162,30 @@ export async function getLiveMatch(): Promise<LiveMatchResponse> {
     } catch (err) {
         return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
     }
+}
+
+export interface ValorantPingTarget {
+    region: string;
+    label: string;
+    host: string;
+    port: string;
+    ms?: number;
+    ok: boolean;
+    error?: string;
+}
+
+export interface ValorantPingResponse {
+    checkedAt: number;
+    targets: ValorantPingTarget[];
+}
+
+export async function getValorantPing(): Promise<ValorantPingResponse> {
+    const response = await appFetch(LOCAL_URL + '/valorant-ping');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to run VALORANT ping test.');
+    }
+    return response.json();
 }
 
 export interface LivePlayerStats {
@@ -1353,6 +1390,16 @@ export interface SocialPresence {
     cardId?: string;
     platform?: string;
     partyGroup?: string;
+}
+
+export async function getFlexes(): Promise<FlexAsset[]> {
+    try {
+        const data = await fetchJsonWithTimeout<{ data: FlexAsset[] }>('https://valorant-api.com/v1/flex');
+        return data.data as FlexAsset[];
+    } catch (error) {
+        console.error(error);
+        return [];
+    }
 }
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {

@@ -208,6 +208,13 @@ func (t *Ticker) Start() {
 				sprays = selectedPreset.Sprays
 			}
 
+			expressions := append([]presets.ExpressionSlotV1{}, selectedPreset.Expressions...)
+			expressions = append(expressions, selectedPreset.Flexes...)
+			if len(selectedVariant.Expressions) > 0 || len(selectedVariant.Flexes) > 0 {
+				expressions = append([]presets.ExpressionSlotV1{}, selectedVariant.Expressions...)
+				expressions = append(expressions, selectedVariant.Flexes...)
+			}
+
 			originalLoadout, err := t.Val.GetPlayerLoadout()
 			if err != nil {
 				slog.Error("error when saving original loadout", "err", err)
@@ -220,7 +227,7 @@ func (t *Ticker) Start() {
 				}
 			}
 
-			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays); err != nil {
+			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays, expressions); err != nil {
 				slog.Error("error when applying", "err", err)
 				if t.originalLoadout == nil {
 					_ = presets.ClearRestoreSnapshot(t.Val.Player.Uuid)

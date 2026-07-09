@@ -10,7 +10,9 @@ export function exportPreset(preset: Preset): string {
         loadout: preset.loadout,
         agents: preset.agents || [],
         identity: preset.identity,
-        sprays: preset.sprays || []
+        sprays: preset.sprays || [],
+        flexes: preset.flexes || [],
+        expressions: preset.expressions || [],
     };
     const json = JSON.stringify(exportData);
     
@@ -37,7 +39,9 @@ export function importPreset(base64Str: string): Omit<Preset, 'uuid'> {
             loadout: parsed.loadout || {},
             agents: parsed.agents || [],
             identity: parsed.identity,
-            sprays: parsed.sprays || []
+            sprays: parsed.sprays || [],
+            flexes: parsed.flexes || [],
+            expressions: parsed.expressions || [],
         };
     } catch (e) {
         console.error('Failed to parse preset import string:', e);

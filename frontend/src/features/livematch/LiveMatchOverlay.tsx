@@ -51,6 +51,12 @@ export default function LiveMatchOverlay() {
     const discordLocalAgentId = match?.allyTeam?.find((player) => player.isLocal)?.agentId || "";
     const discordAgentName = discordLocalAgentId ? agentCache[discordLocalAgentId.toLowerCase()]?.name || "" : "";
     const discordMapName = match?.mapId ? mapCache[match.mapId.toLowerCase()]?.name || "" : "";
+    const discordPartySize = useMemo(() => {
+        const allPlayers = [...(match?.allyTeam || []), ...(match?.enemyTeam || [])];
+        const localPlayer = allPlayers.find((player) => player.isLocal);
+        if (!localPlayer?.partyGroup) return 0;
+        return partyGroupSizes(allPlayers).get(localPlayer.partyGroup) || 0;
+    }, [match?.allyTeam, match?.enemyTeam]);
 
     useEffect(() => {
         setSelectedPlayer(null);
@@ -65,12 +71,15 @@ export default function LiveMatchOverlay() {
                 mapName: discordMapName,
                 agentName: discordAgentName,
                 timeLeft: match?.timeLeft || 0,
+                partySize: discordPartySize,
+                allyCount: match?.allyTeam?.length || 0,
+                enemyCount: match?.enemyTeam?.length || 0,
             },
         }));
         return () => {
             window.dispatchEvent(new CustomEvent("vantavault:match-phase", { detail: { phase: "none", queueId: "" } }));
         };
-    }, [discordAgentName, discordMapName, match?.phase, match?.queueId, match?.timeLeft]);
+    }, [discordAgentName, discordMapName, discordPartySize, match?.allyTeam?.length, match?.enemyTeam?.length, match?.phase, match?.queueId, match?.timeLeft]);
 
     // ---- Local countdown timer ----
     // The backend only emits timeLeft at each 5s poll. We capture the
@@ -320,6 +329,7 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
+                                peakTier={tierCache[player.peakTier || 0]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
@@ -343,6 +353,7 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
+                                peakTier={tierCache[player.peakTier || 0]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
@@ -359,6 +370,7 @@ export default function LiveMatchOverlay() {
                     agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
                     cardIcon={playerCardIcons.get(selectedPlayer.cardId?.toLowerCase())}
                     tier={tierCache[selectedPlayer.competitiveTier]}
+                    peakTier={tierCache[selectedPlayer.peakTier || 0]}
                     weapons={weapons}
                     onClose={() => setSelectedPlayer(null)}
                     onViewProfile={(profile) => {
@@ -408,6 +420,7 @@ function PlayerCard({
     agent,
     cardIcon,
     tier,
+    peakTier,
     partySize,
     partyColor,
     partyGroup,
@@ -417,6 +430,7 @@ function PlayerCard({
     agent?: { name: string; icon: string; full: string };
     cardIcon?: string;
     tier?: { name: string; icon: string };
+    peakTier?: { name: string; icon: string };
     partySize?: number;
     partyColor?: string;
     partyGroup?: string;
@@ -426,6 +440,8 @@ function PlayerCard({
     const isSelecting = player.selectionState === "selected";
     const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
+    const peakName = player.peakRankName || peakTier?.name || "";
+    const peakShort = peakName ? peakName.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : "";
     const displayName = privatePlayerLabel(player, agent?.name);
     const partyPillText = partySize && partySize > 1
         ? partyPillLabel(partySize, partyGroup, player.isLocal)
@@ -476,6 +492,12 @@ function PlayerCard({
                             <div className="rank-rating-text">
                                 <span className="tier-name">{rankShort}</span>
                                 <span className="rr-val">{player.rankedRating} RR</span>
+                                {player.peakTier && peakShort && (
+                                    <span className="peak-rank-mini">
+                                        {peakTier?.icon && <img src={peakTier.icon} alt="" aria-hidden="true" />}
+                                        Peak {peakShort}
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>
@@ -500,6 +522,7 @@ function LivePlayerModal({
     agent,
     cardIcon,
     tier,
+    peakTier,
     weapons,
     onClose,
     onViewProfile,
@@ -509,6 +532,7 @@ function LivePlayerModal({
     agent?: { name: string; icon: string; full: string };
     cardIcon?: string;
     tier?: { name: string; icon: string };
+    peakTier?: { name: string; icon: string };
     weapons: Weapon[];
     onClose: () => void;
     onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
@@ -592,6 +616,7 @@ function LivePlayerModal({
     }, [equippedSkins, weapons]);
 
     const rankName = tier?.name || (player.competitiveTier > 0 ? `Tier ${player.competitiveTier}` : "Rank unavailable");
+    const peakRankName = player.peakRankName || peakTier?.name || (player.peakTier ? `Tier ${player.peakTier}` : "");
     const selection = player.selectionState === "locked"
         ? "Locked"
         : player.selectionState === "selected"
@@ -669,6 +694,7 @@ function LivePlayerModal({
                         <small>{equippedSkins.length ? `${equippedSkins.length} equipped skins` : showLoadout && loadoutState.status === "loading" ? "Loading live cosmetics" : "View equipped weapons"}</small>
                     </button>
                     <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
+                    <InfoTile label="Peak Rank" value={peakRankName || "Unavailable"} detail="Highest cached rank" icon={peakTier?.icon} />
                     <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
                 </div>
 

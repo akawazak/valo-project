@@ -29,11 +29,17 @@ export function accountRequiresManualRepair(account: RiotAccount) {
 export interface IdentityV1 {
     playerCardId: string;
     playerTitleId: string;
+    accountLevel?: number;
 }
 
 export interface SpraySlot {
     equipSlotId: string;
     sprayId: string;
+}
+
+export interface ExpressionSlot {
+    typeId: string;
+    assetId: string;
 }
 
 export interface Preset {
@@ -45,6 +51,8 @@ export interface Preset {
     agents?: string[];
     identity?: IdentityV1;
     sprays?: SpraySlot[];
+    flexes?: ExpressionSlot[];
+    expressions?: ExpressionSlot[];
 }
 
 export function isVariant(p: Preset | undefined | null) {
@@ -212,4 +220,12 @@ export interface PlayerTitleAsset {
     displayName: string;
     titleText: string;
     isHiddenIfNotOwned: boolean;
+}
+
+export interface FlexAsset {
+    uuid: string;
+    displayName: string;
+    displayNameAllCaps?: string;
+    displayIcon: string;
+    assetPath?: string;
 }

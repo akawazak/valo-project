@@ -11,30 +11,37 @@ interface IdentitySelectorProps {
     onSelectCard: (uuid: string) => void;
     onSelectTitle: (uuid: string) => void;
     compact?: boolean;
+    showUnownedCosmetics?: boolean;
 }
 
-export default function IdentitySelector({ currentCardId, currentTitleId, onSelectCard, onSelectTitle, compact }: IdentitySelectorProps) {
+export default function IdentitySelector({ currentCardId, currentTitleId, onSelectCard, onSelectTitle, compact, showUnownedCosmetics = false }: IdentitySelectorProps) {
     const { playerCards, playerTitles, ownedCardIDs, ownedTitleIDs } = useData();
     const [cardSearch, setCardSearch] = useState('');
     const [titleSearch, setTitleSearch] = useState('');
     const [activeTab, setActiveTab] = useState<'cards' | 'titles'>('cards');
 
     const displayCards = useMemo(() => {
-        const owned = playerCards.filter(c => ownedCardIDs.map(id => id.toLowerCase()).includes(c.uuid.toLowerCase()));
-        const pool = owned.length > 0 ? owned : playerCards;
+        const ownedSet = new Set(ownedCardIDs.map(id => id.toLowerCase()));
+        const current = currentCardId.toLowerCase();
+        const pool = showUnownedCosmetics
+            ? playerCards
+            : playerCards.filter(c => ownedSet.has(c.uuid.toLowerCase()) || c.uuid.toLowerCase() === current);
         if (!cardSearch) return pool;
         return pool.filter(c => c.displayName.toLowerCase().includes(cardSearch.toLowerCase()));
-    }, [playerCards, ownedCardIDs, cardSearch]);
+    }, [playerCards, ownedCardIDs, currentCardId, cardSearch, showUnownedCosmetics]);
 
     const displayTitles = useMemo(() => {
-        const owned = playerTitles.filter(t => ownedTitleIDs.map(id => id.toLowerCase()).includes(t.uuid.toLowerCase()));
-        const pool = owned.length > 0 ? owned : playerTitles;
+        const ownedSet = new Set(ownedTitleIDs.map(id => id.toLowerCase()));
+        const current = currentTitleId.toLowerCase();
+        const pool = showUnownedCosmetics
+            ? playerTitles
+            : playerTitles.filter(t => ownedSet.has(t.uuid.toLowerCase()) || t.uuid.toLowerCase() === current);
         if (!titleSearch) return pool;
         return pool.filter(t =>
             t.displayName.toLowerCase().includes(titleSearch.toLowerCase()) ||
             (t.titleText && t.titleText.toLowerCase().includes(titleSearch.toLowerCase()))
         );
-    }, [playerTitles, ownedTitleIDs, titleSearch]);
+    }, [playerTitles, ownedTitleIDs, currentTitleId, titleSearch, showUnownedCosmetics]);
 
     const selectedCard = useMemo(() => {
         return playerCards.find(c => c.uuid.toLowerCase() === currentCardId.toLowerCase());
@@ -121,7 +128,9 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                             );
                         })}
                         {displayCards.length === 0 && (
-                            <div className="col-12 py-4 text-center text-muted font-monospace">No Player Cards Found</div>
+                            <div className="col-12 py-4 text-center text-muted font-monospace">
+                                {showUnownedCosmetics ? "No Player Cards Found" : "No owned player cards found. Enable locked cosmetics in Settings to browse the full catalog."}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -164,7 +173,9 @@ export default function IdentitySelector({ currentCardId, currentTitleId, onSele
                             );
                         })}
                         {displayTitles.length === 0 && (
-                            <div className="py-4 text-center text-muted font-monospace">No Player Titles Found</div>
+                            <div className="py-4 text-center text-muted font-monospace">
+                                {showUnownedCosmetics ? "No Player Titles Found" : "No owned player titles found. Enable locked cosmetics in Settings to browse the full catalog."}
+                            </div>
                         )}
                     </div>
                 </div>

@@ -999,6 +999,25 @@
   color: var(--text-secondary);
 }
 
+.peak-rank-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+  color: rgba(245, 240, 232, 0.72);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.peak-rank-mini img {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+
 .unranked-placeholder {
   max-width: 112px;
   overflow: hidden;

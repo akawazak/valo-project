@@ -380,15 +380,22 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 		SprayID     string `json:"sprayId"`
 	}
 
+	type ExpressionSlotResp struct {
+		TypeID  string `json:"typeId"`
+		AssetID string `json:"assetId"`
+	}
+
 	type PlayerLoadoutResp struct {
-		Loadout  map[string]presets.LoadoutItemV1 `json:"loadout"`
-		Sprays   []SpraySlotResp                  `json:"sprays"`
-		Identity *presets.IdentityV1              `json:"identity,omitempty"`
+		Loadout     map[string]presets.LoadoutItemV1 `json:"loadout"`
+		Sprays      []SpraySlotResp                  `json:"sprays"`
+		Expressions []ExpressionSlotResp             `json:"expressions"`
+		Identity    *presets.IdentityV1              `json:"identity,omitempty"`
 	}
 
 	resp := &PlayerLoadoutResp{
-		Loadout: make(map[string]presets.LoadoutItemV1),
-		Sprays:  make([]SpraySlotResp, 0),
+		Loadout:     make(map[string]presets.LoadoutItemV1),
+		Sprays:      make([]SpraySlotResp, 0),
+		Expressions: make([]ExpressionSlotResp, 0),
 	}
 
 	for _, g := range loadout.Guns {
@@ -403,6 +410,10 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 
 	for _, expr := range loadout.ActiveExpressions {
 		if expr.AssetID != "" {
+			resp.Expressions = append(resp.Expressions, ExpressionSlotResp{
+				TypeID:  expr.TypeID,
+				AssetID: expr.AssetID,
+			})
 			resp.Sprays = append(resp.Sprays, SpraySlotResp{
 				EquipSlotID: expr.TypeID,
 				SprayID:     expr.AssetID,
@@ -414,6 +425,7 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 		resp.Identity = &presets.IdentityV1{
 			PlayerCardID:  loadout.Identity.PlayerCardID,
 			PlayerTitleID: loadout.Identity.PlayerTitleID,
+			AccountLevel:  loadout.Identity.AccountLevel,
 		}
 	}
 
@@ -421,9 +433,11 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 }
 
 type ApplyLoadoutRequest struct {
-	Loadout  map[string]presets.LoadoutItemV1 `json:"loadout"`
-	Identity *presets.IdentityV1              `json:"identity,omitempty"`
-	Sprays   []presets.SpraySlotV1            `json:"sprays,omitempty"`
+	Loadout     map[string]presets.LoadoutItemV1 `json:"loadout"`
+	Identity    *presets.IdentityV1              `json:"identity,omitempty"`
+	Sprays      []presets.SpraySlotV1            `json:"sprays,omitempty"`
+	Flexes      []presets.ExpressionSlotV1       `json:"flexes,omitempty"`
+	Expressions []presets.ExpressionSlotV1       `json:"expressions,omitempty"`
 }
 
 func (h *Handler) PostApplyLoadout(w http.ResponseWriter, r *http.Request) {
@@ -441,7 +455,9 @@ func (h *Handler) PostApplyLoadout(w http.ResponseWriter, r *http.Request) {
 
 	var req ApplyLoadoutRequest
 	if err := json.Unmarshal(bodyBytes, &req); err == nil && req.Loadout != nil {
-		if err := presets.Apply(val, req.Loadout, req.Identity, req.Sprays); err != nil {
+		expressions := append([]presets.ExpressionSlotV1{}, req.Expressions...)
+		expressions = append(expressions, req.Flexes...)
+		if err := presets.Apply(val, req.Loadout, req.Identity, req.Sprays, expressions); err != nil {
 			h.returnError(w, err)
 			return
 		}
@@ -451,7 +467,7 @@ func (h *Handler) PostApplyLoadout(w http.ResponseWriter, r *http.Request) {
 			h.returnError(w, err)
 			return
 		}
-		if err := presets.Apply(val, oldLoadout, nil, nil); err != nil {
+		if err := presets.Apply(val, oldLoadout, nil, nil, nil); err != nil {
 			h.returnError(w, err)
 			return
 		}

@@ -8,7 +8,7 @@ import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { getPlayerLoadoutData, getPresets, reportAppError } from '@/services/api';
+import { getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
@@ -50,6 +50,17 @@ import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
 
+type DiscordMatchPhase = {
+    phase: string;
+    queueId: string;
+    mapName: string;
+    agentName: string;
+    timeLeft: number;
+    partySize: number;
+    allyCount: number;
+    enemyCount: number;
+};
+
 export default function Home() {
     const {
         agents,
@@ -76,7 +87,7 @@ export default function Home() {
 
     const { theme, accentTheme, interfaceTheme, toggleTheme, setAccentTheme, setInterfaceTheme } = useTheme();
 
-    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [] } });
+    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [], flexes: [], expressions: [] } });
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
@@ -85,13 +96,15 @@ export default function Home() {
     const [showOfflineFriends, setShowOfflineFriends] = useState<boolean | undefined>(undefined);
     const [showLiveMatch, setShowLiveMatch] = useState<boolean | undefined>(undefined);
     const [showPartyWidget, setShowPartyWidget] = useState<boolean | undefined>(undefined);
+    const [showUnownedCosmetics, setShowUnownedCosmetics] = useState<boolean | undefined>(undefined);
+    const [profileIdentity, setProfileIdentity] = useState<{ currentRank: string; currentTier: number; accountLevel: number | null }>({ currentRank: "Unranked", currentTier: 0, accountLevel: null });
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
     
     // Core Layout State
     const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('store');
-    const [discordMatchPhase, setDiscordMatchPhase] = useState<{ phase: string; queueId: string; mapName: string; agentName: string; timeLeft: number }>({ phase: "none", queueId: "", mapName: "", agentName: "", timeLeft: 0 });
+    const [discordMatchPhase, setDiscordMatchPhase] = useState<DiscordMatchPhase>({ phase: "none", queueId: "", mapName: "", agentName: "", timeLeft: 0, partySize: 0, allyCount: 0, enemyCount: 0 });
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
 
@@ -101,8 +114,17 @@ export default function Home() {
 
     useEffect(() => {
         const onMatchPhase = (event: Event) => {
-            const detail = (event as CustomEvent<{ phase?: string; queueId?: string; mapName?: string; agentName?: string; timeLeft?: number }>).detail;
-            setDiscordMatchPhase({ phase: detail?.phase || "none", queueId: detail?.queueId || "", mapName: detail?.mapName || "", agentName: detail?.agentName || "", timeLeft: detail?.timeLeft || 0 });
+            const detail = (event as CustomEvent<Partial<DiscordMatchPhase>>).detail;
+            setDiscordMatchPhase({
+                phase: detail?.phase || "none",
+                queueId: detail?.queueId || "",
+                mapName: detail?.mapName || "",
+                agentName: detail?.agentName || "",
+                timeLeft: detail?.timeLeft || 0,
+                partySize: detail?.partySize || 0,
+                allyCount: detail?.allyCount || 0,
+                enemyCount: detail?.enemyCount || 0,
+            });
         };
         window.addEventListener("vantavault:match-phase", onMatchPhase);
         return () => window.removeEventListener("vantavault:match-phase", onMatchPhase);
@@ -112,12 +134,34 @@ export default function Home() {
         let details = activeTab === "store" ? "Browsing Store" : activeTab === "profile" ? "Viewing Profiles" : "Building a Loadout";
         let activityState = "VantaVault desktop companion";
         const queueName = discordQueueLabel(discordMatchPhase.queueId);
+        const partyText = discordMatchPhase.partySize > 1 ? `${discordMatchPhase.partySize}-stack` : "";
+        const lobbyText = discordMatchPhase.allyCount > 0 && discordMatchPhase.enemyCount > 0
+            ? `${discordMatchPhase.allyCount}v${discordMatchPhase.enemyCount}`
+            : "";
         if (discordMatchPhase.phase === "pregame") {
             details = discordMatchPhase.agentName ? `Agent Select — ${discordMatchPhase.agentName}` : "Agent Select";
             activityState = [queueName, discordMatchPhase.mapName, discordMatchPhase.timeLeft > 0 ? `${discordMatchPhase.timeLeft}s left` : ""].filter(Boolean).join(" • ");
         } else if (discordMatchPhase.phase === "coregame") {
             details = discordMatchPhase.agentName ? `In Match — ${discordMatchPhase.agentName}` : "In Match";
             activityState = discordMatchPhase.mapName ? `${queueName} on ${discordMatchPhase.mapName}` : queueName;
+        }
+        if (discordMatchPhase.phase === "pregame") {
+            details = `Agent Select - ${queueName}`;
+            activityState = [
+                discordMatchPhase.agentName || "Choosing agent",
+                discordMatchPhase.mapName,
+                discordMatchPhase.timeLeft > 0 ? `${discordMatchPhase.timeLeft}s left` : "",
+                partyText,
+            ].filter(Boolean).join(" - ");
+        } else if (discordMatchPhase.phase === "coregame") {
+            details = `Playing ${queueName}`;
+            activityState = [
+                discordMatchPhase.agentName && discordMatchPhase.mapName
+                    ? `${discordMatchPhase.agentName} on ${discordMatchPhase.mapName}`
+                    : discordMatchPhase.mapName || discordMatchPhase.agentName || "Live match",
+                lobbyText,
+                partyText,
+            ].filter(Boolean).join(" - ");
         }
         void import("@tauri-apps/api/core")
             .then(({ invoke }) => invoke("set_discord_presence", { details, activityState }))
@@ -159,7 +203,7 @@ export default function Home() {
         handleSave, handleSavePresetName, handlePresetSelect, handlePresetDelete, handleConfirmDelete,
         handleCloseConfirmationModal, handleCancel, handleApplyComplete, handleOpenPresetNameModal, handleOpenRenameModal,
         handleDropdownVariant, handleClosePresetNameModal, handleTogglePreset,
-        handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange,
+        handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange, handleFlexesChange,
         handleImportPresetAction, gameMeta,
     } = usePresets(initialData.presets, initialData.playerLoadout, (error) => {
         if (error instanceof LocalClientError) {
@@ -196,8 +240,13 @@ export default function Home() {
                 const update = await check();
                 if (!alive) return;
                 setAvailableUpdate(update ?? null);
-            } catch {
-                if (alive) setAppVersion((current) => current || "dev");
+                setLastUpdateCheck(Date.now());
+                setUpdateCheckError(null);
+            } catch (error) {
+                if (!alive) return;
+                setAppVersion((current) => current || "dev");
+                setLastUpdateCheck(Date.now());
+                setUpdateCheckError(error instanceof Error ? error.message : String(error || "Update check failed."));
             }
         };
         void checkForUpdates();
@@ -220,6 +269,7 @@ export default function Home() {
             const update = await check();
             setAvailableUpdate(update ?? null);
             setLastUpdateCheck(Date.now());
+            setUpdateCheckError(null);
         } catch (error) {
             setUpdateCheckError(
                 error instanceof Error ? error.message : String(error || "Update check failed.")
@@ -272,11 +322,16 @@ export default function Home() {
         try {
             const [fetchedPresets, settings] = await Promise.all([getPresets(), getSettings()]);
             let playerLoadout: Record<string, LoadoutItemV1> = {};
-            let gameMeta: GameLoadoutMeta = { sprays: [] };
+            let gameMeta: GameLoadoutMeta = { sprays: [], flexes: [], expressions: [] };
             try {
                 const full = await getPlayerLoadoutData();
                 playerLoadout = full.loadout;
-                gameMeta = { sprays: full.sprays || [], identity: full.identity };
+                gameMeta = {
+                    sprays: full.sprays || [],
+                    flexes: full.flexes || [],
+                    expressions: full.expressions || [],
+                    identity: full.identity,
+                };
             } catch (error) {
                 if (!(error instanceof LocalClientError)) throw error;
             }
@@ -289,12 +344,13 @@ export default function Home() {
             setShowOfflineFriends(settings.showOfflineFriends);
             setShowLiveMatch(settings.showLiveMatch);
             setShowPartyWidget(settings.showPartyWidget);
+            setShowUnownedCosmetics(settings.showUnownedCosmetics);
             prevSettingsRef.current = settings;
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
         } catch (error) {
             if (error instanceof LocalClientError) {
-                setInitialData({ playerLoadout: {}, presets: [], gameMeta: { sprays: [] } });
+                setInitialData({ playerLoadout: {}, presets: [], gameMeta: { sprays: [], flexes: [], expressions: [] } });
                 setIsLoading(false);
             } else {
                 console.error(error);
@@ -324,9 +380,10 @@ export default function Home() {
             matchRetentionDays === undefined ||
             showOfflineFriends === undefined ||
             showLiveMatch === undefined ||
-            showPartyWidget === undefined
+            showPartyWidget === undefined ||
+            showUnownedCosmetics === undefined
         ) return;
-        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget };
+        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics };
         if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
@@ -334,7 +391,35 @@ export default function Home() {
             console.error("Failed to save settings:", error);
             reportAppError("Settings could not be saved. Please try again.");
         });
-    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, useLocalSso]);
+    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, useLocalSso]);
+
+    useEffect(() => {
+        let alive = true;
+        setProfileIdentity({ currentRank: "Unranked", currentTier: 0, accountLevel: null });
+        if (!isClientHealthy || !activeAccount?.puuid) return;
+
+        void getProfileOverview({ puuid: activeAccount.puuid, region: activeAccount.region })
+            .then((overview) => {
+                if (!alive) return;
+                const tierName = overview.currentRank?.tierName?.trim() || "";
+                const competitiveTier = overview.currentRank?.competitiveTier || 0;
+                const rankLabel = competitiveTier > 0 && tierName.toLowerCase() !== "unranked"
+                    ? tierName
+                    : "Unranked";
+                setProfileIdentity({
+                    currentRank: rankLabel,
+                    currentTier: competitiveTier,
+                    accountLevel: overview.account?.level || null,
+                });
+            })
+            .catch(() => {
+                if (alive) setProfileIdentity({ currentRank: "Unranked", currentTier: 0, accountLevel: null });
+            });
+
+        return () => {
+            alive = false;
+        };
+    }, [activeAccount?.puuid, activeAccount?.region, isClientHealthy]);
 
     const handleToggleLocalSso = (val: boolean) => {
         setUseLocalSso(val);
@@ -388,6 +473,8 @@ export default function Home() {
         const loadoutToApply = { ...preset.loadout };
         let identity = preset.identity;
         let sprays = preset.sprays;
+        let flexes = preset.flexes;
+        let expressions = preset.expressions;
         if (preset.parentUuid) {
             const parent = presets.find(p => p.uuid === preset.parentUuid);
             if (parent) {
@@ -396,9 +483,11 @@ export default function Home() {
                 }
                 if (!identity) identity = parent.identity;
                 if (!sprays || sprays.length === 0) sprays = parent.sprays;
+                if (!flexes || flexes.length === 0) flexes = parent.flexes;
+                if (!expressions || expressions.length === 0) expressions = parent.expressions;
             }
         }
-        return { loadout: loadoutToApply, identity, sprays };
+        return { loadout: loadoutToApply, identity, sprays, flexes, expressions };
     };
 
     const getParent = (preset: Preset | null | undefined) => {
@@ -527,10 +616,18 @@ export default function Home() {
                                 onSelectTitle={(titleId) => handleIdentityChange(activePreset?.identity?.playerCardId || "", titleId)}
                                 currentSprays={activePreset?.sprays}
                                 onUpdateSprays={handleSpraysChange}
+                                currentFlexes={activePreset?.flexes}
+                                onUpdateFlexes={handleFlexesChange}
                                 showPresetExtras={showPresetExtras || false}
                                 onAgentAssignment={handleAgentAssignment}
                                 gameIdentity={gameMeta.identity}
                                 gameSprays={gameMeta.sprays}
+                                gameFlexes={gameMeta.flexes}
+                                accountName={activeAccount ? `${activeAccount.gameName}#${activeAccount.tagLine}` : ""}
+                                accountLevel={gameMeta.identity?.accountLevel || profileIdentity.accountLevel || undefined}
+                                accountRank={profileIdentity.currentRank}
+                                accountRankTier={profileIdentity.currentTier}
+                                showUnownedCosmetics={showUnownedCosmetics ?? false}
                             />
                         ) : (
                             <PresetList
@@ -607,6 +704,8 @@ export default function Home() {
                 onShowLiveMatchChange={setShowLiveMatch}
                 showPartyWidget={showPartyWidget ?? true}
                 onShowPartyWidgetChange={setShowPartyWidget}
+                showUnownedCosmetics={showUnownedCosmetics ?? false}
+                onShowUnownedCosmeticsChange={setShowUnownedCosmetics}
                 launchAtStartup={launchAtStartup}
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}

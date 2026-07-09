@@ -23,6 +23,9 @@ function downloadJson(name: string, value: unknown): void {
 function parseBackup(text: string): BackupFile {
     const value = JSON.parse(text) as Partial<BackupFile>;
     const settings = value.settings as Partial<Settings> | undefined;
+    if (settings && typeof settings.showUnownedCosmetics !== "boolean") {
+        settings.showUnownedCosmetics = false;
+    }
     if (
         value.version !== 1 ||
         !Array.isArray(value.presets) ||

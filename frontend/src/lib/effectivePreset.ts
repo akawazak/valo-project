@@ -1,9 +1,11 @@
-import { IdentityV1, LoadoutItemV1, Preset, SpraySlot } from '@/lib/types';
+import { ExpressionSlot, IdentityV1, LoadoutItemV1, Preset, SpraySlot } from '@/lib/types';
 
 export const DEFAULT_PRESET_ID = 'default-preset';
 
 export type GameLoadoutMeta = {
     sprays: SpraySlot[];
+    flexes?: ExpressionSlot[];
+    expressions?: ExpressionSlot[];
     identity?: IdentityV1;
 };
 
@@ -12,6 +14,20 @@ export function effectiveSprays(preset: Preset | null | undefined, game: GameLoa
         return [...preset.sprays];
     }
     return [...game.sprays];
+}
+
+export function effectiveFlexes(preset: Preset | null | undefined, game: GameLoadoutMeta): ExpressionSlot[] {
+    if (preset?.flexes && preset.flexes.length > 0) {
+        return [...preset.flexes];
+    }
+    return [...(game.flexes ?? [])];
+}
+
+export function effectiveExpressions(preset: Preset | null | undefined, game: GameLoadoutMeta): ExpressionSlot[] {
+    if (preset?.expressions && preset.expressions.length > 0) {
+        return [...preset.expressions];
+    }
+    return [...(game.expressions ?? [])];
 }
 
 export function effectiveIdentity(preset: Preset | null | undefined, game: GameLoadoutMeta): IdentityV1 {

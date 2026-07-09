@@ -61,7 +61,10 @@ fn discord_activity_payload(activity: &DiscordActivity, started_at: u64) -> serd
                 "details": activity.details,
                 "state": activity.state,
                 "timestamps": { "start": started_at },
-                "assets": { "large_image": "logo", "large_text": "VantaVault" }
+                "assets": { "large_image": "logo", "large_text": "VantaVault - VALORANT companion" },
+                "buttons": [
+                    { "label": "VantaVault Info", "url": "https://github.com/akawazak/valo-project" }
+                ]
             }
         },
         "nonce": uuid::Uuid::new_v4().to_string()
@@ -214,6 +217,10 @@ fn set_discord_presence(state: State<'_, AppState>, details: String, activity_st
         }
     }
 }
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn set_discord_presence(_state: State<'_, AppState>, _details: String, _activity_state: String) {}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

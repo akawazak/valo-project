@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Preset, LoadoutItemV1, SpraySlot } from '@/lib/types';
+import { Preset, LoadoutItemV1, SpraySlot, ExpressionSlot } from '@/lib/types';
 import { getPlayerLoadoutData, savePresets } from '@/services/api';
 import { importPreset } from '@/lib/presetShare';
-import { DEFAULT_PRESET_ID, effectiveIdentity, effectiveSprays, GameLoadoutMeta, mergePresetLoadout } from '@/lib/effectivePreset';
+import { DEFAULT_PRESET_ID, effectiveExpressions, effectiveFlexes, effectiveIdentity, effectiveSprays, GameLoadoutMeta, mergePresetLoadout } from '@/lib/effectivePreset';
 
 export enum NamingMode {
     New,
@@ -50,12 +50,16 @@ export function usePresets(
 
     const makeEditableSnapshot = useCallback((preset: Preset): Preset => {
         const sprays = effectiveSprays(preset, gameMeta);
+        const flexes = effectiveFlexes(preset, gameMeta);
+        const expressions = effectiveExpressions(preset, gameMeta);
         const identity = effectiveIdentity(preset, gameMeta);
         return {
             ...preset,
             loadout: { ...preset.loadout },
             agents: preset.agents ? [...preset.agents] : [],
             sprays: sprays.length ? [...sprays] : undefined,
+            flexes: flexes.length ? [...flexes] : undefined,
+            expressions: expressions.length ? [...expressions] : undefined,
             identity: { ...identity },
         };
     }, [gameMeta]);
@@ -109,7 +113,12 @@ export function usePresets(
         try {
             const playerData = await getPlayerLoadoutData();
             setGameLoadout(playerData.loadout);
-            setGameMeta({ sprays: playerData.sprays, identity: playerData.identity });
+            setGameMeta({
+                sprays: playerData.sprays,
+                flexes: playerData.flexes,
+                expressions: playerData.expressions,
+                identity: playerData.identity,
+            });
 
             if (!isEditingRef.current) {
                 setSelectedPreset(prev => {
@@ -173,8 +182,15 @@ export function usePresets(
                 newPreset.agents = [];
                 newPreset.identity = fresh.identity;
                 newPreset.sprays = [...(fresh.sprays || [])];
+                newPreset.flexes = [...(fresh.flexes || [])];
+                newPreset.expressions = [...(fresh.expressions || [])];
                 setGameLoadout(fresh.loadout);
-                setGameMeta({ sprays: fresh.sprays || [], identity: fresh.identity });
+                setGameMeta({
+                    sprays: fresh.sprays || [],
+                    flexes: fresh.flexes || [],
+                    expressions: fresh.expressions || [],
+                    identity: fresh.identity,
+                });
                 break;
             }
             case NamingMode.SaveAsNew:
@@ -182,6 +198,8 @@ export function usePresets(
                 newPreset.agents = editingPreset?.agents || originalPreset?.agents || [];
                 newPreset.identity = editingPreset?.identity || originalPreset?.identity;
                 newPreset.sprays = editingPreset?.sprays || originalPreset?.sprays || [...gameMeta.sprays];
+                newPreset.flexes = editingPreset?.flexes || originalPreset?.flexes || [...(gameMeta.flexes || [])];
+                newPreset.expressions = editingPreset?.expressions || originalPreset?.expressions || [...(gameMeta.expressions || [])];
                 break;
             case NamingMode.Variant: {
                 newPreset.parentUuid = editingPreset?.uuid || originalPreset?.uuid || dropdownPreset?.uuid;
@@ -202,6 +220,10 @@ export function usePresets(
                     }
                 }
                 newPreset.loadout = edited;
+                newPreset.identity = editingPreset?.identity;
+                newPreset.sprays = editingPreset?.sprays;
+                newPreset.flexes = editingPreset?.flexes;
+                newPreset.expressions = editingPreset?.expressions;
                 break;
             }
         }
@@ -237,7 +259,12 @@ export function usePresets(
             try {
                 const playerData = await getPlayerLoadoutData();
                 setGameLoadout(playerData.loadout);
-                setGameMeta({ sprays: playerData.sprays, identity: playerData.identity });
+                setGameMeta({
+                    sprays: playerData.sprays,
+                    flexes: playerData.flexes,
+                    expressions: playerData.expressions,
+                    identity: playerData.identity,
+                });
                 setCurrentLoadout(playerData.loadout);
                 setSelectedPreset({ ...defaultPreset, loadout: playerData.loadout });
                 return;
@@ -310,6 +337,8 @@ export function usePresets(
         setGameMeta({
             identity: appliedPreset.identity || gameMeta.identity,
             sprays: appliedPreset.sprays || gameMeta.sprays,
+            flexes: appliedPreset.flexes || gameMeta.flexes,
+            expressions: appliedPreset.expressions || gameMeta.expressions,
         });
         setCurrentLoadout(appliedLoadout);
         setSelectedPreset(
@@ -486,6 +515,23 @@ export function usePresets(
         setEditingPreset(prev => (prev ? { ...prev, sprays } : null));
     };
 
+    const handleFlexesChange = (flexes: ExpressionSlot[]) => {
+        const base = editingPreset || selectedPreset;
+        if (!base) return;
+
+        if (!isEditing) {
+            const snapshot = { ...makeEditableSnapshot(base), flexes };
+            setIsEditing(true);
+            setOriginalPreset(base);
+            setEditingPreset(snapshot);
+            setSelectedPreset(null);
+            setCurrentLoadout(mergePresetLoadout(snapshot, presets, snapshot.loadout));
+            return;
+        }
+
+        setEditingPreset(prev => (prev ? { ...prev, flexes } : null));
+    };
+
     const handleImportPresetAction = async (presetCode: string) => {
         const imported = importPreset(presetCode);
         const newPreset: Preset = {
@@ -532,6 +578,7 @@ export function usePresets(
         handleItemChange,
         handleIdentityChange,
         handleSpraysChange,
+        handleFlexesChange,
         handleImportPresetAction,
         refreshFromGame,
         getParentPreset,

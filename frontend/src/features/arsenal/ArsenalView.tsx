@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type CSSProperties } from "react";
-import { Weapon, LoadoutItemV1, Preset, Agent, SpraySlot, IdentityV1 } from "@/lib/types";
+import { Weapon, LoadoutItemV1, Preset, Agent, SpraySlot, IdentityV1, ExpressionSlot } from "@/lib/types";
 import WeaponCard from "@/features/gun-skins/WeaponCard";
 import PlayerCardPanel from "@/features/presets/PlayerCardPanel";
 import SprayWheelPanel from "@/features/presets/SprayWheelPanel";
@@ -69,11 +69,19 @@ interface ArsenalViewProps {
     onSelectTitle?: (titleId: string) => void;
     currentSprays?: SpraySlot[];
     onUpdateSprays?: (sprays: SpraySlot[]) => void;
+    currentFlexes?: ExpressionSlot[];
+    onUpdateFlexes?: (flexes: ExpressionSlot[]) => void;
     showPresetExtras?: boolean;
     onRefresh?: () => void;
     onAgentAssignment: (agentIds: string[], isAssigned: boolean) => void;
     gameIdentity?: IdentityV1;
     gameSprays?: SpraySlot[];
+    gameFlexes?: ExpressionSlot[];
+    accountName?: string;
+    accountLevel?: number;
+    accountRank?: string;
+    accountRankTier?: number;
+    showUnownedCosmetics?: boolean;
 }
 
 export default function ArsenalView({
@@ -95,6 +103,8 @@ export default function ArsenalView({
     onSelectTitle,
     currentSprays,
     onUpdateSprays,
+    currentFlexes,
+    onUpdateFlexes,
     showPresetExtras,
     onAgentAssignment,
     presets,
@@ -114,6 +124,12 @@ export default function ArsenalView({
     onPresetApply,
     gameIdentity,
     gameSprays,
+    gameFlexes,
+    accountName,
+    accountLevel,
+    accountRank,
+    accountRankTier,
+    showUnownedCosmetics = false,
 }: ArsenalViewProps) {
     const { loading } = useData();
 
@@ -140,6 +156,10 @@ export default function ArsenalView({
     const spraysList: SpraySlot[] = isViewingDefault
         ? (editingPreset?.sprays || gameSprays || currentSprays || [])
         : (activePreset?.sprays || currentSprays || []);
+
+    const flexesList: ExpressionSlot[] = isViewingDefault
+        ? (editingPreset?.flexes || gameFlexes || currentFlexes || [])
+        : (activePreset?.flexes || currentFlexes || []);
 
     // Initialize or load weapon sorting configuration
     useEffect(() => {
@@ -381,11 +401,22 @@ export default function ArsenalView({
                             currentTitleId={identity.playerTitleId}
                             onSelectCard={onSelectCard || (() => {})}
                             onSelectTitle={onSelectTitle || (() => {})}
+                            accountName={accountName}
+                            accountLevel={accountLevel || identity.accountLevel}
+                            accountRank={accountRank}
+                            accountRankTier={accountRankTier}
+                            showUnownedCosmetics={showUnownedCosmetics}
                         />
                     </section>
                     <section className="workspace-rail-section">
                         <h3 className="workspace-column-title">EXPRESSIONS</h3>
-                        <SprayWheelPanel currentSprays={spraysList} onUpdateSprays={onUpdateSprays || (() => {})} />
+                        <SprayWheelPanel
+                            currentSprays={spraysList}
+                            onUpdateSprays={onUpdateSprays || (() => {})}
+                            currentFlexes={flexesList}
+                            onUpdateFlexes={onUpdateFlexes || (() => {})}
+                            showUnownedCosmetics={showUnownedCosmetics}
+                        />
                     </section>
                 </aside>
             </div>

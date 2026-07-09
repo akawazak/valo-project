@@ -111,6 +111,7 @@ func main() {
 	mux.HandleFunc("GET /v1/live-loadouts", h.GetLiveLoadouts)
 	mux.HandleFunc("GET /v1/social", h.GetSocialStatus)
 	mux.HandleFunc("GET /v1/account-health", h.GetAccountHealth)
+	mux.HandleFunc("GET /v1/valorant-ping", h.GetValorantPing)
 
 	// /v1/profile/* — rank tracker + match history + sync control
 	// (see valovault/.mavis/plans/tracking-design.md §2).

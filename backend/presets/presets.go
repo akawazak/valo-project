@@ -13,6 +13,7 @@ import (
 type IdentityV1 struct {
 	PlayerCardID  string `json:"playerCardId"`
 	PlayerTitleID string `json:"playerTitleId"`
+	AccountLevel  int    `json:"accountLevel,omitempty"`
 }
 
 type SpraySlotV1 struct {
@@ -20,15 +21,22 @@ type SpraySlotV1 struct {
 	SprayID     string `json:"sprayId"`
 }
 
+type ExpressionSlotV1 struct {
+	TypeID  string `json:"typeId"`
+	AssetID string `json:"assetId"`
+}
+
 type PresetV1 struct {
-	Uuid       string                   `json:"uuid"`
-	ParentUuid string                   `json:"parentUuid"`
-	Disabled   bool                     `json:"disabled"`
-	Name       string                   `json:"name"`
-	Loadout    map[string]LoadoutItemV1 `json:"loadout"`
-	Agents     []string                 `json:"agents"`
-	Identity   *IdentityV1              `json:"identity,omitempty"`
-	Sprays     []SpraySlotV1            `json:"sprays,omitempty"`
+	Uuid        string                   `json:"uuid"`
+	ParentUuid  string                   `json:"parentUuid"`
+	Disabled    bool                     `json:"disabled"`
+	Name        string                   `json:"name"`
+	Loadout     map[string]LoadoutItemV1 `json:"loadout"`
+	Agents      []string                 `json:"agents"`
+	Identity    *IdentityV1              `json:"identity,omitempty"`
+	Sprays      []SpraySlotV1            `json:"sprays,omitempty"`
+	Flexes      []ExpressionSlotV1       `json:"flexes,omitempty"`
+	Expressions []ExpressionSlotV1       `json:"expressions,omitempty"`
 }
 
 type LoadoutItemV1 struct {
@@ -92,7 +100,7 @@ func SaveRawForOwner(owner string, bytes []byte) error {
 	return nil
 }
 
-func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identity *IdentityV1, sprays []SpraySlotV1) error {
+func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identity *IdentityV1, sprays []SpraySlotV1, expressions []ExpressionSlotV1) error {
 	loadout, err := val.GetPlayerLoadout()
 	if err != nil {
 		return err
@@ -161,6 +169,28 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 				loadout.ActiveExpressions = append(loadout.ActiveExpressions, &valclient.ActiveExpressions{
 					TypeID:  sp.EquipSlotID,
 					AssetID: sp.SprayID,
+				})
+			}
+		}
+	}
+
+	if len(expressions) > 0 {
+		for _, slot := range expressions {
+			if slot.TypeID == "" || slot.AssetID == "" {
+				continue
+			}
+			found := false
+			for _, expr := range loadout.ActiveExpressions {
+				if strings.EqualFold(expr.TypeID, slot.TypeID) {
+					expr.AssetID = slot.AssetID
+					found = true
+					break
+				}
+			}
+			if !found {
+				loadout.ActiveExpressions = append(loadout.ActiveExpressions, &valclient.ActiveExpressions{
+					TypeID:  slot.TypeID,
+					AssetID: slot.AssetID,
 				})
 			}
 		}

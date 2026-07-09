@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
+import { getValorantPing, type ValorantPingResponse } from "@/services/api";
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
 
@@ -33,6 +34,8 @@ interface SettingsModalProps {
     onShowLiveMatchChange: (v: boolean) => void;
     showPartyWidget: boolean;
     onShowPartyWidgetChange: (v: boolean) => void;
+    showUnownedCosmetics: boolean;
+    onShowUnownedCosmeticsChange: (v: boolean) => void;
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
@@ -96,6 +99,8 @@ export default function SettingsModal({
     onShowLiveMatchChange,
     showPartyWidget,
     onShowPartyWidgetChange,
+    showUnownedCosmetics,
+    onShowUnownedCosmeticsChange,
     launchAtStartup,
     onLaunchAtStartupChange,
     theme,
@@ -125,6 +130,9 @@ export default function SettingsModal({
     const [storageMessage, setStorageMessage] = useState("");
     const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [recoveryMessage, setRecoveryMessage] = useState("");
+    const [pingBusy, setPingBusy] = useState(false);
+    const [pingResult, setPingResult] = useState<ValorantPingResponse | null>(null);
+    const [pingMessage, setPingMessage] = useState("");
     const backupInputRef = useRef<HTMLInputElement>(null);
 
     const refreshStorage = useCallback(async () => {
@@ -223,6 +231,23 @@ export default function SettingsModal({
                                             type="checkbox"
                                             checked={launchAtStartup}
                                             onChange={(e) => onLaunchAtStartupChange(e.target.checked)}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Show Locked Cosmetics</div>
+                                    <div className="settings-item-desc">Include player cards, titles, sprays, and flexes that are not confirmed on this account.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            checked={showUnownedCosmetics}
+                                            onChange={(e) => onShowUnownedCosmeticsChange(e.target.checked)}
                                         />
                                         <span className="switch-slider" />
                                     </label>
@@ -437,6 +462,50 @@ export default function SettingsModal({
                                         <input aria-label="Party & Friends Widget" type="checkbox" checked={showPartyWidget} onChange={(e) => onShowPartyWidgetChange(e.target.checked)} />
                                         <span className="switch-slider" />
                                     </label>
+                                </div>
+                            </div>
+                            <div className="settings-item settings-item--stacked">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">VALORANT Server Ping</div>
+                                    <div className="settings-item-desc">Measure connection latency from this PC to Riot&apos;s regional VALORANT endpoints.</div>
+                                </div>
+                                <div className="settings-item-control settings-item-control--wide">
+                                    <div className="valorant-ping-panel">
+                                        <div className="valorant-ping-toolbar">
+                                            <button
+                                                type="button"
+                                                className="settings-update-now-btn"
+                                                disabled={pingBusy}
+                                                onClick={async () => {
+                                                    setPingBusy(true);
+                                                    setPingMessage("");
+                                                    try {
+                                                        setPingResult(await getValorantPing());
+                                                    } catch (error) {
+                                                        setPingMessage(error instanceof Error ? error.message : String(error));
+                                                    } finally {
+                                                        setPingBusy(false);
+                                                    }
+                                                }}
+                                            >
+                                                {pingBusy ? "Testing..." : "Run Ping Test"}
+                                            </button>
+                                            {pingResult && <span>Last checked {formatRelativeTime(pingResult.checkedAt)}</span>}
+                                        </div>
+                                        {pingMessage && <div className="settings-storage-message">{pingMessage}</div>}
+                                        {pingResult && (
+                                            <div className="valorant-ping-grid">
+                                                {pingResult.targets.map((target) => (
+                                                    <div key={target.region} className={`valorant-ping-card${target.ok ? " is-ok" : " is-error"}`}>
+                                                        <span>{target.label}</span>
+                                                        <em>{target.region.toUpperCase()}</em>
+                                                        <strong>{target.ok ? `${target.ms} ms` : "Offline"}</strong>
+                                                        <small>{target.host}</small>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>

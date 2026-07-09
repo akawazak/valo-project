@@ -9,6 +9,7 @@ export type Settings = {
     showOfflineFriends: boolean;
     showLiveMatch: boolean;
     showPartyWidget: boolean;
+    showUnownedCosmetics: boolean;
 };
 
 export type StorageStatus = {

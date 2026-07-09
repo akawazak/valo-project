@@ -8,6 +8,7 @@ interface SpraySelectorProps {
     currentSprays: SpraySlot[];
     onUpdateSprays: (sprays: SpraySlot[]) => void;
     compact?: boolean;
+    showUnownedCosmetics?: boolean;
 }
 
 const SPRAY_SLOTS = [
@@ -17,17 +18,20 @@ const SPRAY_SLOTS = [
     { id: 'd2b4e425-4a7b-3b3b-81d3-356c9a33bb58', name: 'Extra / Wheel' }
 ];
 
-export default function SpraySelector({ currentSprays, onUpdateSprays, compact }: SpraySelectorProps) {
+export default function SpraySelector({ currentSprays, onUpdateSprays, compact, showUnownedCosmetics = false }: SpraySelectorProps) {
     const { sprays, ownedSprayIDs } = useData();
     const [selectedSlotId, setSelectedSlotId] = useState<string>(SPRAY_SLOTS[0].id);
     const [searchQuery, setSearchQuery] = useState('');
 
     const displaySprays = useMemo(() => {
-        const owned = sprays.filter(s => ownedSprayIDs.map(id => id.toLowerCase()).includes(s.uuid.toLowerCase()));
-        const pool = owned.length > 0 ? owned : sprays;
+        const ownedSet = new Set(ownedSprayIDs.map(id => id.toLowerCase()));
+        const equippedSet = new Set(currentSprays.map(slot => slot.sprayId.toLowerCase()).filter(Boolean));
+        const pool = showUnownedCosmetics
+            ? sprays
+            : sprays.filter(s => ownedSet.has(s.uuid.toLowerCase()) || equippedSet.has(s.uuid.toLowerCase()));
         if (!searchQuery) return pool;
         return pool.filter(s => s.displayName.toLowerCase().includes(searchQuery.toLowerCase()));
-    }, [sprays, ownedSprayIDs, searchQuery]);
+    }, [sprays, ownedSprayIDs, currentSprays, searchQuery, showUnownedCosmetics]);
 
     const slotSprayMap = useMemo(() => {
         const map: Record<string, SprayAsset> = {};
@@ -135,7 +139,9 @@ export default function SpraySelector({ currentSprays, onUpdateSprays, compact }
                         );
                     })}
                     {displaySprays.length === 0 && (
-                        <div className="col-12 py-4 text-center text-muted font-monospace">No Sprays Found</div>
+                        <div className="col-12 py-4 text-center text-muted font-monospace">
+                            {showUnownedCosmetics ? "No Sprays Found" : "No owned sprays found. Enable locked cosmetics in Settings to browse the full catalog."}
+                        </div>
                     )}
                 </div>
             </div>
