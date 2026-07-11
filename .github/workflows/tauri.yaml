@@ -78,12 +78,11 @@ jobs:
             ## VantaVault v__VERSION__
 
             ### Download
-            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — the supported per-user install. No administrator rights are required.
-            - **Windows Portable:** `VantaVault-portable.exe` — run directly with no setup. Download a new portable file manually for future updates.
+            - **Windows Portable:** `VantaVault-portable.exe` - run directly with no setup. It can download and switch to later portable releases from Settings.
+            - **Windows Installer:** `VantaVault_*_x64-setup.exe` - optional per-user installation. No administrator rights are required.
 
             ### Auto-update
-            Installed copies check for updates automatically on launch and relaunch from the installed app location after an update.
-            Portable copies intentionally do not use in-app updates, so they always run the exact file you downloaded.
+            Both release types update from inside VantaVault. Portable updates download a signed new portable file and restart without opening setup.
           releaseDraft: false
           prerelease: false
 
@@ -92,6 +91,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (!$version) { throw "No application version was returned by the Tauri build." }
@@ -106,6 +106,16 @@ jobs:
           $env:VV_APP_EXE = $appExe.FullName
           $env:VV_BACKEND_EXE = $builtSidecar.FullName
           $env:VV_VERSION = $version
-          rustc frontend/src-tauri/portable.rs -O -o VantaVault-portable.exe
+          cargo build --manifest-path frontend/src-tauri/portable/Cargo.toml --release
+          Copy-Item "frontend/src-tauri/portable/target/release/vantavault-portable.exe" VantaVault-portable.exe -Force
           if (!(Test-Path VantaVault-portable.exe)) { throw "Portable EXE was not created." }
-          gh release upload "v$version" VantaVault-portable.exe --repo akawazak/valo-project --clobber
+          $env:TAURI_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
+          npx --prefix frontend tauri signer sign VantaVault-portable.exe
+          if (!(Test-Path VantaVault-portable.exe.sig)) { throw "Portable EXE signature was not created." }
+          $portableManifest = [ordered]@{
+            version = $version
+            url = "https://github.com/akawazak/valo-project/releases/download/v$version/VantaVault-portable.exe"
+            signature = (Get-Content VantaVault-portable.exe.sig -Raw).Trim()
+          } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText("latest-portable.json", $portableManifest, [System.Text.UTF8Encoding]::new($false))
+          gh release upload "v$version" VantaVault-portable.exe VantaVault-portable.exe.sig latest-portable.json --repo akawazak/valo-project --clobber

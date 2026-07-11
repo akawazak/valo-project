@@ -27,9 +27,9 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 
 ## What's new in 0.5.22
 
-- **Windows setup is now a more polished VantaVault experience from the first frame:** the original dark native installer is refined with official VALORANT media in a purpose-built technical frame and the same visual hierarchy through first install, upgrades, install progress, finish, and removal.
-- The supported installer has one clear path: a per-user install with automatic Start Menu integration, optional desktop shortcut, and no generic folder or Start Menu forms. Existing installs offer a focused upgrade/reinstall decision; auto-updates remain silent and preserve account data.
-- The bundled backend is only rebuilt when Go sources actually change, avoiding unnecessary sidecar recompilation during local development and release packaging.
+- **Portable-first releases:** the main download is now a single VantaVault portable EXE with the app and backend bundled together.
+- Portable builds can check for updates from Settings, download the signed new portable EXE in the background, and switch to it with **Restart now** without showing a setup wizard.
+- Release packaging now publishes `VantaVault-portable.exe`, its signature, and a small portable update manifest alongside the normal Windows installer.
 
 ## What's new in 0.5.21
 
@@ -88,7 +88,7 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 ## Installation
 
 1. Open the [latest release](https://github.com/akawazak/valo-project/releases/latest).
-2. Download either `VantaVault_*_x64-setup.exe` or `VantaVault-portable.exe`.
+2. Download `VantaVault-portable.exe` for the no-setup version, or `VantaVault_*_x64-setup.exe` if you prefer Start Menu integration.
 3. Launch VantaVault and connect a Riot account.
 
 Windows may show a SmartScreen warning for community builds that are not code-signed. Review the release source before choosing **Run anyway**.
@@ -97,13 +97,13 @@ Windows may show a SmartScreen warning for community builds that are not code-si
 
 GitHub releases distribute Windows files; they do not host a web version of VantaVault.
 
-- **`VantaVault_*_x64-setup.exe`** is the supported per-user installer. It includes the VantaVault icon, Start Menu integration, the local backend, and reliable automatic updates.
-- **`VantaVault-portable.exe`** runs without setup and keeps its app/backend together. It does not auto-update; download a new portable file when you want a newer version.
+- **`VantaVault-portable.exe`** is the no-setup option. Run the single file from anywhere; Settings downloads, verifies, and switches to future portable releases without opening a setup wizard.
+- **`VantaVault_*_x64-setup.exe`** is an optional per-user installer. It includes the VantaVault icon, Start Menu integration, the local backend, and in-app updates.
 - GitHub's source-code ZIP files are for developers and are not needed to use the app.
 
 ## Requirements and limitations
 
-- Windows 10 or 11 with WebView2 (the installer can bootstrap it).
+- Windows 10 or 11 with WebView2. The installer can bootstrap it; portable builds use an existing Windows WebView2 installation.
 - Party, loadout, presence, and live-match data depend on a running Riot client, the active Riot session, and the current game phase.
 - Riot does not expose every field consistently; VantaVault does not guess private identities or unknown party relationships.
 - Live score requires the local Riot client presence feed.

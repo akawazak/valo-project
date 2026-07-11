@@ -1,0 +1,14 @@
+[package]
+name = "vantavault-portable"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+minisign-verify = "0.2.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-webpki-roots"] }
+semver = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

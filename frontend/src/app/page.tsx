@@ -61,6 +61,13 @@ type DiscordMatchPhase = {
     enemyCount: number;
 };
 
+type PortableUpdateState = {
+    status: string;
+    version?: string | null;
+    message?: string | null;
+    checkedAt?: number | null;
+};
+
 export default function Home() {
     const {
         agents,
@@ -176,6 +183,7 @@ export default function Home() {
     const [showAddAccount, setShowAddAccount] = useState(false);
     const [appVersion, setAppVersion] = useState("");
     const [isPortable, setIsPortable] = useState(false);
+    const [portableUpdate, setPortableUpdate] = useState<PortableUpdateState | null>(null);
     const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
     const [updateReady, setUpdateReady] = useState(false);
@@ -260,9 +268,16 @@ export default function Home() {
                 setAppVersion(version);
                 setIsPortable(portable);
                 if (portable) {
+                    const portableStatus = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
+                    if (!alive) return;
                     setAvailableUpdate(null);
-                    setLastUpdateCheck(null);
-                    setUpdateCheckError(null);
+                    setPortableUpdate(portableStatus);
+                    setLastUpdateCheck(portableStatus?.checkedAt ?? null);
+                    setUpdateCheckError(
+                        portableStatus?.status === "failed"
+                            ? portableStatus.message || "Portable update failed."
+                            : null
+                    );
                     return;
                 }
                 const update = await check();
@@ -284,10 +299,23 @@ export default function Home() {
     }, []);
 
     const checkForUpdatesNow = useCallback(async () => {
-        if (isCheckingUpdate || isPortable) return;
+        if (isCheckingUpdate) return;
         setIsCheckingUpdate(true);
         setUpdateCheckError(null);
         try {
+            if (isPortable) {
+                const { invoke } = await import("@tauri-apps/api/core");
+                await invoke("portable_start_update");
+                const portableStatus = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
+                setPortableUpdate(portableStatus);
+                setLastUpdateCheck(portableStatus?.checkedAt ?? Date.now());
+                setUpdateCheckError(
+                    portableStatus?.status === "failed"
+                        ? portableStatus.message || "Portable update failed."
+                        : null
+                );
+                return;
+            }
             const [{ getVersion }, { check }] = await Promise.all([
                 import("@tauri-apps/api/app"),
                 import("@tauri-apps/plugin-updater"),
@@ -307,15 +335,36 @@ export default function Home() {
         }
     }, [isCheckingUpdate, isPortable]);
 
+    useEffect(() => {
+        const status = portableUpdate?.status;
+        if (!isPortable || (status !== "checking" && status !== "downloading")) return;
+        let alive = true;
+        const refresh = async () => {
+            const { invoke } = await import("@tauri-apps/api/core");
+            const next = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
+            if (!alive || !next) return;
+            setPortableUpdate(next);
+            setLastUpdateCheck(next.checkedAt ?? null);
+            setUpdateCheckError(next.status === "failed" ? next.message || "Portable update failed." : null);
+        };
+        void refresh();
+        const interval = window.setInterval(() => void refresh(), 750);
+        return () => {
+            alive = false;
+            window.clearInterval(interval);
+        };
+    }, [isPortable, portableUpdate?.status]);
+
     // Background periodic re-check every 6 hours so users get notified
     // even if they leave the app running for days.
     useEffect(() => {
+        if (isPortable) return;
         const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
         const handle = setInterval(() => {
             void checkForUpdatesNow();
         }, SIX_HOURS_MS);
         return () => clearInterval(handle);
-    }, [checkForUpdatesNow]);
+    }, [checkForUpdatesNow, isPortable]);
 
     const installUpdate = useCallback(async () => {
         if (!availableUpdate || isUpdating) return;
@@ -340,6 +389,11 @@ export default function Home() {
 
     const restartForUpdate = useCallback(async () => {
         try {
+            if (isPortable) {
+                const { invoke } = await import("@tauri-apps/api/core");
+                await invoke("portable_restart_to_update");
+                return;
+            }
             const { relaunch } = await import("@tauri-apps/plugin-process");
             await relaunch();
         } catch (error) {
@@ -350,7 +404,7 @@ export default function Home() {
             );
             setShowErrorModal(true);
         }
-    }, [setErrorMessage, setShowErrorModal]);
+    }, [isPortable, setErrorMessage, setShowErrorModal]);
 
     const loadInitialData = useCallback(async () => {
         try {
@@ -760,13 +814,13 @@ export default function Home() {
                 activeAccount={activeAccount}
                 appVersion={appVersion}
                 isPortable={isPortable}
-                updateAvailable={!!availableUpdate}
-                updateVersion={availableUpdate?.version ?? null}
-                isCheckingUpdate={isCheckingUpdate}
+                updateAvailable={isPortable ? false : !!availableUpdate}
+                updateVersion={isPortable ? portableUpdate?.version ?? null : availableUpdate?.version ?? null}
+                isCheckingUpdate={isPortable ? portableUpdate?.status === "checking" : isCheckingUpdate}
                 lastUpdateCheck={lastUpdateCheck}
                 updateCheckError={updateCheckError}
-                isUpdating={isUpdating}
-                updateReady={updateReady}
+                isUpdating={isPortable ? portableUpdate?.status === "checking" || portableUpdate?.status === "downloading" : isUpdating}
+                updateReady={isPortable ? portableUpdate?.status === "ready" : updateReady}
                 onInstallUpdate={installUpdate}
                 onRestartForUpdate={restartForUpdate}
                 onCheckForUpdates={checkForUpdatesNow}

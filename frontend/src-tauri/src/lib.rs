@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, RunEvent, State, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -188,6 +190,8 @@ fn configured_discord_client_id(config_dir: &std::path::Path) -> Option<String> 
 
 struct AppState {
     child: Mutex<Option<CommandChild>>,
+    #[cfg(target_os = "windows")]
+    backend_pid: Mutex<Option<u32>>,
     backend_token: String,
     #[cfg(target_os = "windows")]
     discord_sender: Mutex<Option<std::sync::mpsc::Sender<DiscordActivity>>>,
@@ -208,6 +212,109 @@ fn get_backend_token(state: State<'_, AppState>) -> String {
 #[tauri::command]
 fn is_portable() -> bool {
     std::env::var("VANTAVAULT_PORTABLE").ok().as_deref() == Some("1")
+}
+
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableUpdateState {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    checked_at: Option<u64>,
+    #[serde(default)]
+    pending_path: Option<String>,
+    #[serde(default)]
+    apply_on_exit: bool,
+}
+
+fn portable_update_state_path() -> Result<PathBuf, String> {
+    let state_dir = std::env::var("VANTAVAULT_PORTABLE_STATE_DIR")
+        .map_err(|_| "This portable session does not have an update location.".to_string())?;
+    let state_dir = PathBuf::from(state_dir);
+    std::fs::create_dir_all(&state_dir)
+        .map_err(|error| format!("Could not prepare portable updates: {error}"))?;
+    Ok(state_dir.join("update-state.json"))
+}
+
+fn read_portable_update_state() -> Result<PortableUpdateState, String> {
+    let path = portable_update_state_path()?;
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|error| format!("Could not read portable update status: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(PortableUpdateState::default())
+        }
+        Err(error) => Err(format!("Could not read portable update status: {error}")),
+    }
+}
+
+fn write_portable_update_state(state: &PortableUpdateState) -> Result<(), String> {
+    let path = portable_update_state_path()?;
+    let bytes = serde_json::to_vec(state)
+        .map_err(|error| format!("Could not save portable update status: {error}"))?;
+    std::fs::write(path, bytes)
+        .map_err(|error| format!("Could not save portable update status: {error}"))
+}
+
+#[tauri::command]
+fn portable_update_status() -> Result<PortableUpdateState, String> {
+    if !is_portable() {
+        return Err("Portable updates are only available in the portable build.".to_string());
+    }
+    read_portable_update_state()
+}
+
+#[tauri::command]
+fn portable_start_update() -> Result<(), String> {
+    if !is_portable() {
+        return Err("Portable updates are only available in the portable build.".to_string());
+    }
+
+    let current = read_portable_update_state()?;
+    if matches!(current.status.as_str(), "checking" | "downloading") {
+        return Ok(());
+    }
+
+    write_portable_update_state(&PortableUpdateState {
+        status: "checking".to_string(),
+        checked_at: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        ),
+        ..Default::default()
+    })?;
+
+    let launcher_path = std::env::var("VANTAVAULT_PORTABLE_LAUNCHER_PATH").map_err(|_| {
+        "The portable launcher is unavailable. Please reopen VantaVault from its portable EXE."
+            .to_string()
+    })?;
+    ProcessCommand::new(launcher_path)
+        .arg("--download-update")
+        .spawn()
+        .map_err(|error| format!("Could not start the portable update: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn portable_restart_to_update(app: AppHandle) -> Result<(), String> {
+    if !is_portable() {
+        return Err("Portable updates are only available in the portable build.".to_string());
+    }
+
+    let mut state = read_portable_update_state()?;
+    if state.status != "ready" || state.pending_path.is_none() {
+        return Err("There is no downloaded portable update ready to apply.".to_string());
+    }
+    state.apply_on_exit = true;
+    write_portable_update_state(&state)?;
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -253,6 +360,68 @@ impl AppState {
         map.entry(label.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
+    }
+
+    fn take_backend_child(&self) -> Option<CommandChild> {
+        match self.child.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => {
+                eprintln!("sidecar child lock was poisoned during exit; recovering");
+                poisoned.into_inner().take()
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn take_backend_pid(&self) -> Option<u32> {
+        match self.backend_pid.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => {
+                eprintln!("sidecar pid lock was poisoned during exit; recovering");
+                poisoned.into_inner().take()
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn kill_windows_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let output = ProcessCommand::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    match output {
+        Ok(result) if result.status.success() => {}
+        Ok(result) => {
+            let detail = String::from_utf8_lossy(&result.stderr);
+            if !detail.contains("not found") && !detail.contains("not running") {
+                eprintln!(
+                    "taskkill did not fully stop backend pid {pid}: {}",
+                    detail.trim()
+                );
+            }
+        }
+        Err(error) => eprintln!("failed to run taskkill for backend pid {pid}: {error}"),
+    }
+}
+
+fn stop_backend_sidecar(state: &AppState) {
+    #[cfg(target_os = "windows")]
+    let pid = state.take_backend_pid();
+
+    if let Some(child) = state.take_backend_child() {
+        if let Err(e) = child.kill() {
+            eprintln!("failed to kill sidecar on exit: {e}");
+        }
+    };
+
+    #[cfg(target_os = "windows")]
+    if let Some(pid) = pid {
+        kill_windows_process_tree(pid);
     }
 }
 
@@ -1134,6 +1303,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             child: Mutex::new(None),
+            #[cfg(target_os = "windows")]
+            backend_pid: Mutex::new(None),
             backend_token,
             #[cfg(target_os = "windows")]
             discord_sender: Mutex::new(None),
@@ -1153,6 +1324,9 @@ pub fn run() {
             get_ssid_cookie,
             get_backend_token,
             is_portable,
+            portable_update_status,
+            portable_start_update,
+            portable_restart_to_update,
             set_discord_presence,
         ])
         .setup(|app| {
@@ -1187,7 +1361,13 @@ pub fn run() {
             let (_rx, child) = sidecar_command
                 .spawn()
                 .expect("Failed to spawn backend sidecar");
+            #[cfg(target_os = "windows")]
+            let backend_pid = child.pid();
             *state.child.lock().unwrap() = Some(child);
+            #[cfg(target_os = "windows")]
+            {
+                *state.backend_pid.lock().unwrap() = Some(backend_pid);
+            }
 
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&quit_i])?;
@@ -1228,19 +1408,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { .. } = &event {
             let state: State<AppState> = app_handle.state();
-            // Recover from a poisoned mutex instead of panicking during shutdown.
-            let child_opt = match state.child.lock() {
-                Ok(mut guard) => guard.take(),
-                Err(poisoned) => {
-                    eprintln!("sidecar child lock was poisoned during exit; recovering");
-                    poisoned.into_inner().take()
-                }
-            };
-            if let Some(child) = child_opt {
-                if let Err(e) = child.kill() {
-                    eprintln!("failed to kill sidecar on exit: {e}");
-                }
-            };
+            stop_backend_sidecar(&state);
         }
 
         if let RunEvent::WindowEvent {

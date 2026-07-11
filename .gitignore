@@ -10,10 +10,8 @@ backend/.gocache*/
 backend/.codex-gocache/
 backend/backend/
 frontend/src-tauri/binaries/
+frontend/src-tauri/portable/target/
 frontend/.playwright-cli/
-frontend/src-tauri/installer/RCa*
-frontend/src-tauri/installer/*.lib
-frontend/src-tauri/installer/*.res
 
 # Logs
 backend/log*.txt
@@ -32,3 +30,6 @@ MEMORY.md
 /RELEASE_CHECKLIST.md
 memory/
 frontend/.codex-*.png
+VantaVault-portable.exe
+VantaVault-portable.exe.sig
+latest-portable.json

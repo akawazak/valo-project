@@ -39,7 +39,6 @@
     "targets": ["nsis"],
     "windows": {
       "nsis": {
-        "template": "installer/installer.nsi",
         "installMode": "currentUser",
         "displayLanguageSelector": false,
         "languages": ["English"],

@@ -168,7 +168,17 @@ export default function SettingsModal({
                                 {appVersion && (
                                     <div className="settings-version-info">
                                         <span>Version {appVersion}</span>
-                                        {isPortable ? (
+                                        {isPortable && updateReady ? (
+                                            <button
+                                                type="button"
+                                                className="settings-update-now-btn"
+                                                onClick={onRestartForUpdate}
+                                            >
+                                                Restart now
+                                            </button>
+                                        ) : isPortable && isUpdating ? (
+                                            <span className="settings-update-status">Downloading...</span>
+                                        ) : isPortable ? (
                                             <span className="settings-update-status clean">Portable build</span>
                                         ) : updateReady ? (
                                             <button
@@ -190,9 +200,7 @@ export default function SettingsModal({
                                         ) : (
                                             <span className="settings-update-status clean">Up to date</span>
                                         )}
-                                        <span className="settings-update-lastcheck">
-                                            {isPortable ? "Download portable releases manually" : `Last check: ${formatRelativeTime(lastUpdateCheck)}`}
-                                        </span>
+                                        <span className="settings-update-lastcheck">Last check: {formatRelativeTime(lastUpdateCheck)}</span>
                                     </div>
                                 )}
                     </div>
@@ -368,24 +376,49 @@ export default function SettingsModal({
                                     <div className="settings-item-label">Updates</div>
                                     <div className="settings-item-desc">
                                         {isPortable
-                                            ? "Portable build — download a newer portable file when you want to update."
+                                            ? isUpdating
+                                            ? "Downloading and verifying the portable update in the background..."
+                                            : updateReady
+                                            ? `Version ${updateVersion || "?"} is ready. Restart VantaVault to switch to it.`
+                                            : updateCheckError
+                                            ? `Couldn't reach the portable update server: ${updateCheckError}`
+                                            : "Check for a new portable release. Updates remain portable - no setup wizard."
                                             : isCheckingUpdate
                                             ? "Contacting the update server..."
                                             : updateReady
-                                            ? "An update is ready — restart VantaVault to apply it."
+                                            ? "An update is ready - restart VantaVault to apply it."
                                             : updateAvailable
                                             ? `Version ${updateVersion || "?"} is available for download.`
                                             : updateCheckError
                                             ? `Couldn't reach the update server: ${updateCheckError}`
                                             : "Manually check for new releases. VantaVault also checks automatically every 6 hours."}
                                         <span className="settings-update-lastcheck settings-update-lastcheck--inline">
-                                            {isPortable ? "Portable files are updated manually" : `Last check: ${formatRelativeTime(lastUpdateCheck)}`}
+                                            Last check: {formatRelativeTime(lastUpdateCheck)}
                                         </span>
                                     </div>
                                 </div>
                                 <div className="settings-item-control">
-                                    {isPortable ? (
-                                        <span className="settings-update-status clean">Manual portable updates</span>
+                                    {isPortable && updateReady ? (
+                                        <button
+                                            type="button"
+                                            className="settings-update-now-btn"
+                                            onClick={onRestartForUpdate}
+                                        >
+                                            Restart now
+                                        </button>
+                                    ) : isPortable && isUpdating ? (
+                                        <button type="button" className="settings-update-now-btn" disabled>
+                                            Downloading...
+                                        </button>
+                                    ) : isPortable ? (
+                                        <button
+                                            type="button"
+                                            className="settings-update-now-btn"
+                                            onClick={onCheckForUpdates}
+                                            disabled={isCheckingUpdate}
+                                        >
+                                            {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                                        </button>
                                     ) : updateReady ? (
                                         <button
                                             type="button"
