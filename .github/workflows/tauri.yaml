@@ -133,7 +133,11 @@ jobs:
           $env:TAURI_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
           $tauriCli = Join-Path $PWD "frontend/node_modules/.bin/tauri.cmd"
           if (!(Test-Path $tauriCli)) { throw "Tauri CLI was not installed at $tauriCli." }
-          Invoke-PortableCommand $tauriCli @("signer", "sign", "VantaVault-portable.exe", "--password", "$env:TAURI_PRIVATE_KEY_PASSWORD") 120
+          $signerArgs = @("signer", "sign", "VantaVault-portable.exe")
+          if (![string]::IsNullOrWhiteSpace($env:TAURI_PRIVATE_KEY_PASSWORD)) {
+            $signerArgs += @("--password", $env:TAURI_PRIVATE_KEY_PASSWORD)
+          }
+          Invoke-PortableCommand $tauriCli $signerArgs 120
           if (!(Test-Path VantaVault-portable.exe.sig)) { throw "Portable EXE signature was not created." }
           $portableManifest = [ordered]@{
             version = $version

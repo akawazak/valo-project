@@ -25,7 +25,7 @@ VantaVault is a native Windows companion for VALORANT players who want their loa
 
 Use it as a VALORANT loadout manager, skin-store companion, match-history viewer, party and friends monitor, and live-match companion. Availability of Riot Client data varies by game phase and by the fields Riot exposes.
 
-## What's new in 0.5.23
+## What's new in 0.5.24
 
 - **Portable-first releases:** the main download is now a single VantaVault portable EXE with the app and backend bundled together.
 - Portable builds can check for updates from Settings, download the signed new portable EXE in the background, and switch to it with **Restart now** without showing a setup wizard.
