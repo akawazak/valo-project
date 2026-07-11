@@ -1,0 +1,89 @@
+#include <windows.h>
+
+#define IDD_INST 105
+#define IDD_INSTFILES 106
+#define IDD_UNINST 107
+#define IDD_UNINST_LEGACY 108
+
+#define IDC_EDIT1 1000
+#define IDC_PROGRESS 1004
+#define IDC_INTROTEXT 1006
+#define IDC_LIST1 1016
+#define IDC_CHILDRECT 1018
+#define IDC_SHOWDETAILS 1027
+#define IDC_VERSTR 1028
+#define IDC_UNINSTFROM 1029
+#define IDC_ULICON 1031
+#define IDC_LICENSEAGREE 1034
+#define IDC_LICENSEDISAGREE 1035
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+// A custom Modern UI frame gives VantaVault a deliberate, full-window setup
+// journey while preserving the NSIS IDs Tauri needs for installation, updates,
+// accessibility, and keyboard navigation.
+IDD_INST DIALOGEX 0, 0, 600, 330
+STYLE DS_FIXEDSYS | DS_CENTER | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
+FONT 9, "Segoe UI", 0, 0, 0x1
+BEGIN
+    PUSHBUTTON      "",3,-20,-20,1,1,NOT WS_VISIBLE | WS_GROUP
+    PUSHBUTTON      "",1,-20,-20,1,1,NOT WS_VISIBLE | WS_GROUP
+    PUSHBUTTON      "",2,-20,-20,1,1,NOT WS_VISIBLE | WS_GROUP
+    CONTROL         "",IDC_CHILDRECT,"Static",SS_BLACKRECT | NOT WS_VISIBLE | WS_GROUP,10,40,580,250
+    CONTROL         "",1044,"Static",SS_BLACKRECT | NOT WS_VISIBLE | WS_GROUP,0,0,600,297
+    CONTROL         "",IDC_LICENSEDISAGREE,"Static",SS_ETCHEDHORZ | NOT WS_VISIBLE | WS_GROUP,7,297,586,1
+    CONTROL         "",1036,"Static",SS_ETCHEDHORZ | WS_GROUP,0,38,600,1
+    CONTROL         "",1045,"Static",SS_ETCHEDHORZ | NOT WS_VISIBLE | WS_GROUP,0,297,600,1
+    LTEXT           "",1256,10,301,300,10
+    LTEXT           "",IDC_VERSTR,10,301,300,10,WS_DISABLED
+    LTEXT           "",IDC_LICENSEAGREE,0,0,600,38
+    LTEXT           "",1037,125,7,430,10
+    LTEXT           "",1038,125,20,420,13
+    CONTROL         "",1046,"Static",SS_BITMAP,0,0,120,38
+END
+
+// The progress page is a clear status panel, not a blank stock dialog.
+IDD_INSTFILES DIALOGEX 0, 0, 580, 250
+STYLE DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 0, 0, 0x1
+BEGIN
+    LTEXT           "// INSTALLING",1201,36,43,275,10
+    LTEXT           "VANTAVAULT",1202,36,61,275,20
+    LTEXT           "Preparing your desktop companion.",1203,36,91,275,13
+    CONTROL         "",IDC_PROGRESS,"msctls_progress32",WS_BORDER,36,145,275,13
+    CONTROL         "",IDC_INTROTEXT,"Static",SS_LEFTNOWORDWRAP | SS_NOPREFIX,36,166,275,10
+    PUSHBUTTON      "Show details",IDC_SHOWDETAILS,36,189,82,14,NOT WS_TABSTOP
+    CONTROL         "",IDC_LIST1,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER | NOT WS_VISIBLE | WS_BORDER | WS_TABSTOP,36,189,275,38
+    LTEXT           "This only takes a moment.",1204,36,226,275,10
+    CONTROL         "",1200,"Static",SS_BITMAP,345,5,225,238
+    ICON            "",IDC_ULICON,552,5,18,18
+END
+
+// The native uninstall confirmation retains its data-choice controls while
+// matching the same dark art direction and readable hierarchy.
+IDD_UNINST DIALOGEX 0, 0, 580, 250
+STYLE DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 0, 0, 0x1
+BEGIN
+    LTEXT           "// REMOVE VANTAVAULT",1201,36,43,275,10
+    LTEXT           "UNINSTALL",1202,36,61,275,20
+    LTEXT           "Remove the installed app. Your profile data stays unless you choose to delete it below.",1203,36,91,275,25
+    LTEXT           "Installed at",IDC_UNINSTFROM,36,137,90,9
+    EDITTEXT        IDC_EDIT1,36,152,275,13,ES_AUTOHSCROLL | ES_READONLY
+    CONTROL         "",1200,"Static",SS_BITMAP,345,5,225,238
+    ICON            "",IDC_ULICON,552,5,18,18
+END
+
+// Support the neighboring resource ID shipped by older NSIS toolchains.
+IDD_UNINST_LEGACY DIALOGEX 0, 0, 580, 250
+STYLE DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 9, "Segoe UI", 0, 0, 0x1
+BEGIN
+    LTEXT           "// REMOVE VANTAVAULT",1201,36,43,275,10
+    LTEXT           "UNINSTALL",1202,36,61,275,20
+    LTEXT           "Remove the installed app. Your profile data stays unless you choose to delete it below.",1203,36,91,275,25
+    LTEXT           "Installed at",IDC_UNINSTFROM,36,137,90,9
+    EDITTEXT        IDC_EDIT1,36,152,275,13,ES_AUTOHSCROLL | ES_READONLY
+    CONTROL         "",1200,"Static",SS_BITMAP,345,5,225,238
+    ICON            "",IDC_ULICON,552,5,18,18
+END

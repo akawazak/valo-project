@@ -25,6 +25,12 @@ VantaVault is a native Windows companion for VALORANT players who want their loa
 
 Use it as a VALORANT loadout manager, skin-store companion, match-history viewer, party and friends monitor, and live-match companion. Availability of Riot Client data varies by game phase and by the fields Riot exposes.
 
+## What's new in 0.5.22
+
+- **Windows setup is now a more polished VantaVault experience from the first frame:** the original dark native installer is refined with official VALORANT media in a purpose-built technical frame and the same visual hierarchy through first install, upgrades, install progress, finish, and removal.
+- The supported installer has one clear path: a per-user install with automatic Start Menu integration, optional desktop shortcut, and no generic folder or Start Menu forms. Existing installs offer a focused upgrade/reinstall decision; auto-updates remain silent and preserve account data.
+- The bundled backend is only rebuilt when Go sources actually change, avoiding unnecessary sidecar recompilation during local development and release packaging.
+
 ## What's new in 0.5.21
 
 - **Live Match** now shows the current score when the local Riot presence feed provides it, offers an on-demand **Fetch live ranks** action, and can scan recent matches for clearly labelled likely premades.

@@ -11,6 +11,9 @@ backend/.codex-gocache/
 backend/backend/
 frontend/src-tauri/binaries/
 frontend/.playwright-cli/
+frontend/src-tauri/installer/RCa*
+frontend/src-tauri/installer/*.lib
+frontend/src-tauri/installer/*.res
 
 # Logs
 backend/log*.txt

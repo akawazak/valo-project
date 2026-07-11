@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.5.21"
+version = "0.5.22"
 description = "VantaVault desktop companion for VALORANT loadouts and profile data"
 authors = ["akawazak"]
 license = "MIT"
