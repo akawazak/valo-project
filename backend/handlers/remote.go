@@ -613,18 +613,18 @@ func hasSingleItemStoreOffers(storefront map[string]any) bool {
 	return ok && len(offers) > 0
 }
 
-func runRiotJSON(method, apiURL string, headers http.Header, body any, result any) error {
+func runRiotRaw(method, apiURL string, headers http.Header, body any) ([]byte, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		bodyReader = bytes.NewBuffer(payload)
 	}
 	req, err := http.NewRequest(method, apiURL, bodyReader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for k, vals := range headers {
 		for _, v := range vals {
@@ -632,7 +632,11 @@ func runRiotJSON(method, apiURL string, headers http.Header, body any, result an
 		}
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	bodyBytes, err := riothttp.Do(client, req)
+	return riothttp.Do(client, req)
+}
+
+func runRiotJSON(method, apiURL string, headers http.Header, body any, result any) error {
+	bodyBytes, err := runRiotRaw(method, apiURL, headers, body)
 	if err != nil {
 		return err
 	}

@@ -89,10 +89,31 @@ jobs:
       - name: Package portable EXE (Windows)
         if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
+        timeout-minutes: 20
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
         run: |
+          function Invoke-PortableCommand {
+            param(
+              [Parameter(Mandatory = $true)][string]$FilePath,
+              [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+              [int]$TimeoutSeconds = 600
+            )
+
+            Write-Host "::group::$FilePath $($ArgumentList -join ' ')"
+            $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -NoNewWindow -PassThru
+            if (!$process.WaitForExit($TimeoutSeconds * 1000)) {
+              try { $process.Kill($true) } catch { $process.Kill() }
+              throw "Timed out after ${TimeoutSeconds}s: $FilePath $($ArgumentList -join ' ')"
+            }
+            Write-Host "::endgroup::"
+            if ($process.ExitCode -ne 0) {
+              throw "Command failed with exit code $($process.ExitCode): $FilePath $($ArgumentList -join ' ')"
+            }
+          }
+
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (!$version) { throw "No application version was returned by the Tauri build." }
           $binariesDir = "frontend/src-tauri/binaries"
@@ -106,11 +127,13 @@ jobs:
           $env:VV_APP_EXE = $appExe.FullName
           $env:VV_BACKEND_EXE = $builtSidecar.FullName
           $env:VV_VERSION = $version
-          cargo build --manifest-path frontend/src-tauri/portable/Cargo.toml --release
+          Invoke-PortableCommand "cargo" @("build", "--manifest-path", "frontend/src-tauri/portable/Cargo.toml", "--release") 600
           Copy-Item "frontend/src-tauri/portable/target/release/vantavault-portable.exe" VantaVault-portable.exe -Force
           if (!(Test-Path VantaVault-portable.exe)) { throw "Portable EXE was not created." }
           $env:TAURI_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
-          npx --prefix frontend tauri signer sign VantaVault-portable.exe
+          $tauriCli = Join-Path $PWD "frontend/node_modules/.bin/tauri.cmd"
+          if (!(Test-Path $tauriCli)) { throw "Tauri CLI was not installed at $tauriCli." }
+          Invoke-PortableCommand $tauriCli @("signer", "sign", "VantaVault-portable.exe", "--password", "$env:TAURI_PRIVATE_KEY_PASSWORD") 120
           if (!(Test-Path VantaVault-portable.exe.sig)) { throw "Portable EXE signature was not created." }
           $portableManifest = [ordered]@{
             version = $version
@@ -118,4 +141,4 @@ jobs:
             signature = (Get-Content VantaVault-portable.exe.sig -Raw).Trim()
           } | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("latest-portable.json", $portableManifest, [System.Text.UTF8Encoding]::new($false))
-          gh release upload "v$version" VantaVault-portable.exe VantaVault-portable.exe.sig latest-portable.json --repo akawazak/valo-project --clobber
+          Invoke-PortableCommand "gh" @("release", "upload", "v$version", "VantaVault-portable.exe", "VantaVault-portable.exe.sig", "latest-portable.json", "--repo", "akawazak/valo-project", "--clobber") 300

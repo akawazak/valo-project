@@ -11,6 +11,149 @@ use tauri::{
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+const LIVE_MATCH_OVERLAY_LABEL: &str = "live_match_overlay";
+
+#[tauri::command]
+async fn show_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
+    let window = ensure_live_match_overlay_window(&app_handle)?;
+    window
+        .set_always_on_top(true)
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn hide_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window(LIVE_MATCH_OVERLAY_LABEL) {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn toggle_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
+    let window = ensure_live_match_overlay_window(&app_handle)?;
+    if window.is_visible().unwrap_or(false) {
+        window.hide().map_err(|error| error.to_string())?;
+    } else {
+        window
+            .set_always_on_top(true)
+            .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn ensure_live_match_overlay_window(
+    app_handle: &AppHandle,
+) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app_handle.get_webview_window(LIVE_MATCH_OVERLAY_LABEL) {
+        return Ok(window);
+    }
+
+    tauri::webview::WebviewWindowBuilder::new(
+        app_handle,
+        LIVE_MATCH_OVERLAY_LABEL,
+        tauri::WebviewUrl::App("?overlay=live-match".into()),
+    )
+    .title("VantaVault Live Match")
+    .inner_size(1280.0, 720.0)
+    .min_inner_size(760.0, 420.0)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(true)
+    .visible(false)
+    .build()
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn is_valorant_foreground_window() -> bool {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HWND};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground == HWND(std::ptr::null_mut()) {
+            return false;
+        }
+
+        let mut process_id = 0_u32;
+        GetWindowThreadProcessId(foreground, Some(&mut process_id));
+        if process_id == 0 {
+            return false;
+        }
+
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) else {
+            return false;
+        };
+
+        let mut buffer = [0_u16; 32768];
+        let mut length = buffer.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        );
+        let _ = CloseHandle(process);
+
+        if result.is_err() || length == 0 {
+            return false;
+        }
+
+        let path = String::from_utf16_lossy(&buffer[..length as usize]).to_ascii_lowercase();
+        let process_name = path.rsplit('\\').next().unwrap_or(&path);
+        process_name.contains("valorant")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn start_live_match_overlay_hotkey(app_handle: AppHandle) {
+    std::thread::spawn(move || {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            RegisterHotKey, UnregisterHotKey, MOD_ALT,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
+        };
+
+        const HOTKEY_ID: i32 = 0x5654;
+        const VK_T: u32 = 0x54;
+
+        unsafe {
+            let global_hotkey_window = HWND(std::ptr::null_mut());
+            if let Err(error) = RegisterHotKey(global_hotkey_window, HOTKEY_ID, MOD_ALT, VK_T) {
+                log::warn!("Could not register Alt+T live match overlay hotkey: {error}");
+                return;
+            }
+
+            let mut message = MSG::default();
+            while GetMessageW(&mut message, global_hotkey_window, 0, 0).as_bool() {
+                if message.message == WM_HOTKEY && message.wParam.0 as i32 == HOTKEY_ID {
+                    if is_valorant_foreground_window() {
+                        let _ = app_handle.emit("vantavault-overlay-toggle", ());
+                    }
+                }
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+
+            let _ = UnregisterHotKey(global_hotkey_window, HOTKEY_ID);
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 fn write_discord_frame(
     pipe: &mut std::fs::File,
@@ -1328,6 +1471,9 @@ pub fn run() {
             portable_start_update,
             portable_restart_to_update,
             set_discord_presence,
+            show_live_match_overlay,
+            hide_live_match_overlay,
+            toggle_live_match_overlay,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -1351,6 +1497,9 @@ pub fn run() {
                     log::warn!("Discord Rich Presence is disabled: configure VANTAVAULT_DISCORD_CLIENT_ID or discord_client_id.txt");
                 }
             }
+
+            #[cfg(target_os = "windows")]
+            start_live_match_overlay_hotkey(app.handle().clone());
 
             let state = app.state::<AppState>();
             let sidecar_command = app

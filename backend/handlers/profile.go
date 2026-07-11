@@ -101,7 +101,10 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	if len(overview.RankActs) > 0 || len(overview.LastDeltas) > 0 {
 		overview.RankSource = "cache"
 	}
-	if err := h.applyLiveMMRToOverview(r, db, overview, puuid); err != nil {
+	if h.applyCachedLiveRankToOverview(db, overview, puuid) {
+		overview.RankSource = "live"
+		overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
+	} else if err := h.applyLiveMMRToOverview(r, db, overview, puuid); err != nil {
 		overview.RankError = err.Error()
 	} else {
 		overview.RankSource = "live"
@@ -112,6 +115,45 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
+}
+
+func (h *Handler) applyCachedLiveRankToOverview(db *sql.DB, overview *tracking.Overview, puuid string) bool {
+	if overview == nil {
+		return false
+	}
+	rank, ok := h.lookupCachedLiveRank(puuid)
+	if !ok {
+		return false
+	}
+	if rank.CompetitiveTier > 0 {
+		overview.CurrentRank.CompetitiveTier = rank.CompetitiveTier
+		overview.CurrentRank.RankedRating = rank.RankedRating
+	}
+	if rank.PeakTier > overview.PeakRank.CompetitiveTier {
+		overview.PeakRank.CompetitiveTier = rank.PeakTier
+	}
+	hydrateOverviewRankNames(db, overview)
+	return true
+}
+
+func hydrateOverviewRankNames(db *sql.DB, overview *tracking.Overview) {
+	if db == nil || overview == nil {
+		return
+	}
+	if overview.CurrentRank.CompetitiveTier > 0 {
+		var tierName string
+		_ = db.QueryRow(`SELECT name FROM tier_names WHERE tier = ?`, overview.CurrentRank.CompetitiveTier).Scan(&tierName)
+		if tierName != "" {
+			overview.CurrentRank.TierName = tierName
+		}
+	}
+	if overview.PeakRank.CompetitiveTier > 0 {
+		var tierName string
+		_ = db.QueryRow(`SELECT name FROM tier_names WHERE tier = ?`, overview.PeakRank.CompetitiveTier).Scan(&tierName)
+		if tierName != "" {
+			overview.PeakRank.TierName = tierName
+		}
+	}
 }
 
 func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *tracking.Overview, puuid string) error {

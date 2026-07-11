@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { useFloatingWidgetDrag } from '@/hooks/useFloatingWidgetDrag';
@@ -88,7 +88,7 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
 
 type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
 
-export default function LiveMatchOverlay() {
+export default function LiveMatchOverlay({ overlayWindow = false }: { overlayWindow?: boolean }) {
     const { activeAccount, weapons, playerCards } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
@@ -114,6 +114,15 @@ export default function LiveMatchOverlay() {
         if (!localPlayer?.partyGroup) return 0;
         return partyGroupSizes(allPlayers).get(localPlayer.partyGroup) || 0;
     }, [match?.allyTeam, match?.enemyTeam]);
+    const closeOverlay = useCallback(() => {
+        if (overlayWindow) {
+            void import("@tauri-apps/api/core")
+                .then(({ invoke }) => invoke("hide_live_match_overlay"))
+                .catch(() => {});
+            return;
+        }
+        setDismissedMatchKey(liveMatchKey(match) || "dismissed");
+    }, [match, overlayWindow]);
 
     useEffect(() => {
         setSelectedPlayer(null);
@@ -389,7 +398,7 @@ export default function LiveMatchOverlay() {
             <button
                 type="button"
                 className="live-match-close"
-                onClick={() => setDismissedMatchKey(matchKey || "dismissed")}
+                onClick={closeOverlay}
                 aria-label="Close live match overlay"
             >
                 <span aria-hidden="true">×</span>

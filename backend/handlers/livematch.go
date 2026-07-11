@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"backend/tracking"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -65,6 +66,7 @@ type liveRankCache struct {
 	Players    map[string]liveRankSnapshot
 	Attempted  map[string]struct{}
 	ExpiresAt  time.Time
+	UpdatedAt  time.Time
 	RetryAfter time.Time
 	RetryCount int
 }
@@ -174,7 +176,7 @@ func (h *Handler) ScanLiveMatchLikelyStacks(w http.ResponseWriter, r *http.Reque
 	}
 	// A prior automatic scan may only have completed the ally side. A manual
 	// rescan must always make a fresh request so it can fill in enemy results.
-	result := scanLikelyStackGroups(val, &response)
+	result := h.scanLikelyStackGroups(val, &response)
 	h.storeLikelyStacks(response.MatchID, result, &response)
 	h.applyCachedLikelyStacks(&response)
 	h.returnAny(w, response)
@@ -344,9 +346,41 @@ func (h *Handler) storeLiveRanks(matchID string, response *LiveMatchResponse, lo
 	} else {
 		cached.RetryAfter = time.Now().Add(2 * time.Minute)
 	}
-	cached.ExpiresAt = time.Now().Add(45 * time.Minute)
+	now := time.Now()
+	cached.ExpiresAt = now.Add(45 * time.Minute)
+	cached.UpdatedAt = now
 	h.liveRanks[matchID] = cached
 	h.liveRanksMu.Unlock()
+}
+
+func (h *Handler) lookupCachedLiveRank(puuid string) (liveRankSnapshot, bool) {
+	puuid = strings.ToLower(strings.TrimSpace(puuid))
+	if puuid == "" {
+		return liveRankSnapshot{}, false
+	}
+	now := time.Now()
+	var (
+		best   liveRankSnapshot
+		bestAt time.Time
+		found  bool
+	)
+	h.liveRanksMu.RLock()
+	defer h.liveRanksMu.RUnlock()
+	for _, cached := range h.liveRanks {
+		if cached.Players == nil || now.After(cached.ExpiresAt) {
+			continue
+		}
+		rank, ok := cached.Players[puuid]
+		if !ok || (rank.CompetitiveTier <= 0 && rank.PeakTier <= 0) {
+			continue
+		}
+		if !found || cached.UpdatedAt.After(bestAt) {
+			best = rank
+			bestAt = cached.UpdatedAt
+			found = true
+		}
+	}
+	return best, found
 }
 
 func (h *Handler) hasUnattemptedLiveRanks(matchID string, response *LiveMatchResponse) bool {
@@ -443,7 +477,7 @@ func (h *Handler) queueLiveMatchExtras(val *valclient.ValClient, response *LiveM
 				delete(h.likelyStacksInFlight, matchID)
 				h.liveExtrasMu.Unlock()
 			}()
-			h.storeLikelyStacks(matchID, scanLikelyStackGroups(val, &snapshot), &snapshot)
+			h.storeLikelyStacks(matchID, h.scanLikelyStackGroups(val, &snapshot), &snapshot)
 		}()
 	}
 }
@@ -467,7 +501,7 @@ func cloneLiveMatchResponse(response *LiveMatchResponse) LiveMatchResponse {
 	return clone
 }
 
-func scanLikelyStackGroups(val *valclient.ValClient, response *LiveMatchResponse) likelyStackScanResult {
+func (h *Handler) scanLikelyStackGroups(val *valclient.ValClient, response *LiveMatchResponse) likelyStackScanResult {
 	if val == nil || response == nil {
 		return likelyStackScanResult{}
 	}
@@ -483,14 +517,14 @@ func scanLikelyStackGroups(val *valclient.ValClient, response *LiveMatchResponse
 				players = append(players, player)
 			}
 		}
-		teamResult := scanTeamLikelyStacks(val, players)
+		teamResult := h.scanTeamLikelyStacks(val, players)
 		groups = append(groups, teamResult.Groups...)
 		complete = complete && teamResult.Complete
 	}
 	return likelyStackScanResult{Groups: groups, Complete: complete}
 }
 
-func scanTeamLikelyStacks(val *valclient.ValClient, players []*LivePlayer) likelyStackScanResult {
+func (h *Handler) scanTeamLikelyStacks(val *valclient.ValClient, players []*LivePlayer) likelyStackScanResult {
 	if len(players) < 2 {
 		return likelyStackScanResult{Complete: true}
 	}
@@ -567,13 +601,19 @@ func scanTeamLikelyStacks(val *valclient.ValClient, players []*LivePlayer) likel
 	for _, candidate := range candidates {
 		matchID, present := candidate.id, candidate.participants
 		url := fmt.Sprintf("https://pd.%s.a.pvp.net/match-details/v1/matches/%s", val.Shard, matchID)
+		raw, err := runRiotRaw(http.MethodGet, url, val.Header, nil)
+		if err != nil {
+			complete = false
+			continue
+		}
+		h.cacheLiveMatchDetailsForProfiles(val, matchID, raw)
 		var details struct {
 			Players []struct {
 				Subject string `json:"subject"`
 				PartyID string `json:"partyId"`
 			} `json:"players"`
 		}
-		if runRiotJSON(http.MethodGet, url, val.Header, nil, &details) != nil {
+		if err := json.Unmarshal(raw, &details); err != nil {
 			complete = false
 			continue
 		}
@@ -593,6 +633,22 @@ func scanTeamLikelyStacks(val *valclient.ValClient, players []*LivePlayer) likel
 		}
 	}
 	return likelyStackScanResult{Groups: groups, Complete: complete}
+}
+
+func (h *Handler) cacheLiveMatchDetailsForProfiles(val *valclient.ValClient, matchID string, raw []byte) {
+	if val == nil || val.Player == nil || val.Player.Uuid == "" || matchID == "" || len(raw) == 0 {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		return
+	}
+	if cached, err := tracking.IsMatchCached(db, matchID); err == nil && cached {
+		return
+	}
+	if err := tracking.InsertMatchDetails(db, h.trackingAppDir, matchID, val.Player.Uuid, raw, nil); err != nil {
+		return
+	}
 }
 
 func applyLikelyStackGroups(response *LiveMatchResponse, groups [][]string) {

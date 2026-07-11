@@ -186,6 +186,32 @@ func TestLiveRankRetryWaitsThenRetriesMissingPlayer(t *testing.T) {
 	}
 }
 
+func TestLookupCachedLiveRankUsesFreshestOverlayRank(t *testing.T) {
+	h := NewHandler(nil)
+	h.liveRanks["old-match"] = liveRankCache{
+		Players: map[string]liveRankSnapshot{
+			"player-a": {CompetitiveTier: 10, RankedRating: 12, PeakTier: 11},
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+		UpdatedAt: time.Now().Add(-time.Minute),
+	}
+	h.liveRanks["new-match"] = liveRankCache{
+		Players: map[string]liveRankSnapshot{
+			"player-a": {CompetitiveTier: 18, RankedRating: 44, PeakTier: 20},
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+		UpdatedAt: time.Now(),
+	}
+
+	rank, ok := h.lookupCachedLiveRank("PLAYER-A")
+	if !ok {
+		t.Fatal("fresh live rank was not found")
+	}
+	if rank.CompetitiveTier != 18 || rank.RankedRating != 44 || rank.PeakTier != 20 {
+		t.Fatalf("cached rank = %+v, want newest overlay rank", rank)
+	}
+}
+
 func TestIsTrainingMode(t *testing.T) {
 	for _, modeID := range []string{"/Game/GameModes/Training/TrainingGameMode", "OpenRange", "practice-range"} {
 		if !isTrainingMode(modeID) {

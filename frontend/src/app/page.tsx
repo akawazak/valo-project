@@ -69,6 +69,19 @@ type PortableUpdateState = {
 };
 
 export default function Home() {
+    const [isLiveMatchOverlayWindow] = useState(() => (
+        typeof window !== "undefined"
+        && new URLSearchParams(window.location.search).get("overlay") === "live-match"
+    ));
+
+    if (isLiveMatchOverlayWindow) {
+        return <LiveMatchOverlay overlayWindow />;
+    }
+
+    return <HomeApp />;
+}
+
+function HomeApp() {
     const {
         agents,
         allAgents,
@@ -116,6 +129,7 @@ export default function Home() {
     const [discordMatchPhase, setDiscordMatchPhase] = useState<DiscordMatchPhase>({ phase: "none", queueId: "", mapName: "", agentName: "", timeLeft: 0, partySize: 0, allyCount: 0, enemyCount: 0 });
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
+    const autoOpenedOverlayKeyRef = useRef("");
 
     useEffect(() => {
         setProfileTarget(null);
@@ -124,7 +138,7 @@ export default function Home() {
     useEffect(() => {
         const onMatchPhase = (event: Event) => {
             const detail = (event as CustomEvent<Partial<DiscordMatchPhase>>).detail;
-            setDiscordMatchPhase({
+            const nextPhase = {
                 phase: detail?.phase || "none",
                 queueId: detail?.queueId || "",
                 mapName: detail?.mapName || "",
@@ -133,11 +147,63 @@ export default function Home() {
                 partySize: detail?.partySize || 0,
                 allyCount: detail?.allyCount || 0,
                 enemyCount: detail?.enemyCount || 0,
-            });
+            };
+            setDiscordMatchPhase(nextPhase);
         };
         window.addEventListener("vantavault:match-phase", onMatchPhase);
         return () => window.removeEventListener("vantavault:match-phase", onMatchPhase);
     }, []);
+
+    useEffect(() => {
+        let disposed = false;
+        let unlisten: (() => void) | undefined;
+
+        void Promise.all([
+            import("@tauri-apps/api/event"),
+            import("@tauri-apps/api/core"),
+        ]).then(async ([eventApi, coreApi]) => {
+            const cleanup = await eventApi.listen("vantavault-overlay-toggle", () => {
+                void coreApi.invoke("toggle_live_match_overlay").catch(() => {});
+            });
+            if (disposed) cleanup();
+            else unlisten = cleanup;
+        }).catch(() => {});
+
+        return () => {
+            disposed = true;
+            unlisten?.();
+        };
+    }, []);
+
+    useEffect(() => {
+        const phase = discordMatchPhase.phase;
+        if (phase !== "pregame") {
+            autoOpenedOverlayKeyRef.current = "";
+            return;
+        }
+        if (!(showLiveMatch ?? true)) return;
+
+        const overlayKey = [
+            phase,
+            discordMatchPhase.queueId,
+            discordMatchPhase.mapName,
+            discordMatchPhase.allyCount,
+            discordMatchPhase.enemyCount,
+        ].join("|");
+        if (overlayKey === autoOpenedOverlayKeyRef.current) return;
+        autoOpenedOverlayKeyRef.current = overlayKey;
+
+        void import("@tauri-apps/api/core")
+            .then(({ invoke }) => invoke("show_live_match_overlay"))
+            .catch(() => {});
+    }, [
+        discordMatchPhase.allyCount,
+        discordMatchPhase.enemyCount,
+        discordMatchPhase.mapName,
+        discordMatchPhase.phase,
+        discordMatchPhase.queueId,
+        showLiveMatch,
+    ]);
 
     useEffect(() => {
         let details = activeTab === "store" ? "Browsing Store" : activeTab === "profile" ? "Viewing Profiles" : "Building a Loadout";

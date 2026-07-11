@@ -353,6 +353,7 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [rateLimitUntil, setRateLimitUntil] = useState(0);
     const [rateLimitNow, setRateLimitNow] = useState(0);
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
+    const [profileHasCachedData, setProfileHasCachedData] = useState(false);
     const playerCards = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), {
         wide: card.wideArt || "",
         icon: card.displayIcon || "",
@@ -438,6 +439,11 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, []);
 
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
+    const markCachedProfile = useCallback((cached: boolean) => {
+        if (!cached) return;
+        hasCachedProfileRef.current = true;
+        setProfileHasCachedData(true);
+    }, []);
     const loadHistory = useCallback(async () => {
         const request = ++historyRequestRef.current;
         const targetPuuid = puuid;
@@ -452,7 +458,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             if (request !== historyRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setHistory(matches.matches || []);
             setTotal(matches.total || 0);
-            hasCachedProfileRef.current = hasCachedProfileRef.current || Boolean(matches.total || matches.matches?.length);
+            markCachedProfile(Boolean(matches.total || matches.matches?.length));
             setDetails({});
             setExpanded(new Set());
         } catch (err) {
@@ -460,7 +466,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         } finally {
             if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setHistoryLoading(false);
         }
-    }, [opts, pageSize, puuid, queue]);
+    }, [markCachedProfile, opts, pageSize, puuid, queue]);
 
     const refresh = useCallback(async () => {
         const request = ++refreshRequestRef.current;
@@ -493,7 +499,17 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             ]);
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setOverview(ov);
-            hasCachedProfileRef.current = true;
+            markCachedProfile(
+                Boolean(
+                    ov.currentRank?.competitiveTier ||
+                    ov.peakRank?.competitiveTier ||
+                    ov.playerCardId ||
+                    ov.playerTitleId ||
+                    ov.lastDeltas?.length ||
+                    ov.rankActs?.length ||
+                    ov.seasonSummary?.matches,
+                ),
+            );
             setSeasonSummary(ov.seasonSummary);
             setAgentStats(ag);
             setMapStats(mp);
@@ -510,7 +526,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 setLoading(false);
             }
         }
-    }, [opts, puuid, queue, viewedProfile]);
+    }, [markCachedProfile, opts, puuid, queue, viewedProfile]);
 
     useEffect(() => {
         setOverview(null);
@@ -528,6 +544,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         setSyncing(false);
         setError("");
         setRateLimitUntil(0);
+        setProfileHasCachedData(false);
         setLoading(Boolean(puuid));
         setHistoryLoading(Boolean(puuid));
         profileFacadeStartedAtRef.current = Date.now();
@@ -662,6 +679,10 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     // repeats while the same profile remains open.
     useEffect(() => {
         if (!autoSyncMatches || !puuid || loading || syncing || !syncStatus) return;
+        if (viewedProfile && profileHasCachedData && syncStatus.errorKind === "rate_limited") {
+            autoSyncPuuidRef.current = puuid;
+            return;
+        }
         if (syncStatus.inFlight) {
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
@@ -671,7 +692,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
         }
-    }, [autoSyncMatches, loading, puuid, runSync, syncStatus, syncing, viewedProfile]);
+    }, [autoSyncMatches, loading, profileHasCachedData, puuid, runSync, syncStatus, syncing, viewedProfile]);
 
     useEffect(() => {
         const ready =
@@ -833,7 +854,10 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             {rateLimitUntil > 0 && (
                 <div className={s.rateLimitPopup} role="alert" aria-live="assertive">
                     <strong>Riot rate limit reached</strong>
-                    <span>Profile loading will retry automatically in {Math.max(1, Math.ceil((rateLimitUntil - rateLimitNow) / 1000))}s.</span>
+                    <span>
+                        {viewedProfile && profileHasCachedData ? "Showing cached live data. " : ""}
+                        Profile sync will retry automatically in {Math.max(1, Math.ceil((rateLimitUntil - rateLimitNow) / 1000))}s.
+                    </span>
                 </div>
             )}
 
