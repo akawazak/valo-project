@@ -24,7 +24,11 @@ fn run() -> io::Result<()> {
     write_if_changed(&app, APP)?;
     write_if_changed(&dir.join("valovault-backend.exe"), BACKEND)?;
     write_if_changed(&dir.join(BACKEND_TRIPLE_NAME), BACKEND)?;
-    Command::new(app).current_dir(dir).spawn()?.wait()?;
+    Command::new(app)
+        .current_dir(dir)
+        .env("VANTAVAULT_PORTABLE", "1")
+        .spawn()?
+        .wait()?;
     Ok(())
 }
 

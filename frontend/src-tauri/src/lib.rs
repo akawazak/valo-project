@@ -205,6 +205,11 @@ fn get_backend_token(state: State<'_, AppState>) -> String {
     state.backend_token.clone()
 }
 
+#[tauri::command]
+fn is_portable() -> bool {
+    std::env::var("VANTAVAULT_PORTABLE").ok().as_deref() == Some("1")
+}
+
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn set_discord_presence(state: State<'_, AppState>, details: String, activity_state: String) {
@@ -1147,6 +1152,7 @@ pub fn run() {
             delete_login_session,
             get_ssid_cookie,
             get_backend_token,
+            is_portable,
             set_discord_presence,
         ])
         .setup(|app| {

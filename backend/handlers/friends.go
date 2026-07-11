@@ -322,6 +322,33 @@ func (h *Handler) fetchLocalChatSession() (localChatSessionResponse, error) {
 	})
 }
 
+// fetchLocalPlayerPresence reads just the signed-in player's chat presence.
+// It is a small local request used while a core-game match is active; score
+// values are published by the Riot client inside this encrypted-local API's
+// VALORANT presence payload.
+func (h *Handler) fetchLocalPlayerPresence(puuid string) (SocialPresence, bool) {
+	port, password, err := readRiotLockfile()
+	if err != nil {
+		return SocialPresence{}, false
+	}
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("riot:%s", password)))
+	url := fmt.Sprintf("https://127.0.0.1:%s/chat/v4/presences", port)
+	presences, err := doLocalChatRequest(localChatHTTPClient, url, auth, func(body []byte) (localPresencesResponse, error) {
+		var out localPresencesResponse
+		err := json.Unmarshal(body, &out)
+		return out, err
+	})
+	if err != nil {
+		return SocialPresence{}, false
+	}
+	for _, entry := range presences.Presences {
+		if strings.EqualFold(entry.Puuid, puuid) {
+			return normalizeChatPresence(entry, nil), true
+		}
+	}
+	return SocialPresence{}, false
+}
+
 func doLocalChatRequest[T any](client *http.Client, url, auth string, decode func([]byte) (T, error)) (T, error) {
 	var zero T
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -549,11 +576,15 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 			p.QueueID = firstString(private, "queueId", "QueueID")
 			p.CardID = firstString(private, "playerCardId", "PlayerCardID")
 			p.PartyGroup = anonymousPartyGroup(firstString(private, "partyId", "PartyID", "partyID"))
+			p.AllyScore, p.EnemyScore, p.ScoreAvailable = presenceMatchScore(private)
 			if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
 				p.State = firstNonEmpty(firstString(mpd, "sessionLoopState", "SessionLoopState"), p.State)
 				p.QueueID = firstNonEmpty(firstString(mpd, "queueId", "QueueID"), p.QueueID)
 				p.CardID = firstNonEmpty(firstString(mpd, "playerCardId", "PlayerCardID"), p.CardID)
 				p.PartyGroup = firstNonEmpty(anonymousPartyGroup(firstString(mpd, "partyId", "PartyID", "partyID")), p.PartyGroup)
+				if ally, enemy, ok := presenceMatchScore(mpd); ok {
+					p.AllyScore, p.EnemyScore, p.ScoreAvailable = ally, enemy, true
+				}
 			}
 		}
 	}
@@ -567,6 +598,15 @@ func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]strin
 		p.State = "offline"
 	}
 	return p
+}
+
+func presenceMatchScore(payload map[string]any) (int, int, bool) {
+	ally, allyOK := payload["partyOwnerMatchScoreAllyTeam"]
+	enemy, enemyOK := payload["partyOwnerMatchScoreEnemyTeam"]
+	if !allyOK || !enemyOK {
+		return 0, 0, false
+	}
+	return intFromAny(ally), intFromAny(enemy), true
 }
 
 func decodePresencePayload(raw string) (map[string]any, bool) {

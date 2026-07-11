@@ -14,6 +14,9 @@ type UnifiedSkinSelectorModalProps = {
     parentItem: LoadoutItemV1 | undefined;
     onSkinSelect: (skinId: string, levelId: string, chromaId: string) => void;
     onBuddySelect: (charmID: string, charmLevelID: string) => void;
+    onApplyWeapon: () => void;
+    saveAction?: { label: string; detail: string; onSave: () => void };
+    editingContext: string;
     show: boolean;
     onClose: () => void;
 };
@@ -38,6 +41,9 @@ export default function UnifiedSkinSelectorModal({
     parentItem,
     onSkinSelect,
     onBuddySelect,
+    onApplyWeapon,
+    saveAction,
+    editingContext,
     show,
     onClose,
 }: UnifiedSkinSelectorModalProps) {
@@ -184,6 +190,7 @@ export default function UnifiedSkinSelectorModal({
                     <div className="unified-modal-title-wrap">
                         <span className="kicker">// Customize Arsenal</span>
                         <h3 className="unified-modal-title">{weapon.displayName}</h3>
+                        <span className="unified-modal-editing-context">Editing {editingContext}</span>
                     </div>
                     <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">
                         ✕
@@ -417,6 +424,22 @@ export default function UnifiedSkinSelectorModal({
                                 )
                             )}
                         </div>
+                    </div>
+                </div>
+                <div className="unified-modal-footer">
+                    <div className="unified-modal-footer-copy">
+                        <strong>{selectedSkin.displayName}</strong>
+                        <span>Save changes the preset. Apply changes only this weapon in VALORANT.</span>
+                    </div>
+                    <div className="unified-modal-footer-actions">
+                        {saveAction ? (
+                            <button type="button" className="btn-tactical btn-tactical-secondary" onClick={saveAction.onSave} title={saveAction.detail}>
+                                {saveAction.label}
+                            </button>
+                        ) : null}
+                        <button type="button" className="btn-tactical btn-tactical-accent" onClick={onApplyWeapon}>
+                            Apply {weapon.displayName}
+                        </button>
                     </div>
                 </div>
             </div>

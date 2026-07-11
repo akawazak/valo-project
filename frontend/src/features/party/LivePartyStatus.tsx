@@ -12,6 +12,7 @@ import {
     SocialStatusResponse,
 } from "@/services/api";
 import { useData } from "@/context/DataContext";
+import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
 import ProfilePanel from "@/features/profile/ProfilePanel";
 import "./LivePartyStatus.css";
 
@@ -51,7 +52,11 @@ function phaseShort(phase: PartyStatusResponse["phase"]) {
 
 type CardMeta = { images: string[] };
 type TierMeta = { name: string; icon: string };
-type PartyProfileTarget = { puuid: string; gameName: string; tagLine: string };
+type PartyProfileTarget = {
+    puuid: string;
+    gameName: string;
+    tagLine: string;
+};
 type PartyContextMenu = { x: number; y: number; profile: PartyProfileTarget };
 
 function SafePartyImage({ sources, className, fallback, fallbackClassName, eager = false }: { sources: string[]; className?: string; fallback: string; fallbackClassName?: string; eager?: boolean }) {
@@ -59,6 +64,14 @@ function SafePartyImage({ sources, className, fallback, fallbackClassName, eager
     const src = sources[sourceIndex];
     if (!src) return <span className={fallbackClassName}>{fallback}</span>;
     return <img src={src} alt="" className={className} loading={eager ? "eager" : "lazy"} decoding="async" onError={() => setSourceIndex(index => index + 1)} />;
+}
+
+function FriendsGlyph() {
+    return (
+        <svg className="live-party-friends-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8.1 11.1a3.15 3.15 0 1 0 0-6.3 3.15 3.15 0 0 0 0 6.3Zm7.7-1.3a2.55 2.55 0 1 0 0-5.1 2.55 2.55 0 0 0 0 5.1Zm-7.7 2.1c-3.2 0-5.8 1.75-5.8 4.25V19h11.6v-2.85c0-2.5-2.6-4.25-5.8-4.25Zm7.7.05c-.56 0-1.1.08-1.58.22 1.08.85 1.78 2.04 1.78 3.48V19H21v-2.28c0-2.77-2.3-4.77-5.2-4.77Z" fill="currentColor" />
+        </svg>
+    );
 }
 
 function profileFromIdentity(puuid: string, displayName: string): PartyProfileTarget {
@@ -75,6 +88,11 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     const [expanded, setExpanded] = useState(false);
     const [profileTarget, setProfileTarget] = useState<PartyProfileTarget | null>(null);
     const [contextMenu, setContextMenu] = useState<PartyContextMenu | null>(null);
+    const compactPartyDrag = useFloatingWidgetDrag("party-compact");
+    const expandedPartyDrag = useFloatingWidgetDrag("party-expanded");
+    const [expandedPlacement, setExpandedPlacement] = useState<React.CSSProperties | undefined>(undefined);
+    const partyWidgetRef = useRef<HTMLElement>(null);
+    const profileModalRef = useRef<HTMLElement>(null);
     const latestPartyRef = useRef<PartyStatusResponse | null>(null);
     const lastPartyIdRef = useRef<string | null>(null);
 
@@ -91,6 +109,41 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             window.removeEventListener("blur", close);
         };
     }, [contextMenu]);
+
+    useEffect(() => {
+        if (!expanded) return;
+        const close = (event: PointerEvent) => {
+            // The profile is rendered through a portal, outside this widget's
+            // DOM subtree. Its controls must not count as an outside click.
+            if (profileModalRef.current?.contains(event.target as Node)) return;
+            if (!partyWidgetRef.current?.contains(event.target as Node)) setExpanded(false);
+        };
+        window.addEventListener("pointerdown", close);
+        return () => window.removeEventListener("pointerdown", close);
+    }, [expanded]);
+
+    const openPartyPanel = (anchor: DOMRect) => {
+        const edge = 12;
+        const gap = 8;
+        const roomAbove = Math.max(0, anchor.top - edge - gap);
+        const roomBelow = Math.max(0, window.innerHeight - anchor.bottom - edge - gap);
+        const openBelow = roomBelow >= roomAbove;
+        const availableHeight = openBelow ? roomBelow : roomAbove;
+        const dockRight = anchor.left + anchor.width / 2 >= window.innerWidth / 2;
+
+        // Re-evaluate from the compact launcher every time. This prevents a
+        // panel drag from leaving the next opening clipped at the viewport edge.
+        expandedPartyDrag.resetPosition();
+        setProfileTarget(null);
+        setExpandedPlacement({
+            left: dockRight ? "auto" : edge,
+            right: dockRight ? edge : "auto",
+            top: openBelow ? Math.max(edge, anchor.bottom + gap) : "auto",
+            bottom: openBelow ? "auto" : Math.max(edge, window.innerHeight - anchor.top + gap),
+            maxHeight: `${Math.max(180, Math.min(680, availableHeight))}px`,
+        });
+        setExpanded(true);
+    };
 
     const openProfile = (profile: PartyProfileTarget) => {
         setContextMenu(null);
@@ -224,7 +277,12 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 <FriendsPill
                     social={social}
                     presences={presences}
-                    onOpen={() => setExpanded(true)}
+                    onOpen={(anchor) => {
+                        if (!compactPartyDrag.consumeClick()) openPartyPanel(anchor);
+                    }}
+                    dragStyle={compactPartyDrag.style}
+                    setElement={compactPartyDrag.setElement}
+                    onPointerDown={compactPartyDrag.onPointerDown}
                 />
             );
         }
@@ -235,15 +293,28 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 friendCount={onlineCount}
                 card={cardCache[local.cardId?.toLowerCase()]}
                 tier={tierCache[local.competitiveTier]}
-                onOpen={() => setExpanded(true)}
+                onOpen={(anchor) => {
+                    if (!compactPartyDrag.consumeClick()) openPartyPanel(anchor);
+                }}
+                dragStyle={compactPartyDrag.style}
+                setElement={compactPartyDrag.setElement}
+                onPointerDown={compactPartyDrag.onPointerDown}
             />
         );
     }
 
     return (
-        <aside className={`live-party-widget${stale ? " is-stale" : ""}`} aria-live="polite">
+        <aside
+            ref={(element) => {
+                partyWidgetRef.current = element;
+                expandedPartyDrag.setElement(element);
+            }}
+            className={`live-party-widget${stale ? " is-stale" : ""}`}
+            style={expandedPartyDrag.style || expandedPlacement}
+            aria-live="polite"
+        >
             <div key={refreshKey} className="live-party-refresh" />
-            <div className="live-party-header">
+            <div className="live-party-header live-party-drag-handle" onPointerDown={(event) => expandedPartyDrag.onPointerDown(event, true)}>
                 <div>
                     <div className="live-party-kicker">{hasParty ? "Live Party" : "Party & Friends"}</div>
                     <div className="live-party-title">
@@ -260,7 +331,10 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                     <button
                         type="button"
                         className="live-party-minimize"
-                        onClick={() => setExpanded(false)}
+                        onClick={() => {
+                            setProfileTarget(null);
+                            setExpanded(false);
+                        }}
                         aria-label="Minimize party panel"
                         title="Minimize"
                     >
@@ -269,13 +343,9 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 </div>
             </div>
             <div className="live-party-overview">
-                <PresenceStat
-                    label={hasParty ? "Party" : "Friends"}
-                    value={hasParty ? `${members.length}/5` : String(social?.friendCount || presences.length)}
-                />
-                <PresenceStat label="VALORANT" value={String(onlineCount)} />
+                <PresenceStat label={hasParty ? "Party" : "Friends"} value={hasParty ? `${members.length}/5` : String(social?.friendCount || presences.length)} />
                 <PresenceStat label="In match" value={String(inGameCount)} accent />
-                <PresenceStat label="Riot Client" value={String(chatCount)} />
+                <PresenceStat label="Online" value={String(onlineCount + chatCount)} />
             </div>
             {hasParty && (
                 <div className="live-party-members">
@@ -315,7 +385,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             )}
             {profileTarget && typeof document !== "undefined" && createPortal(
                 <div className="live-party-profile-backdrop" role="presentation" onMouseDown={() => setProfileTarget(null)}>
-                    <section className="live-party-profile-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+                    <section ref={profileModalRef} className="live-party-profile-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
                         <button type="button" className="live-party-profile-close" onClick={() => setProfileTarget(null)} aria-label="Close profile">×</button>
                         <div className="live-party-profile-content">
                             <ProfilePanel
@@ -349,20 +419,29 @@ function PartyPill({
     card,
     tier,
     onOpen,
+    dragStyle,
+    setElement,
+    onPointerDown,
 }: {
     local: PartyMember;
     party: PartyStatusResponse;
     friendCount: number;
     card?: CardMeta;
     tier?: TierMeta;
-    onOpen: () => void;
+    onOpen: (anchor: DOMRect) => void;
+    dragStyle?: React.CSSProperties;
+    setElement: (element: HTMLButtonElement | null) => void;
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
 }) {
     const phaseClass = "is-" + (party.phase || "party");
     return (
         <button
+            ref={setElement}
             type="button"
             className={`live-party-pill is-clickable ${phaseClass}`}
-            onClick={onOpen}
+            onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
+            onPointerDown={onPointerDown}
+            style={dragStyle}
             aria-label="Open live party panel"
             title="Open party"
         >
@@ -386,24 +465,34 @@ function FriendsPill({
     social,
     presences,
     onOpen,
+    dragStyle,
+    setElement,
+    onPointerDown,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
-    onOpen: () => void;
+    onOpen: (anchor: DOMRect) => void;
+    dragStyle?: React.CSSProperties;
+    setElement: (element: HTMLButtonElement | null) => void;
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
 }) {
     const onlineCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     return (
         <button
+            ref={setElement}
             type="button"
             className="live-party-pill is-clickable is-friends"
-            onClick={onOpen}
+            onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
+            onPointerDown={onPointerDown}
+            style={dragStyle}
             aria-label="Open friend presence panel"
             title="Open friends"
         >
             <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
-                <span className="live-party-pill-avatar-letter">{onlineCount}</span>
+                <FriendsGlyph />
+                <strong className="live-party-friends-count">{onlineCount}</strong>
             </span>
             <span className="live-party-pill-body">
                 <span className="live-party-pill-kicker">Party & Friends</span>

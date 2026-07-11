@@ -57,6 +57,7 @@ export default function AccountManagerModal({
     const [displayOrder, setDisplayOrder] = useState<string[]>([]);
     const [authDebugCopied, setAuthDebugCopied] = useState(false);
     const bulkCancelRef = useRef(false);
+    const accountsListRef = useRef<HTMLDivElement>(null);
     const refreshTimeoutMs = 30_000;
     const bulkAttemptIntervalMs = 2_000;
 
@@ -90,6 +91,18 @@ export default function AccountManagerModal({
             return [...preserved, ...additions];
         });
     }, [accounts, isOpen]);
+
+    // Opening a long account list should always reveal the account currently
+    // driving the app, without changing the user's saved favorite ordering.
+    useEffect(() => {
+        if (!isOpen || !activeAccount?.puuid) return;
+        const frame = window.requestAnimationFrame(() => {
+            accountsListRef.current
+                ?.querySelector<HTMLElement>('[data-active-account-row="true"]')
+                ?.scrollIntoView({ block: "center", behavior: "auto" });
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [activeAccount?.puuid, displayOrder.length, isOpen]);
 
     if (!isOpen) return null;
 
@@ -310,7 +323,7 @@ export default function AccountManagerModal({
                     )}
 
                     {accounts.length > 0 ? (
-                        <div className="settings-accounts-list">
+                        <div className="settings-accounts-list" ref={accountsListRef}>
                             {sortedAccounts.map((acc) => {
                                 const isExpired = isAccountTokenExpired(acc);
                                 const isActive = activeAccount?.puuid === acc.puuid;
@@ -324,6 +337,7 @@ export default function AccountManagerModal({
                                 return (
                                     <div
                                         key={acc.puuid}
+                                        data-active-account-row={isActive ? "true" : undefined}
                                         className={`settings-account-card ${isActive ? "active" : ""} ${
                                             isExpired ? "expired" : ""
                                         }`}

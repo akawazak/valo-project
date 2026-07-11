@@ -57,12 +57,15 @@ interface ArsenalViewProps {
     onImportPresetClick: () => void;
     onNewPreset: () => void;
     agents: Agent[];
+    allAgents: Agent[];
+    ownedAgentIds: string[];
     isEditing: boolean;
     editingPreset: Preset | null;
     onSave: () => void;
     onCancel: () => void;
     onSaveAsNew: () => void;
     onApply: () => void;
+    onApplyWeapon: (weaponId: string) => Promise<boolean>;
     currentCardId?: string;
     currentTitleId?: string;
     onSelectCard?: (cardId: string) => void;
@@ -71,7 +74,6 @@ interface ArsenalViewProps {
     onUpdateSprays?: (sprays: SpraySlot[]) => void;
     currentFlexes?: ExpressionSlot[];
     onUpdateFlexes?: (flexes: ExpressionSlot[]) => void;
-    showPresetExtras?: boolean;
     onRefresh?: () => void;
     onAgentAssignment: (agentIds: string[], isAssigned: boolean) => void;
     gameIdentity?: IdentityV1;
@@ -95,6 +97,8 @@ export default function ArsenalView({
     onSkinReset,
     selectedPreset,
     agents,
+    allAgents,
+    ownedAgentIds,
     isEditing,
     editingPreset,
     currentCardId,
@@ -105,7 +109,6 @@ export default function ArsenalView({
     onUpdateSprays,
     currentFlexes,
     onUpdateFlexes,
-    showPresetExtras,
     onAgentAssignment,
     presets,
     defaultPreset,
@@ -120,6 +123,7 @@ export default function ArsenalView({
     onCancel,
     onSaveAsNew,
     onApply,
+    onApplyWeapon,
     onPresetSelect,
     onPresetApply,
     gameIdentity,
@@ -135,6 +139,7 @@ export default function ArsenalView({
 
     // Unified weapon picker state
     const [activeWeapon, setActiveWeapon] = useState<Weapon | null>(null);
+    const [showPresetEditor, setShowPresetEditor] = useState(false);
 
     // Custom weapon ordering states
     const [weaponOrder, setWeaponOrder] = useState<Record<string, string[]>>({});
@@ -144,6 +149,12 @@ export default function ArsenalView({
     const activePreset = editingPreset || selectedPreset;
     const isViewingDefault = !activePreset || activePreset.uuid === DEFAULT_PRESET_ID;
     const isEditingDefault = Boolean(isEditing && editingPreset?.uuid === DEFAULT_PRESET_ID);
+
+    useEffect(() => {
+        if (selectedPreset && selectedPreset.uuid !== DEFAULT_PRESET_ID) {
+            setShowPresetEditor(true);
+        }
+    }, [selectedPreset?.uuid]);
 
     // For current loadout, fall back to whatever the game has equipped right now
     const identity: IdentityV1 = isViewingDefault
@@ -204,10 +215,9 @@ export default function ArsenalView({
     const melee = getColumnWeapons("melee", sortWeapons(weapons.filter(w => w.category === 'EEquippableCategory::Melee' || MELEE_NAMES.includes(w.displayName.toLowerCase())), MELEE_NAMES));
     const snipers = getColumnWeapons("snipers", sortWeapons(weapons.filter(w => SNIPERS_NAMES.includes(w.displayName.toLowerCase())), SNIPERS_NAMES));
     const heavies = getColumnWeapons("heavies", sortWeapons(weapons.filter(w => HEAVIES_NAMES.includes(w.displayName.toLowerCase())), HEAVIES_NAMES));
-    const builderSlotCount = sidearms.length + smgs.length + shotguns.length + rifles.length + melee.length + snipers.length + heavies.length;
     const commandState = isEditing ? (isEditingDefault ? "LIVE DRAFT" : "UNSAVED") : (isViewingDefault ? "LIVE" : "PRESET");
     const commandHint = isEditing
-        ? (isEditingDefault ? "Apply to Valorant or save as a reusable preset." : "Save, apply, or fork this preset.")
+        ? (isEditingDefault ? "Apply this weapon from its picker, or close it to keep the current game loadout." : "Save, apply, or fork this preset.")
         : (isViewingDefault ? "Click any slot to edit the live loadout." : "Click any slot to edit this preset.");
 
     // Drag handlers
@@ -243,6 +253,21 @@ export default function ArsenalView({
     // Handlers
     const handleWeaponCardClick = (weapon: Weapon) => {
         setActiveWeapon(weapon);
+    };
+
+    const openPresetEditor = (preset: Preset) => {
+        onPresetSelect(preset);
+        setShowPresetEditor(true);
+    };
+
+    const closePresetEditor = async () => {
+        if (isEditing) onCancel();
+        setActiveWeapon(null);
+        // The background is the live Current Loadout. Keep this dialog above
+        // it until its async refresh has finished, preventing the preset draft
+        // from flashing as the dialog closes.
+        await Promise.resolve(onPresetSelect(defaultPreset));
+        setShowPresetEditor(false);
     };
 
     const handleSkinSelectComplete = (skinId: string, levelId: string, chromaId: string) => {
@@ -303,16 +328,11 @@ export default function ArsenalView({
             {/* Header */}
             <div className="workspace-header-row workspace-builder-header">
                 <div className="workspace-title-area">
-                    <span className="tactical-kicker">
-                        // {isViewingDefault ? "CURRENT LOADOUT" : "EDITING PRESET"}
-                    </span>
-                    <h2>{activePreset?.name || "Current Loadout"}</h2>
+                    <div className="workspace-title-line">
+                        <h2>{activePreset?.name || "Current Loadout"}</h2>
+                    </div>
                 </div>
-                <div className="workspace-builder-stat" aria-label={`${builderSlotCount} builder slots`}>
-                    <span>Total slots</span>
-                    <strong>{builderSlotCount}</strong>
-                </div>
-                <div className="workspace-actions">
+                <div className="workspace-actions workspace-builder-actions">
                     {/* Show "Switch to Current Loadout" only when viewing a saved preset */}
                     {!isViewingDefault && (
                         <button
@@ -342,7 +362,7 @@ export default function ArsenalView({
                     <span className="clr-reference-badge">{commandState}</span>
                     <span className="clr-reference-hint">{commandHint}</span>
                 </div>
-                {isEditing && (
+                {isEditing && !isEditingDefault && (
                     <div className="workspace-edit-actions">
                         {!isEditingDefault && (
                             <button type="button" className="btn-tactical btn-tactical-secondary" onClick={onSave}>
@@ -361,17 +381,6 @@ export default function ArsenalView({
                     </div>
                 )}
             </div>
-
-            {showPresetExtras && activePreset && onAgentAssignment && (
-                <div className="workspace-agents-row mb-3">
-                    <PresetAgentStrip
-                        preset={activePreset}
-                        agents={agents}
-                        assignedAgentIds={activePreset.agents || []}
-                        onAssignmentChange={onAgentAssignment}
-                    />
-                </div>
-            )}
 
             <div className="workspace-grid-5 workspace-builder-board">
                 <div className="workspace-board-column workspace-board-column--sidearms">
@@ -426,15 +435,9 @@ export default function ArsenalView({
                 <div className="workspace-presets-row">
                     <div className="workspace-presets-header">
                         <span className="workspace-presets-label">// SAVED PRESETS</span>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginRight: 'auto', marginLeft: '0.5rem' }}>
-                            Click a card to edit · ✓ to apply to your game
+                        <span className="workspace-presets-hint">
+                            Saved configurations · Live loadout stays unchanged until applied
                         </span>
-                        <button type="button" className="btn-tactical btn-tactical-ghost btn-sm" onClick={onImportPresetClick}>
-                            Import
-                        </button>
-                        <button type="button" className="btn-tactical btn-tactical-accent btn-sm" onClick={onNewPreset}>
-                            + New
-                        </button>
                     </div>
                     <div className="workspace-presets-scroll">
                         {presets.filter(p => p.uuid !== defaultPreset.uuid).map(preset => {
@@ -444,7 +447,7 @@ export default function ArsenalView({
                                     <PresetCard
                                         preset={preset}
                                         isSelected={selectedPreset?.uuid === preset.uuid}
-                                        onSelect={onPresetSelect}
+                                        onSelect={openPresetEditor}
                                         onApply={() => onPresetApply(preset)}
                                         onRename={onPresetRename}
                                         onDelete={onPresetDelete}
@@ -459,7 +462,7 @@ export default function ArsenalView({
                                             key={child.uuid}
                                             preset={child}
                                             isSelected={selectedPreset?.uuid === child.uuid}
-                                            onSelect={onPresetSelect}
+                                            onSelect={openPresetEditor}
                                             onApply={() => onPresetApply(child)}
                                             onRename={onPresetRename}
                                             onDelete={onPresetDelete}
@@ -476,6 +479,113 @@ export default function ArsenalView({
                 </div>
             )}
 
+            {showPresetEditor && !isViewingDefault && (
+                <div
+                    className="preset-loadout-editor-overlay"
+                    role="presentation"
+                    onMouseDown={(event) => {
+                        if (event.target === event.currentTarget && !isEditing) void closePresetEditor();
+                    }}
+                >
+                    <section className="preset-loadout-editor" role="dialog" aria-modal="true" aria-label={`Edit ${activePreset?.name || "preset"}`}>
+                        <header className="preset-loadout-editor-header">
+                            <div className="preset-loadout-editor-heading">
+                                <div className="preset-loadout-editor-context">
+                                    <span>Saved Preset</span>
+                                    <span className="preset-loadout-editor-not-live">Not Live</span>
+                                </div>
+                                <div className="preset-loadout-editor-title-row">
+                                    <span className="preset-loadout-editor-mark" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M5 4h14v16l-7-4-7 4V4Z" /></svg>
+                                    </span>
+                                    <div>
+                                        <h2>{activePreset?.name || "Preset"}</h2>
+                                        <p>{isEditing ? "Unsaved changes" : "All changes saved"}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="preset-loadout-editor-actions">
+                                {activePreset && onAgentAssignment && (
+                                    <PresetAgentStrip
+                                        compact
+                                        preset={activePreset}
+                                        agents={allAgents}
+                                        ownedAgentIds={ownedAgentIds}
+                                        assignedAgentIds={activePreset.agents || []}
+                                        onAssignmentChange={onAgentAssignment}
+                                    />
+                                )}
+                                <button type="button" className="btn-tactical btn-tactical-secondary" onClick={onSave} disabled={!isEditing} title={isEditing ? "Save changes to this preset" : "No unsaved changes"}>
+                                    Save Preset
+                                </button>
+                                <button type="button" className="btn-tactical btn-tactical-ghost" onClick={onSaveAsNew}>
+                                    Save As New
+                                </button>
+                                <button type="button" className="btn-tactical btn-tactical-accent" onClick={onApply}>
+                                    Apply to VALORANT
+                                </button>
+                                <button type="button" className="preset-loadout-editor-close" onClick={() => void closePresetEditor()} aria-label={isEditing ? "Discard changes and close" : "Close preset editor"} title={isEditing ? "Discard changes and close" : "Close"}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+                                </button>
+                            </div>
+                        </header>
+
+                        <div className="preset-loadout-editor-body">
+                            <div className="workspace-grid-5 workspace-builder-board preset-loadout-editor-grid">
+                                <div className="workspace-board-column workspace-board-column--sidearms">
+                                    {renderWeaponCategory("SIDEARMS", sidearms, "sidearms")}
+                                </div>
+                                <div className="workspace-board-column">
+                                    {renderWeaponCategory("SMGS", smgs, "smgs")}
+                                    {renderWeaponCategory("SHOTGUNS", shotguns, "shotguns")}
+                                </div>
+                                <div className="workspace-board-column">
+                                    {renderWeaponCategory("RIFLES", rifles, "rifles")}
+                                    {renderWeaponCategory("MELEE", melee, "melee")}
+                                </div>
+                                <div className="workspace-board-column">
+                                    {renderWeaponCategory("SNIPER RIFLES", snipers, "snipers")}
+                                    {renderWeaponCategory("MACHINE GUNS", heavies, "heavies")}
+                                </div>
+                                <aside className="workspace-column workspace-column--cosmetics workspace-builder-rail">
+                                    <section className="workspace-rail-section">
+                                        <h3 className="workspace-column-title">PLAYER CARDS</h3>
+                                        <PlayerCardPanel
+                                            currentCardId={identity.playerCardId}
+                                            currentTitleId={identity.playerTitleId}
+                                            onSelectCard={onSelectCard || (() => {})}
+                                            onSelectTitle={onSelectTitle || (() => {})}
+                                            accountName={accountName}
+                                            accountLevel={accountLevel || identity.accountLevel}
+                                            accountRank={accountRank}
+                                            accountRankTier={accountRankTier}
+                                            showUnownedCosmetics={showUnownedCosmetics}
+                                        />
+                                    </section>
+                                    <section className="workspace-rail-section">
+                                        <h3 className="workspace-column-title">EXPRESSIONS</h3>
+                                        <SprayWheelPanel
+                                            currentSprays={spraysList}
+                                            onUpdateSprays={onUpdateSprays || (() => {})}
+                                            currentFlexes={flexesList}
+                                            onUpdateFlexes={onUpdateFlexes || (() => {})}
+                                            showUnownedCosmetics={showUnownedCosmetics}
+                                        />
+                                    </section>
+                                </aside>
+                            </div>
+                        </div>
+
+                        <footer className="preset-loadout-editor-footer">
+                            <span>{isEditing ? "Save updates this preset. Apply changes VALORANT without saving." : "This preset is saved. Apply sends it to VALORANT."}</span>
+                            {isEditing ? (
+                                <button type="button" className="btn-tactical btn-tactical-ghost" onClick={onCancel}>Discard Changes</button>
+                            ) : null}
+                        </footer>
+                    </section>
+                </div>
+            )}
+
             {/* Unified Selector Modal */}
             {activeWeapon && (
                 <UnifiedSkinSelectorModal
@@ -487,8 +597,36 @@ export default function ArsenalView({
                     parentItem={parent ? parent[activeWeapon.uuid] : undefined}
                     onSkinSelect={handleSkinSelectComplete}
                     onBuddySelect={handleBuddySelectComplete}
+                    onApplyWeapon={async () => {
+                        if (await onApplyWeapon(activeWeapon.uuid)) {
+                            setActiveWeapon(null);
+                        }
+                    }}
+                    editingContext={isViewingDefault ? "Current Loadout" : `preset: ${activePreset?.name || "Preset"}`}
+                    saveAction={isViewingDefault
+                        ? {
+                            label: "Save as Preset",
+                            detail: "Create a reusable preset from this loadout",
+                            onSave: () => {
+                                setActiveWeapon(null);
+                                onSaveAsNew();
+                            },
+                        }
+                        : {
+                            label: "Save Preset",
+                            detail: `Save changes to ${activePreset?.name || "this preset"}`,
+                            onSave: () => {
+                                setActiveWeapon(null);
+                                onSave();
+                            },
+                        }}
                     show={activeWeapon !== null}
-                    onClose={() => setActiveWeapon(null)}
+                    onClose={() => {
+                        // Current Loadout changes are a modal-local draft
+                        // until its Apply weapon action succeeds.
+                        if (isEditingDefault) onCancel();
+                        setActiveWeapon(null);
+                    }}
                 />
             )}
         </div>

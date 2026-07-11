@@ -93,6 +93,9 @@
 }
 
 .game-mode-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: var(--accent-dim);
   border: 1px solid var(--border-accent);
   color: var(--accent);
@@ -102,6 +105,18 @@
   font-weight: 700;
   letter-spacing: 1.5px;
   text-transform: uppercase;
+}
+
+.game-mode-icon,
+.live-match-mode-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.game-mode-icon {
+  color: currentColor;
 }
 
 .game-source-tag {
@@ -999,6 +1014,77 @@
   color: var(--text-secondary);
 }
 
+.live-match-score {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  min-width: 178px;
+  padding: 6px 12px;
+  color: var(--text-primary);
+  background: rgba(4, 11, 17, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.live-match-score strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.live-match-score strong b:first-child { color: var(--green); }
+.live-match-score strong b:last-child { color: var(--accent); }
+.live-match-score strong i { color: rgba(255, 255, 255, 0.38); font-style: normal; }
+
+.live-score-team {
+  color: var(--text-secondary);
+  font-size: 0.56rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.live-score-team.is-enemy { text-align: right; }
+
+.live-match-ranks-button {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--text-primary);
+  background: rgba(7, 13, 18, 0.68);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.live-match-ranks-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.live-match-ranks-button:disabled { cursor: wait; opacity: 0.7; }
+.live-match-ranks-button.is-error { border-color: var(--yellow); color: var(--yellow); }
+
+.live-player-loadout-image-placeholder {
+  width: 72px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.025);
+}
+
 .peak-rank-mini {
   display: inline-flex;
   align-items: center;
@@ -1136,6 +1222,7 @@
   text-align: left;
   font-family: inherit;
   overflow: hidden;
+  touch-action: none;
 }
 
 .live-match-status-pill.is-pregame {
@@ -1180,6 +1267,14 @@
     radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.18), transparent 48%),
     rgba(34, 211, 163, 0.16);
   border: 1px solid rgba(34, 211, 163, 0.32);
+}
+
+.live-match-mode-icon {
+  color: var(--green);
+}
+
+.live-match-status-pill.is-pregame .live-match-mode-icon {
+  color: var(--yellow);
 }
 
 .live-match-status-pill.is-pregame .live-match-pill-icon {
@@ -1268,7 +1363,7 @@
   text-transform: uppercase;
 }
 
-.live-match-status-pill span:not(.live-match-status-dot) {
+.live-match-pill-body > span {
   display: block;
   margin-top: 3px;
   color: var(--text-secondary);

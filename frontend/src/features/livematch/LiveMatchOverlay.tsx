@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
+import { useFloatingWidgetDrag } from '@/hooks/useFloatingWidgetDrag';
 import { Weapon } from '@/lib/types';
 import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
 import ProfilePanel from '@/features/profile/ProfilePanel';
@@ -20,6 +21,58 @@ const SELECTION_RANK: Record<string, number> = { locked: 0, selected: 1, none: 2
 type LivePublicMap = { uuid?: string; displayName: string; splash?: string; mapUrl?: string };
 type LivePublicAgent = { uuid?: string; displayName: string; displayIcon?: string; fullPortrait?: string };
 type LivePublicTierSet = { tiers?: Array<{ tier: number; tierName?: string; largeIcon?: string }> };
+type LivePublicGameMode = { uuid?: string; displayName?: string; displayIcon?: string; listViewIcon?: string };
+
+// Riot queue IDs and Valorant-API game-mode names are not one-to-one.
+// Competitive, Unrated, Swiftplay and Premier all use Standard's artwork.
+const QUEUE_GAME_MODE_UUIDS: Record<string, string> = {
+    competitive: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    unrated: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    swiftplay: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    premier: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    custom: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    onefa: "96bd3920-4f36-d026-2b28-c683eb0bcac5",
+    deathmatch: "a8790ec5-4237-f2f0-e93b-08a8e89865b2",
+    spikerush: "e921d1e6-416b-c31f-1291-74930c330b7b",
+    ggteam: "a4ed6518-4741-6dcb-35bd-f884aecdc859",
+    escalation: "a4ed6518-4741-6dcb-35bd-f884aecdc859",
+    snowball: "57038d6d-49b1-3a74-c5ef-3395d9f23a97",
+};
+
+function modeLookupKey(value: string) {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function GameModeIcon({ icon, label, className }: { icon?: string; label: string; className: string }) {
+    if (icon) return <img className={className} src={icon} alt="" aria-hidden="true" />;
+    return (
+        <svg className={className} viewBox="0 0 24 24" aria-label={label} role="img">
+            <path d="M5 4.5h14v4H5zM4 10.5h16v9H4zM8.5 13.5h7v2h-7z" fill="currentColor" />
+        </svg>
+    );
+}
+
+function SafeLiveWeaponImage({ sources }: { sources: string[] }) {
+    const usableSources = sources.filter(Boolean);
+    const sourceKey = usableSources.join("|");
+    const [sourceIndex, setSourceIndex] = useState(0);
+
+    useEffect(() => {
+        setSourceIndex(0);
+    }, [sourceKey]);
+
+    const src = usableSources[sourceIndex];
+    if (!src) return <span className="live-player-loadout-image-placeholder" aria-hidden="true" />;
+
+    return (
+        <img
+            src={src}
+            alt=""
+            aria-hidden="true"
+            onError={() => setSourceIndex((index) => index + 1)}
+        />
+    );
+}
 
 function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
     if (!players || players.length === 0) return [];
@@ -42,8 +95,12 @@ export default function LiveMatchOverlay() {
     const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
+    const [gameModeCache, setGameModeCache] = useState<Record<string, string>>({});
     const [selectedPlayer, setSelectedPlayer] = useState<LivePlayer | null>(null);
     const [profileTarget, setProfileTarget] = useState<ProfileTarget | null>(null);
+    const [rankRefreshState, setRankRefreshState] = useState<"idle" | "loading" | "error">("idle");
+    const [stackScanState, setStackScanState] = useState<"idle" | "loading" | "error">("idle");
+    const matchDrag = useFloatingWidgetDrag("live-match");
     const playerCardIcons = useMemo(
         () => new Map(playerCards.map((card) => [card.uuid.toLowerCase(), card.displayIcon || card.smallArt || ""])),
         [playerCards],
@@ -208,6 +265,18 @@ export default function LiveMatchOverlay() {
                 }
                 setTierCache(t);
             }).catch(err => console.error("Error loading competitive tiers API", err));
+
+        fetchCachedPublicJson<{ data?: LivePublicGameMode[] }>("https://valorant-api.com/v1/gamemodes")
+            .then(d => {
+                const modes: Record<string, string> = {};
+                for (const mode of d.data || []) {
+                    const icon = mode.displayIcon || mode.listViewIcon || "";
+                    if (!icon) continue;
+                    if (mode.uuid) modes[modeLookupKey(mode.uuid)] = icon;
+                    if (mode.displayName) modes[modeLookupKey(mode.displayName)] = icon;
+                }
+                setGameModeCache(modes);
+            }).catch(err => console.error("Error loading game modes API", err));
     }, []);
 
     if (!activeAccount) return null;
@@ -218,9 +287,15 @@ export default function LiveMatchOverlay() {
     const isDismissed = !!(matchKey && matchKey === dismissedMatchKey);
 
     // Format queue name
-    const getQueueName = (id: string) => {
+    const getQueueName = (id: string, modeId = "") => {
         const key = id?.toLowerCase?.() || "";
-        if (!key) return "Live Match";
+        if (!key) {
+            const mode = modeId.toLowerCase();
+            if (mode.includes("training") || mode.includes("range")) return "The Range";
+            if (mode.includes("teamdeathmatch")) return "Team Deathmatch";
+            if (mode.includes("deathmatch")) return "Deathmatch";
+            return "Live Match";
+        }
         const labels: Record<string, string> = {
             competitive: "Competitive",
             unrated: "Unrated",
@@ -238,24 +313,34 @@ export default function LiveMatchOverlay() {
         };
         return labels[key] || id.charAt(0).toUpperCase() + id.slice(1);
     };
+    const queueName = getQueueName(match.queueId, match.modeId);
+    const mappedModeUuid = QUEUE_GAME_MODE_UUIDS[match.queueId?.toLowerCase?.() || ""] || "";
+    const gameModeIcon = gameModeCache[modeLookupKey(mappedModeUuid)]
+        || gameModeCache[modeLookupKey(match.queueId)]
+        || gameModeCache[modeLookupKey(queueName)]
+        || "";
 
     if (isDismissed) {
         const reopen = () => setDismissedMatchKey("");
         const isPregame = match.phase === "pregame";
         const pillPhaseLabel = isPregame ? "Agent select" : "Live match";
-        const queueName = getQueueName(match.queueId);
         const mapName = mapCache[match.mapId?.toLowerCase()]?.name;
         const tier = "is-" + (isPregame ? "pregame" : "live");
         return (
             <button
+                ref={matchDrag.setElement}
                 type="button"
                 className={`live-match-status-pill is-clickable ${tier}`}
-                onClick={reopen}
+                onClick={() => {
+                    if (!matchDrag.consumeClick()) reopen();
+                }}
+                onPointerDown={matchDrag.onPointerDown}
+                style={matchDrag.style}
                 aria-label="Reopen live match overlay"
                 title="Reopen live match"
             >
                 <span className="live-match-pill-icon" aria-hidden="true">
-                    <span className="live-match-pill-dot" />
+                    <GameModeIcon icon={gameModeIcon} label={queueName} className="live-match-mode-icon" />
                 </span>
                 <span className="live-match-pill-body">
                     <span className="live-match-pill-kicker">
@@ -278,6 +363,26 @@ export default function LiveMatchOverlay() {
     const partyColors = partyGroupColors(partySizes);
     const yourPartySize = partySizes.get("your-party") || 0;
     const yourPartyColor = partyColors.get("your-party");
+    const refreshRanks = async () => {
+        setRankRefreshState("loading");
+        const refreshed = await refreshLiveMatchRanks();
+        if (refreshed.phase === "none") {
+            setRankRefreshState("error");
+            return;
+        }
+        setMatch(refreshed);
+        setRankRefreshState("idle");
+    };
+    const scanLikelyStacks = async () => {
+        setStackScanState("loading");
+        const scanned = await scanLiveMatchLikelyStacks();
+        if (scanned.phase === "none") {
+            setStackScanState("error");
+            return;
+        }
+        setMatch(scanned);
+        setStackScanState("idle");
+    };
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
             <div className="overlay-scrim"></div>
@@ -292,8 +397,29 @@ export default function LiveMatchOverlay() {
 
             <header className="live-match-header">
                 <div className="live-match-header-row">
-                    <div className="game-mode-tag">{getQueueName(match.queueId)}</div>
+                    <div className="game-mode-tag">
+                        <GameModeIcon icon={gameModeIcon} label={queueName} className="game-mode-icon" />
+                        <span>{queueName}</span>
+                    </div>
                     {match.source && <div className="game-source-tag">{match.source}</div>}
+                    <button
+                        type="button"
+                        className={`live-match-ranks-button${rankRefreshState === "error" ? " is-error" : ""}`}
+                        onClick={() => void refreshRanks()}
+                        disabled={rankRefreshState === "loading"}
+                        title="Retry the automatic current-rank lookup for identifiable players"
+                    >
+                        {rankRefreshState === "loading" ? "Refreshing ranks…" : rankRefreshState === "error" ? "Ranks unavailable" : "Refresh ranks"}
+                    </button>
+                    <button
+                        type="button"
+                        className={`live-match-ranks-button${stackScanState === "error" ? " is-error" : ""}`}
+                        onClick={() => void scanLikelyStacks()}
+                        disabled={stackScanState === "loading"}
+                        title="Retry the automatic likely-stack scan using recent completed matches"
+                    >
+                        {stackScanState === "loading" ? "Scanning stacks…" : stackScanState === "error" ? "Stacks unavailable" : "Rescan likely stacks"}
+                    </button>
                 </div>
                 <h1 className="map-display-name">{currentMap.name}</h1>
                 {match.phase === "pregame" && displayedTimeLeft > 0 && (
@@ -305,6 +431,13 @@ export default function LiveMatchOverlay() {
                 {match.phase === "coregame" && (
                     <div className="live-match-context">
                         <div className="live-badge">LIVE MATCH</div>
+                        {match.scoreAvailable && (
+                            <div className="live-match-score" aria-label={`Live score: your team ${match.allyScore}, enemy team ${match.enemyScore}`}>
+                                <span className="live-score-team is-ally">YOUR TEAM</span>
+                                <strong><b>{match.allyScore}</b><i>:</i><b>{match.enemyScore}</b></strong>
+                                <span className="live-score-team is-enemy">ENEMY</span>
+                            </div>
+                        )}
                         {yourPartySize > 1 && (
                             <div
                                 className="live-match-party-summary"
@@ -333,6 +466,7 @@ export default function LiveMatchOverlay() {
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
+                                partyConfidence={player.partyConfidence}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -357,6 +491,7 @@ export default function LiveMatchOverlay() {
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
+                                partyConfidence={player.partyConfidence}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -424,6 +559,7 @@ function PlayerCard({
     partySize,
     partyColor,
     partyGroup,
+    partyConfidence,
     onSelect,
 }: {
     player: LivePlayer;
@@ -434,6 +570,7 @@ function PlayerCard({
     partySize?: number;
     partyColor?: string;
     partyGroup?: string;
+    partyConfidence?: "likely";
     onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
@@ -444,7 +581,9 @@ function PlayerCard({
     const peakShort = peakName ? peakName.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : "";
     const displayName = privatePlayerLabel(player, agent?.name);
     const partyPillText = partySize && partySize > 1
-        ? partyPillLabel(partySize, partyGroup, player.isLocal)
+        ? partyConfidence === "likely"
+            ? `LIKELY ${partySize === 2 ? "DUO" : `${partySize}-STACK`}`
+            : partyPillLabel(partySize, partyGroup, player.isLocal)
         : null;
 
     return (
@@ -500,6 +639,11 @@ function PlayerCard({
                                 )}
                             </div>
                         )}
+                    </div>
+                ) : player.peakTier && peakTier ? (
+                    <div className="player-rank-container unranked">
+                        {peakTier.icon && <img src={peakTier.icon} alt={peakTier.name} className="player-rank-icon" title={`Peak ${peakTier.name}`} />}
+                        <div className="unranked-placeholder">Peak {peakTier.name}</div>
                     </div>
                 ) : player.puuid ? (
                     <div className="player-rank-container unranked">
@@ -581,16 +725,19 @@ function LivePlayerModal({
 
     const equippedSkins = useMemo(() => {
         if (!loadoutIds?.length) return [];
-        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; icon: string; fallbackIcon: string }>();
+        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; iconSources: string[] }>();
         for (const weapon of weapons) {
             for (const skin of weapon.skins) {
+                const standardSkin = skin.uuid === weapon.defaultSkinUuid;
                 const cosmetic = {
                     uuid: skin.uuid,
                     weaponId: weapon.uuid,
                     weapon: weapon.displayName,
                     name: skin.displayName,
-                    icon: skin.displayIcon || skin.chromas[0]?.fullRender || weapon.displayIcon,
-                    fallbackIcon: weapon.displayIcon,
+                    iconSources: (standardSkin
+                        ? [weapon.displayIcon, skin.displayIcon, skin.chromas[0]?.fullRender]
+                        : [skin.displayIcon, skin.chromas[0]?.fullRender, weapon.displayIcon]
+                    ).filter(Boolean),
                 };
                 byItemId.set(skin.uuid.toLowerCase(), cosmetic);
                 for (const level of skin.levels) byItemId.set(level.uuid.toLowerCase(), cosmetic);
@@ -600,7 +747,7 @@ function LivePlayerModal({
         return Array.from(new Map(
             loadoutIds
                 .map((id) => byItemId.get(id.toLowerCase()))
-                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; icon: string; fallbackIcon: string } => Boolean(skin))
+                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; iconSources: string[] } => Boolean(skin))
                 .map((skin) => [skin.weaponId, skin]),
         ).values());
     }, [loadoutIds, weapons]);
@@ -715,20 +862,7 @@ function LivePlayerModal({
                                             <h3>{section.label}</h3>
                                             {section.skins.map((skin) => skin ? (
                                                 <div className="live-player-loadout-item" key={skin.uuid}>
-                                                    {skin.icon && (
-                                                        <img
-                                                            src={skin.icon}
-                                                            data-fallback={skin.fallbackIcon}
-                                                            alt=""
-                                                            aria-hidden="true"
-                                                            onError={(event) => {
-                                                                const image = event.currentTarget;
-                                                                const fallback = image.dataset.fallback;
-                                                                if (fallback && image.src !== fallback) image.src = fallback;
-                                                                else image.hidden = true;
-                                                            }}
-                                                        />
-                                                    )}
+                                                    <SafeLiveWeaponImage sources={skin.iconSources} />
                                                     <span><b>{skin.weapon}</b><small>{skin.name}</small></span>
                                                 </div>
                                             ) : null)}

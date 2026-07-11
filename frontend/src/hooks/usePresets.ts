@@ -234,15 +234,11 @@ export function usePresets(
         setSelectedPreset(newPreset);
         setCurrentLoadout(newPreset.loadout);
 
-        if (namingMode === NamingMode.New || namingMode === NamingMode.SaveAsNew) {
-            setIsEditing(true);
-            setEditingPreset({ ...newPreset });
-            setOriginalPreset({ ...newPreset });
-        } else {
-            setIsEditing(false);
-            setEditingPreset(null);
-            setOriginalPreset(null);
-        }
+        // A newly created preset is already persisted. Keep the editor clean
+        // until the user actually changes a slot, identity, or agent assignment.
+        setIsEditing(false);
+        setEditingPreset(null);
+        setOriginalPreset(null);
 
         setShowPresetNameModal(false);
         setDropdownPreset(null);
@@ -341,11 +337,48 @@ export function usePresets(
             expressions: appliedPreset.expressions || gameMeta.expressions,
         });
         setCurrentLoadout(appliedLoadout);
-        setSelectedPreset(
-            appliedPreset.uuid === DEFAULT_PRESET_ID
-                ? { ...defaultPreset, loadout: appliedLoadout, identity: appliedPreset.identity, sprays: appliedPreset.sprays }
-                : appliedPreset,
-        );
+        // Applying makes this the game loadout, so return to the live view
+        // instead of leaving the user on the source preset.
+        setSelectedPreset({
+            ...defaultPreset,
+            loadout: appliedLoadout,
+            identity: appliedPreset.identity || gameMeta.identity,
+            sprays: appliedPreset.sprays || gameMeta.sprays,
+            flexes: appliedPreset.flexes || gameMeta.flexes,
+            expressions: appliedPreset.expressions || gameMeta.expressions,
+        });
+        setIsEditing(false);
+        setEditingPreset(null);
+        setOriginalPreset(null);
+    };
+
+    const handleApplyDraftComplete = (appliedPreset: Preset) => {
+        const appliedLoadout = mergePresetLoadout(appliedPreset, presets, appliedPreset.loadout);
+        setGameLoadout(appliedLoadout);
+        setGameMeta({
+            identity: appliedPreset.identity || gameMeta.identity,
+            sprays: appliedPreset.sprays || gameMeta.sprays,
+            flexes: appliedPreset.flexes || gameMeta.flexes,
+            expressions: appliedPreset.expressions || gameMeta.expressions,
+        });
+        // Applying a draft changes VALORANT only. The preset editor remains
+        // open and unsaved until the user explicitly chooses Save.
+    };
+
+    const handleApplySingleComplete = (weaponId: string) => {
+        const item = currentLoadout[weaponId];
+        if (!item) return;
+        const nextLoadout = { ...gameLoadout, [weaponId]: item };
+        setGameLoadout(nextLoadout);
+
+        // A quick live apply is useful while comparing a saved preset too.
+        // Keep that unsaved editor snapshot intact instead of silently
+        // switching the user away from it.
+        if (isEditing && editingPreset?.uuid !== DEFAULT_PRESET_ID) {
+            return;
+        }
+        setCurrentLoadout(nextLoadout);
+        setSelectedPreset({ ...defaultPreset, loadout: nextLoadout });
         setIsEditing(false);
         setEditingPreset(null);
         setOriginalPreset(null);
@@ -384,7 +417,7 @@ export function usePresets(
 
         const applyAgentChange = (preset: Preset): Preset => {
             const updatedAgents = isAssigned
-                ? [...new Set([...(preset.agents || []), ...agentIds])]
+                ? [...new Set(agentIds)]
                 : (preset.agents || []).filter(id => !agentIds.includes(id));
             return { ...preset, agents: updatedAgents };
         };
@@ -442,10 +475,10 @@ export function usePresets(
                 newLoadout[weaponId] = base ? { ...base, ...changedItem } : (changedItem as LoadoutItemV1);
             }
             setCurrentLoadout(newLoadout);
-            setGameLoadout(newLoadout);
-            // Surface the action bar so the user can Apply the change
+            // Keep this as a temporary picker draft. The weapon modal owns
+            // the only live apply action; closing it restores gameLoadout.
             setIsEditing(true);
-            setOriginalPreset({ ...defaultPreset, loadout: newLoadout });
+            setOriginalPreset({ ...defaultPreset, loadout: gameLoadout });
             setEditingPreset({ ...defaultPreset, loadout: newLoadout });
             return;
         }
@@ -568,6 +601,8 @@ export function usePresets(
         handleCloseConfirmationModal,
         handleCancel,
         handleApplyComplete,
+        handleApplyDraftComplete,
+        handleApplySingleComplete,
         handleOpenPresetNameModal,
         handleOpenRenameModal,
         handleDropdownVariant,

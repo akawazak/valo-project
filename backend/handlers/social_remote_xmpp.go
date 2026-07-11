@@ -32,21 +32,22 @@ type xmppSocialHub struct {
 }
 
 type xmppSocialSession struct {
-	mu          sync.RWMutex
-	writeMu     sync.Mutex
-	key         string
-	auth        remoteAuthHeaders
-	host        string
-	domain      string
-	port        int
-	state       string
-	lastError   string
-	lastAttempt time.Time
-	roster      map[string]xmppRosterItem
-	presences   map[string]chatPresenceEntry
-	running     bool
-	conn        net.Conn
-	messages    map[string][]ChatMessage
+	mu            sync.RWMutex
+	writeMu       sync.Mutex
+	key           string
+	auth          remoteAuthHeaders
+	host          string
+	domain        string
+	port          int
+	state         string
+	lastError     string
+	lastAttempt   time.Time
+	roster        map[string]xmppRosterItem
+	presences     map[string]chatPresenceEntry
+	selfPresences map[string]chatPresenceEntry
+	running       bool
+	conn          net.Conn
+	messages      map[string][]ChatMessage
 }
 
 type xmppMessage struct {
@@ -100,11 +101,12 @@ func (h *xmppSocialHub) ensure(auth *remoteAuthHeaders) *xmppSocialSession {
 	session := h.sessions[key]
 	if session == nil {
 		session = &xmppSocialSession{
-			key:       key,
-			roster:    map[string]xmppRosterItem{},
-			presences: map[string]chatPresenceEntry{},
-			state:     "connecting",
-			messages:  map[string][]ChatMessage{},
+			key:           key,
+			roster:        map[string]xmppRosterItem{},
+			presences:     map[string]chatPresenceEntry{},
+			selfPresences: map[string]chatPresenceEntry{},
+			state:         "connecting",
+			messages:      map[string][]ChatMessage{},
 		}
 		h.sessions[key] = session
 	}
@@ -364,7 +366,7 @@ func (s *xmppSocialSession) applyRoster(iq xmppIQ) {
 
 func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	puuid := jidLocalpart(p.From)
-	if puuid == "" || puuid == strings.ToLower(s.auth.Puuid) {
+	if puuid == "" {
 		return
 	}
 	entry := chatPresenceEntry{
@@ -392,6 +394,17 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if strings.EqualFold(puuid, s.auth.Puuid) {
+		if entry.State == "offline" {
+			delete(s.selfPresences, resourceKey)
+			return
+		}
+		if s.selfPresences == nil {
+			s.selfPresences = map[string]chatPresenceEntry{}
+		}
+		s.selfPresences[resourceKey] = entry
+		return
+	}
 	if roster, ok := s.roster[puuid]; ok {
 		entry.GameName = roster.GameName
 		entry.GameTag = roster.GameTag
@@ -451,6 +464,14 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 	if s.state == "error" && len(out) == 0 {
 		status = "unavailable"
 	}
+	var self *SocialPresence
+	for _, entry := range s.selfPresences {
+		normalized := normalizeChatPresence(entry, nil)
+		if self == nil || (strings.EqualFold(normalized.Product, "valorant") && !strings.EqualFold(self.Product, "valorant")) {
+			copy := normalized
+			self = &copy
+		}
+	}
 	return SocialStatusResponse{
 		Status:         status,
 		Source:         "remote",
@@ -461,6 +482,7 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 		OnlineCount:    onlineCount,
 		InGameCount:    inGameCount,
 		Presences:      out,
+		SelfPresence:   self,
 		Error:          s.lastError,
 	}
 }

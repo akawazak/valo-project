@@ -1127,6 +1127,10 @@ export interface LiveMatchResponse {
     matchId: string;
     mapId: string;
     queueId: string;
+    modeId?: string;
+    allyScore?: number;
+    enemyScore?: number;
+    scoreAvailable?: boolean;
     timeLeft: number;
     allyTeam?: LivePlayer[];
     enemyTeam?: LivePlayer[];
@@ -1148,6 +1152,8 @@ export interface LivePlayer {
     peakRankName?: string;
     /** Opaque grouping only; raw Riot party IDs are never returned. */
     partyGroup?: string;
+    /** Confirmed from Riot presence/current party, or inferred from prior matches. */
+    partyConfidence?: "likely";
     teamId?: string;
 }
 
@@ -1164,28 +1170,34 @@ export async function getLiveMatch(): Promise<LiveMatchResponse> {
     }
 }
 
-export interface ValorantPingTarget {
-    region: string;
-    label: string;
-    host: string;
-    port: string;
-    ms?: number;
-    ok: boolean;
-    error?: string;
-}
-
-export interface ValorantPingResponse {
-    checkedAt: number;
-    targets: ValorantPingTarget[];
-}
-
-export async function getValorantPing(): Promise<ValorantPingResponse> {
-    const response = await appFetch(LOCAL_URL + '/valorant-ping');
-    if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to run VALORANT ping test.');
+/**
+ * Rebuild the active match with current Riot MMR for players whose identity
+ * Riot exposes. This deliberately bypasses the local match-history cache.
+ */
+export async function refreshLiveMatchRanks(): Promise<LiveMatchResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/livematch/ranks', { method: 'POST' });
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: text || "Failed to refresh live ranks." };
+        }
+        return await response.json();
+    } catch (err) {
+        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
     }
-    return response.json();
+}
+
+export async function scanLiveMatchLikelyStacks(): Promise<LiveMatchResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/livematch/likely-stacks', { method: 'POST' });
+        if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: text || "Failed to scan likely stacks." };
+        }
+        return await response.json();
+    } catch (err) {
+        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
+    }
 }
 
 export interface LivePlayerStats {

@@ -7,9 +7,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 220px;
-  max-width: 280px;
-  padding: 7px 11px;
+  min-width: 244px;
+  max-width: 304px;
+  padding: 9px 11px;
   color: var(--text-primary);
   background: #081722;
   border: 1px solid rgba(var(--accent-rgb), 0.32);
@@ -20,6 +20,7 @@
   overflow: hidden;
   pointer-events: auto;
   cursor: pointer;
+  touch-action: none;
   transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -90,6 +91,33 @@
     radial-gradient(circle at 35% 25%, rgba(255, 255, 255, 0.16), transparent 42%),
     rgba(245, 197, 66, 0.14);
   border-color: rgba(245, 197, 66, 0.34);
+  position: relative;
+  color: #f5c542;
+  overflow: visible;
+}
+
+.live-party-friends-icon {
+  width: 21px;
+  height: 21px;
+}
+
+.live-party-friends-count {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  min-width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  border: 2px solid #081722;
+  border-radius: 50%;
+  color: #081722;
+  background: #f5c542;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6rem;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .live-party-pill-body {
@@ -127,7 +155,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 180px;
+  max-width: 196px;
 }
 
 .live-party-pill-sub {
@@ -135,6 +163,9 @@
   font-size: 0.62rem;
   font-weight: 600;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .live-party-pill-arrow {
@@ -165,13 +196,15 @@
   left: 18px;
   bottom: 18px;
   z-index: 42;
-  width: min(500px, calc(100vw - 32px));
-  max-height: min(720px, calc(100vh - 104px));
+  width: min(410px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 104px));
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
   background: color-mix(in srgb, var(--panel-bg-solid) 94%, #071722);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
-  border-radius: 14px;
+  border-radius: 8px;
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(18px);
 }
@@ -197,9 +230,18 @@
   border-bottom: 1px solid rgba(131, 185, 211, 0.12);
 }
 
+.live-party-drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.live-party-drag-handle:active {
+  cursor: grabbing;
+}
+
 .live-party-overview {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   margin: 0.85rem 0.85rem 0.75rem;
   background: #0a1d2a;
   border: 1px solid rgba(131, 185, 211, 0.14);
@@ -323,6 +365,7 @@
 }
 
 .live-party-friends {
+  min-height: 0;
   padding: 0 0.78rem 0.78rem;
 }
 
@@ -452,7 +495,7 @@
   align-items: center;
   gap: 0.52rem;
   min-width: 0;
-  padding: 0.62rem 0.7rem;
+  padding: 0.6rem 0.65rem;
   background: #0a1c28;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

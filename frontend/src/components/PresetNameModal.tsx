@@ -12,19 +12,6 @@ type PresetNameModalProps = {
     namingMode: NamingMode;
 };
 
-const BTN_BASE: React.CSSProperties = {
-    borderRadius: '6px',
-    padding: '0.5rem 1.25rem',
-    fontSize: '0.8rem',
-    fontWeight: 700,
-    cursor: 'pointer',
-    fontFamily: 'var(--font-mono)',
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    transition: 'all 0.18s ease',
-    border: '1px solid transparent',
-};
-
 export default function PresetNameModal({ show, onCloseAction, onSaveAction, initialName, namingMode }: PresetNameModalProps) {
     const [presetName, setPresetName] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
@@ -53,39 +40,36 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
 
     return createPortal(
         <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && onCloseAction()}>
-            <div className="unified-modal-container" style={{ maxWidth: '460px', height: 'auto', minHeight: 'unset' }}>
+            <div className="unified-modal-container preset-name-modal" role="dialog" aria-modal="true" aria-labelledby="preset-name-modal-title">
                 {/* Header */}
-                <div className="unified-modal-header" style={{ padding: '1rem 1.5rem' }}>
+                <div className="unified-modal-header preset-name-modal-header">
                     <div className="unified-modal-title-wrap">
                         <span className="kicker">// Preset</span>
-                        <h3 className="unified-modal-title" style={{ fontSize: '1rem' }}>{titleMap[namingMode]}</h3>
+                        <h3 id="preset-name-modal-title" className="unified-modal-title">{titleMap[namingMode]}</h3>
                     </div>
                     <button type="button" className="unified-modal-close-btn" onClick={onCloseAction}>✕</button>
                 </div>
 
                 {/* Body */}
-                <div style={{ padding: '1.25rem 1.5rem' }}>
-                    <label style={{ display: 'block', fontSize: '0.7rem', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                <form className="preset-name-modal-body" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
+                    <label className="preset-name-modal-label" htmlFor="preset-name-input">
                         Preset Name
                     </label>
                     <input
                         ref={inputRef}
+                        id="preset-name-input"
                         type="text"
-                        className="tactical-input"
+                        className="tactical-input preset-name-modal-input"
                         placeholder="e.g. Competitive Main, Ranked Grind…"
                         value={presetName}
                         onChange={(e) => setPresetName(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSave()}
-                        style={{ width: '100%', fontSize: '0.9rem' }}
                     />
-                </div>
-
-                {/* Footer */}
-                <div style={{ padding: '0.75rem 1.5rem 1.25rem', display: 'flex', gap: '0.65rem', justifyContent: 'flex-end' }}>
+                    <p className="preset-name-modal-help">You can rename or duplicate this preset later.</p>
+                    <div className="preset-name-modal-actions">
                     <button
                         type="button"
                         onClick={onCloseAction}
-                        style={{ ...BTN_BASE, background: 'transparent', borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
+                        className="btn-tactical btn-tactical-ghost"
                     >
                         Cancel
                     </button>
@@ -93,11 +77,12 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
                         type="button"
                         onClick={handleSave}
                         disabled={!presetName.trim()}
-                        style={{ ...BTN_BASE, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#fff', opacity: presetName.trim() ? 1 : 0.4 }}
+                        className="btn-tactical btn-tactical-accent"
                     >
-                        Save
+                        {namingMode === NamingMode.Rename ? "Rename" : "Create Preset"}
                     </button>
-                </div>
+                    </div>
+                </form>
             </div>
         </div>,
         document.body

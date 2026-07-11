@@ -1,6 +1,65 @@
 package handlers
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+	"time"
+)
+
+func TestLiveRankFromMMRUsesLatestUpdateAndPeak(t *testing.T) {
+	var mmr playerMMRResponse
+	mmr.LatestCompetitiveUpdate.SeasonID = "previous-act"
+	mmr.LatestCompetitiveUpdate.TierAfterUpdate = 17
+	mmr.LatestCompetitiveUpdate.RankedRatingAfterUpdate = 42
+	mmr.QueueSkills = map[string]struct {
+		SeasonalInfoBySeasonID map[string]struct {
+			NumberOfWins    int            `json:"NumberOfWins"`
+			NumberOfGames   int            `json:"NumberOfGames"`
+			CompetitiveTier int            `json:"CompetitiveTier"`
+			RankedRating    int            `json:"RankedRating"`
+			WinsByTier      map[string]int `json:"WinsByTier"`
+		} `json:"SeasonalInfoBySeasonID"`
+	}{
+		"competitive": {
+			SeasonalInfoBySeasonID: map[string]struct {
+				NumberOfWins    int            `json:"NumberOfWins"`
+				NumberOfGames   int            `json:"NumberOfGames"`
+				CompetitiveTier int            `json:"CompetitiveTier"`
+				RankedRating    int            `json:"RankedRating"`
+				WinsByTier      map[string]int `json:"WinsByTier"`
+			}{
+				"older-act": {CompetitiveTier: 14, WinsByTier: map[string]int{"19": 1}},
+			},
+		},
+	}
+
+	tier, rr, peak := liveRankFromMMR(mmr, "missing-current-act")
+	if tier != 17 || rr != 42 || peak != 19 {
+		t.Fatalf("rank fallback = (%d, %d, %d), want (17, 42, 19)", tier, rr, peak)
+	}
+}
+
+func TestNormalizeChatPresenceReadsLiveScore(t *testing.T) {
+	payload := `{"sessionLoopState":"INGAME","partyOwnerMatchScoreAllyTeam":7,"partyOwnerMatchScoreEnemyTeam":"5"}`
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Puuid:   "local-player",
+		Product: "valorant",
+		Private: base64.StdEncoding.EncodeToString([]byte(payload)),
+	}, nil)
+	if !presence.ScoreAvailable || presence.AllyScore != 7 || presence.EnemyScore != 5 {
+		t.Fatalf("unexpected score presence: %#v", presence)
+	}
+}
+
+func TestNormalizeChatPresenceReadsNestedLiveScore(t *testing.T) {
+	presence := normalizeChatPresence(chatPresenceEntry{
+		Product: "valorant",
+		Private: `{"matchPresenceData":{"partyOwnerMatchScoreAllyTeam":0,"partyOwnerMatchScoreEnemyTeam":1}}`,
+	}, nil)
+	if !presence.ScoreAvailable || presence.AllyScore != 0 || presence.EnemyScore != 1 {
+		t.Fatalf("unexpected nested score presence: %#v", presence)
+	}
+}
 
 func TestMarkPartyMembersUsesOpaqueGroup(t *testing.T) {
 	response := &LiveMatchResponse{
@@ -72,5 +131,68 @@ func TestAnonymousPartyGroupDoesNotExposeRiotPartyID(t *testing.T) {
 	}
 	if anonymousPartyGroup("") != "" {
 		t.Fatal("empty party ID must stay ungrouped")
+	}
+}
+
+func TestApplyLikelyStackGroupsDoesNotReplaceConfirmedParty(t *testing.T) {
+	response := &LiveMatchResponse{
+		AllyTeam: []*LivePlayer{
+			{Puuid: "local", PartyGroup: "your-party"},
+			{Puuid: "friend", PartyGroup: "your-party"},
+			{Puuid: "random-a"},
+			{Puuid: "random-b"},
+		},
+	}
+
+	applyLikelyStackGroups(response, [][]string{{"random-a", "random-b"}, {"local", "friend"}})
+
+	if response.AllyTeam[0].PartyGroup != "your-party" || response.AllyTeam[1].PartyGroup != "your-party" {
+		t.Fatal("likely-stack scan replaced confirmed party membership")
+	}
+	for _, player := range response.AllyTeam[2:] {
+		if player.PartyGroup != "likely-stack-1" || player.PartyConfidence != "likely" {
+			t.Fatalf("likely stack was not labelled correctly: %+v", player)
+		}
+	}
+}
+
+func TestApplyLikelyStackGroupsCompletesPartialPresenceGroup(t *testing.T) {
+	response := &LiveMatchResponse{EnemyTeam: []*LivePlayer{
+		{Puuid: "enemy-a", PartyGroup: "party-known"},
+		{Puuid: "enemy-b"},
+	}}
+	applyLikelyStackGroups(response, [][]string{{"enemy-a", "enemy-b"}})
+	if response.EnemyTeam[0].PartyGroup != "party-known" || response.EnemyTeam[1].PartyGroup != "party-known" {
+		t.Fatalf("partial presence party was not completed: %#v", response.EnemyTeam)
+	}
+}
+
+func TestLiveRankRetryWaitsThenRetriesMissingPlayer(t *testing.T) {
+	h := NewHandler(nil)
+	response := &LiveMatchResponse{AllyTeam: []*LivePlayer{{Puuid: "player-a"}}}
+	h.liveRanks["match"] = liveRankCache{
+		Attempted:  map[string]struct{}{},
+		ExpiresAt:  time.Now().Add(time.Minute),
+		RetryAfter: time.Now().Add(time.Minute),
+	}
+	if h.hasUnattemptedLiveRanks("match", response) {
+		t.Fatal("a failed lookup retried before its backoff elapsed")
+	}
+	cached := h.liveRanks["match"]
+	cached.RetryAfter = time.Now().Add(-time.Second)
+	h.liveRanks["match"] = cached
+	if !h.hasUnattemptedLiveRanks("match", response) {
+		t.Fatal("a failed lookup was cached as permanently attempted")
+	}
+}
+
+func TestIsTrainingMode(t *testing.T) {
+	for _, modeID := range []string{"/Game/GameModes/Training/TrainingGameMode", "OpenRange", "practice-range"} {
+		if !isTrainingMode(modeID) {
+			t.Fatalf("training mode was not recognized: %q", modeID)
+		}
+	}
+	if isTrainingMode("/Game/GameModes/Bomb/BombGameMode") {
+		t.Fatal("standard mode was incorrectly recognized as training")
 	}
 }

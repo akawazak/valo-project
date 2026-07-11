@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useMemo, useState } from "react";
-import { RiotAccount } from "@/lib/types";
 import Image from "next/image";
+import { RiotAccount } from "@/lib/types";
 import { useData } from "@/context/DataContext";
 import { getProfileOverview } from "@/services/api";
 
@@ -37,36 +37,28 @@ export default function AppTopbar({
 }: AppTopbarProps) {
     const { playerCards } = useData();
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
+    const navRef = useRef<HTMLElement>(null);
+    const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
     const accountLabel = (acc: RiotAccount) => `${acc.gameName}#${acc.tagLine}`;
     const playerCard = useMemo(
         () => playerCards.find((card) => card.uuid.toLowerCase() === profileCardId.toLowerCase()),
         [playerCards, profileCardId],
     );
-    const navRef = useRef<HTMLElement>(null);
-    const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
-    // Slide the pill indicator behind the active tab
     const updateIndicator = useCallback(() => {
         const nav = navRef.current;
-        if (!nav) return;
         const btn = btnRefs.current.get(activeTab);
-        if (!btn) return;
+        if (!nav || !btn) return;
         const navRect = nav.getBoundingClientRect();
         const btnRect = btn.getBoundingClientRect();
-        nav.style.setProperty(
-            "--nav-indicator-left",
-            `${btnRect.left - navRect.left}px`
-        );
-        nav.style.setProperty(
-            "--nav-indicator-width",
-            `${btnRect.width}px`
-        );
+        nav.style.setProperty("--nav-indicator-left", `${btnRect.left - navRect.left}px`);
+        nav.style.setProperty("--nav-indicator-width", `${btnRect.width}px`);
     }, [activeTab]);
 
     useEffect(() => {
         updateIndicator();
-        const raf = requestAnimationFrame(updateIndicator);
-        return () => cancelAnimationFrame(raf);
+        const frame = requestAnimationFrame(updateIndicator);
+        return () => cancelAnimationFrame(frame);
     }, [updateIndicator]);
 
     useEffect(() => {
@@ -91,16 +83,15 @@ export default function AppTopbar({
             <div className="topbar-inner">
                 <button type="button" className="topbar-brand" onClick={() => onTabChange("store")}>
                     <Image className="brand-mark brand-mark-img" src="/brand-mark.svg" alt="" width={30} height={30} priority />
-                    <span>
-                        VANTA<span>VAULT</span>
-                    </span>
+                    <span>VANTA<span>VAULT</span></span>
                 </button>
+
                 <nav className="topbar-nav" ref={navRef} aria-label="Primary">
                     {TABS.map(({ key, label }) => (
                         <button
                             key={key}
-                            ref={(el) => {
-                                if (el) btnRefs.current.set(key, el);
+                            ref={(element) => {
+                                if (element) btnRefs.current.set(key, element);
                             }}
                             type="button"
                             className={activeTab === key ? "active" : ""}
@@ -112,13 +103,7 @@ export default function AppTopbar({
                 </nav>
 
                 <div className="topbar-actions">
-                    {/* Profile Pill */}
-                    <button
-                        type="button"
-                        className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`}
-                        onClick={onOpenAccounts}
-                        title="Manage Accounts"
-                    >
+                    <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title="Manage Accounts">
                         <div className="profile-pill-avatar">
                             {playerCard?.displayIcon ? (
                                 <img src={playerCard.displayIcon} alt="" />
@@ -137,35 +122,15 @@ export default function AppTopbar({
                             <span className="profile-pill-name">
                                 {useLocalSso
                                     ? isLocalClientActive
-                                        ? activeAccount
-                                            ? accountLabel(activeAccount)
-                                            : "Local Client"
+                                        ? activeAccount ? accountLabel(activeAccount) : "Local Client"
                                         : "Waiting for Client"
-                                    : activeAccount
-                                    ? accountLabel(activeAccount)
-                                    : "Connect Account"}
+                                    : activeAccount ? accountLabel(activeAccount) : "Connect Account"}
                             </span>
-                            <span
-                                className={`profile-status-indicator ${
-                                    useLocalSso
-                                        ? isLocalClientActive
-                                            ? "online"
-                                            : "waiting"
-                                        : activeAccount
-                                        ? "online"
-                                        : "offline"
-                                }`}
-                            />
+                            <span className={`profile-status-indicator ${useLocalSso ? isLocalClientActive ? "online" : "waiting" : activeAccount ? "online" : "offline"}`} />
                         </div>
                     </button>
 
-                    {/* Settings Gear Button */}
-                    <button
-                        type="button"
-                        className="topbar-settings-btn"
-                        onClick={onOpenSettings}
-                        title="Open Settings"
-                    >
+                    <button type="button" className="topbar-settings-btn" onClick={onOpenSettings} title="Open Settings">
                         <svg className="settings-gear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <circle cx="12" cy="12" r="3" />
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />

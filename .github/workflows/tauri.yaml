@@ -78,34 +78,34 @@ jobs:
             ## VantaVault v__VERSION__
 
             ### Download
-            - **Windows Portable (recommended):** `VantaVault-portable.exe` - run directly (no install)
-            - **Windows Installer:** `VantaVault_*_x64-setup.exe` - per-user install, no admin required, includes auto-update
+            - **Windows Installer:** `VantaVault_*_x64-setup.exe` — the supported per-user install. No administrator rights are required.
+            - **Windows Portable:** `VantaVault-portable.exe` — run directly with no setup. Download a new portable file manually for future updates.
 
             ### Auto-update
-            Installed copies check for updates automatically on launch.
+            Installed copies check for updates automatically on launch and relaunch from the installed app location after an update.
+            Portable copies intentionally do not use in-app updates, so they always run the exact file you downloaded.
           releaseDraft: false
           prerelease: false
 
-      - name: Package portable exe (Windows)
+      - name: Package portable EXE (Windows)
         if: matrix.settings.platform == 'windows-latest'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = "${{ steps.tauri.outputs.appVersion }}"
-          if (!$version) { Write-Host "No app version output, skipping portable upload."; exit 0 }
+          if (!$version) { throw "No application version was returned by the Tauri build." }
           $binariesDir = "frontend/src-tauri/binaries"
           $releaseDir  = "frontend/src-tauri/target/release"
           $builtSidecar = Get-ChildItem "$binariesDir/valovault-backend*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (!$builtSidecar) { throw "Built backend sidecar not found in $binariesDir." }
           Copy-Item $builtSidecar.FullName "$releaseDir/valovault-backend.exe" -Force
           Copy-Item $builtSidecar.FullName "$releaseDir/valovault-backend-x86_64-pc-windows-msvc.exe" -Force
-          $appExe   = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
-          $sidecar  = Get-ChildItem "$releaseDir/valovault-backend*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (!$appExe -or !$sidecar) { throw "Portable app or sidecar executable not found." }
-          $env:VV_APP_EXE    = $appExe.FullName
-          $env:VV_BACKEND_EXE = $sidecar.FullName
-          $env:VV_VERSION     = $version
+          $appExe = Get-ChildItem "$releaseDir/*.exe" | Where-Object Name -NotMatch 'backend|wix|light|candle|nsis' | Select-Object -First 1
+          if (!$appExe) { throw "Portable app executable not found." }
+          $env:VV_APP_EXE = $appExe.FullName
+          $env:VV_BACKEND_EXE = $builtSidecar.FullName
+          $env:VV_VERSION = $version
           rustc frontend/src-tauri/portable.rs -O -o VantaVault-portable.exe
-          if (!(Test-Path VantaVault-portable.exe)) { throw "Portable exe not created." }
+          if (!(Test-Path VantaVault-portable.exe)) { throw "Portable EXE was not created." }
           gh release upload "v$version" VantaVault-portable.exe --repo akawazak/valo-project --clobber

@@ -2,6 +2,7 @@
 
 import { Preset, Agent } from "@/lib/types";
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useData } from "@/context/DataContext";
 import { DEFAULT_PRESET_ID } from "@/lib/effectivePreset";
 
@@ -182,6 +183,8 @@ export function PresetCard({
 }) {
     const [menuOpen, setMenuOpen] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
+    const menuButtonRef = useRef<HTMLButtonElement>(null);
+    const [menuAnchor, setMenuAnchor] = useState<{ bottom: number; right: number } | null>(null);
 
     const { weapons, playerCards } = useData();
 
@@ -352,19 +355,27 @@ export function PresetCard({
                     <button
                         type="button"
                         className="btn-card-action apply"
-                        onClick={() => onApply(preset)}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onApply(preset);
+                        }}
                         title="Apply Loadout"
                     >
-                        ✓ Apply
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>
+                        Apply
                     </button>
 
                     {/* Edit Button */}
                     <button
                         type="button"
                         className="btn-card-action edit"
-                        onClick={() => onSelect(preset)}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onSelect(preset);
+                        }}
                         title="Edit Loadout"
                     >
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></svg>
                         Edit
                     </button>
 
@@ -373,13 +384,32 @@ export function PresetCard({
                         <button
                             type="button"
                             className="btn-card-action-more"
-                            onClick={() => setMenuOpen(!menuOpen)}
+                            ref={menuButtonRef}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                if (menuOpen) {
+                                    setMenuOpen(false);
+                                    return;
+                                }
+                                const rect = menuButtonRef.current?.getBoundingClientRect();
+                                if (rect) {
+                                    setMenuAnchor({
+                                        bottom: Math.max(8, window.innerHeight - rect.top + 6),
+                                        right: Math.max(8, window.innerWidth - rect.right),
+                                    });
+                                }
+                                setMenuOpen(true);
+                            }}
                             title="More options"
                         >
-                            ⋮
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="12" cy="19" r="1.7" /></svg>
                         </button>
-                        {menuOpen && (
-                            <div className="card-dropdown-menu">
+                        {menuOpen && menuAnchor && typeof document !== "undefined" && createPortal(
+                            <div
+                                ref={menuRef}
+                                className="card-dropdown-menu card-dropdown-menu--floating"
+                                style={{ bottom: menuAnchor.bottom, right: menuAnchor.right }}
+                            >
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -422,7 +452,8 @@ export function PresetCard({
                                 >
                                     Delete
                                 </button>
-                            </div>
+                            </div>,
+                            document.body,
                         )}
                     </div>
                 </div>

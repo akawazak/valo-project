@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/assets/brand-mark.png" alt="VantaVault logo" width="96" />
   <h1>VantaVault</h1>
-  <p>A private, open-source Windows companion for VALORANT.</p>
+  <p>A private, open-source Windows VALORANT companion app for loadouts, the storefront, profiles, friends, parties, and live-match context.</p>
   <p>
     <a href="https://github.com/akawazak/valo-project/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/akawazak/valo-project?style=flat-square&color=ff4655" /></a>
     <a href="LICENSE.md"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1923?style=flat-square" /></a>
@@ -19,7 +19,22 @@
 > [!IMPORTANT]
 > VantaVault is not endorsed by Riot Games. Riot Games, VALORANT, and related assets are trademarks of Riot Games, Inc.
 
-VantaVault brings loadout presets, the storefront, multi-account sessions, player profiles, match history, friend presence, party status, and live-match information into one native desktop app. Account data and sessions stay on your computer.
+## About VantaVault
+
+VantaVault is a native Windows companion for VALORANT players who want their loadouts, storefront, profile, match history, social presence, and live-match context in one place instead of scattered across browser tabs and the Riot Client. It is designed as a private desktop app: account data and sessions remain on your computer.
+
+Use it as a VALORANT loadout manager, skin-store companion, match-history viewer, party and friends monitor, and live-match companion. Availability of Riot Client data varies by game phase and by the fields Riot exposes.
+
+## What's new in 0.5.21
+
+- **Live Match** now shows the current score when the local Riot presence feed provides it, offers an on-demand **Fetch live ranks** action, and can scan recent matches for clearly labelled likely premades.
+- Live rank refreshes are retried in the background when Riot data is temporarily unavailable, while the manual button remains available as a fallback.
+- The live overlay recognises Training Range correctly instead of inheriting a stale queue label, and separates queue type, map, score, teams, ranks, peak ranks, and likely-stack evidence.
+- **Preset agents** can be assigned from the saved-preset editor. The selector shows every agent, locks agents the account does not own, and supports selecting or removing multiple owned agents.
+- Saved presets use their own full loadout editor. Editing a preset never temporarily replaces the Current Loadout behind the dialog, and closing the dialog restores the live loadout before it disappears.
+- Current Loadout edits are applied from the individual weapon picker. Leaving a picker without applying no longer leaves a misleading temporary change in the loadout view.
+- Party & Friends and the minimized live-match widget stay within the visible app window after resizing, then return to their original docked edge when the window is enlarged again. Reopening Party & Friends returns to the main panel rather than a previously viewed profile.
+- Friend and party profiles can be opened from presence cards and reliably return to the correct social panel when closed.
 
 ## Screenshots
 
@@ -31,29 +46,54 @@ VantaVault brings loadout presets, the storefront, multi-account sessions, playe
 
 ![VantaVault loadout editor showing weapon, player card, and expression slots](docs/screenshots/loadout.png)
 
+### Current Loadout
+
+![VantaVault Current Loadout showing equipped weapons, player card, and expression slots](docs/screenshots/current-loadout.png)
+
+### Party and Friends
+
+![VantaVault Party and Friends panel showing in-match friends and Riot Client presence](docs/screenshots/party-friends.png)
+
+### Live Match
+
+![VantaVault live match overlay showing Haven, live score, teams, ranks, and likely duo indicators](docs/screenshots/live-match.png)
+
 ### Cosmetic picker
 
 ![VantaVault spray picker showing owned cosmetics](docs/screenshots/cosmetic-picker.png)
+
+### Flex picker
+
+![VantaVault Flex picker showing available expression cosmetics](docs/screenshots/flex-picker.png)
 
 ## Features
 
 | Area | What VantaVault provides |
 | --- | --- |
-| Loadouts | Save, import, export, edit, and apply weapon, buddy, spray, identity, and agent presets. Custom match presets restore the previous loadout after the match. |
+| Loadouts | Save, import, export, edit, and apply weapon, buddy, spray, identity, flex, and agent presets. Assign multiple owned agents to a saved preset, use the dedicated preset editor, and apply changes to VALORANT only when ready. Custom match presets restore the previous loadout after the match. |
 | Storefront | View the daily store, rotating featured bundles, Night Market, accessories, wallet balances, prices, upgrades, and skin variants. Wishlist skins and receive a notification when they return. |
 | Accounts | Manage multiple Riot accounts with persistent WebView2 sessions and sequential access renewal. |
 | Profile | Automatically sync your profile, inspect rank and match history, and open friends or party members directly in the profile view. |
-| Social | See local and remote friend presence, known party groups, player cards, pregame state, and live-match information when available. |
+| Social | See local and remote friend presence, known party groups, player cards when Riot exposes or cached match data provides them, pregame state, and live-match information when available. The docked Party & Friends panel stays reachable when the app window changes size. |
+| Live Match | View agent picks, teams, map, queue type, live score when Riot presence provides it, direct rank refreshes, current and peak ranks where available, confirmed own-party markers, and clearly marked likely stacks from recent-match evidence. |
 | Discord | Show Browsing Store, Building a Loadout, Agent Select, agent, queue, map, and In Match activity through Rich Presence. |
 | Privacy | Keep match history locally with configurable retention and sanitized diagnostics export. |
 
 ## Installation
 
 1. Open the [latest release](https://github.com/akawazak/valo-project/releases/latest).
-2. Download `VantaVault-portable.exe` to run without installing, or `VantaVault_*_x64-setup.exe` for the installer and update support.
+2. Download either `VantaVault_*_x64-setup.exe` or `VantaVault-portable.exe`.
 3. Launch VantaVault and connect a Riot account.
 
 Windows may show a SmartScreen warning for community builds that are not code-signed. Review the release source before choosing **Run anyway**.
+
+### Which download should I use?
+
+GitHub releases distribute Windows files; they do not host a web version of VantaVault.
+
+- **`VantaVault_*_x64-setup.exe`** is the supported per-user installer. It includes the VantaVault icon, Start Menu integration, the local backend, and reliable automatic updates.
+- **`VantaVault-portable.exe`** runs without setup and keeps its app/backend together. It does not auto-update; download a new portable file when you want a newer version.
+- GitHub's source-code ZIP files are for developers and are not needed to use the app.
 
 ## Requirements and limitations
 

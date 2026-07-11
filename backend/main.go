@@ -4,8 +4,10 @@ import (
 	"backend/handlers"
 	"backend/settings"
 	"backend/tick"
+	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -98,6 +100,8 @@ func main() {
 	mux.HandleFunc("POST /v1/accounts", h.PostAccounts)
 	mux.HandleFunc("GET /v1/accounts/local", h.GetLocalAccount)
 	mux.HandleFunc("GET /v1/livematch", h.GetLiveMatch)
+	mux.HandleFunc("POST /v1/livematch/ranks", h.RefreshLiveMatchRanks)
+	mux.HandleFunc("POST /v1/livematch/likely-stacks", h.ScanLiveMatchLikelyStacks)
 	mux.HandleFunc("GET /v1/live/player-stats", h.GetLivePlayerStats)
 
 	mux.HandleFunc("GET /v1/auth/url", h.GetAuthUrl)
@@ -111,7 +115,6 @@ func main() {
 	mux.HandleFunc("GET /v1/live-loadouts", h.GetLiveLoadouts)
 	mux.HandleFunc("GET /v1/social", h.GetSocialStatus)
 	mux.HandleFunc("GET /v1/account-health", h.GetAccountHealth)
-	mux.HandleFunc("GET /v1/valorant-ping", h.GetValorantPing)
 
 	// /v1/profile/* — rank tracker + match history + sync control
 	// (see valovault/.mavis/plans/tracking-design.md §2).
@@ -130,9 +133,28 @@ func main() {
 	// CORS must handle trusted browser preflights before API authentication:
 	// OPTIONS requests do not include the per-launch key. Actual API requests
 	// still pass through apiKeyMiddleware and require the desktop secret.
-	if err := http.ListenAndServe("127.0.0.1:31719", corsMiddleware(apiKeyMiddleware(apiKey, mux))); err != nil {
+	if err := serveBackendWithRetry(corsMiddleware(apiKeyMiddleware(apiKey, mux))); err != nil {
 		panic(err)
 	}
+}
+
+// During an in-place update Windows can briefly leave the previous sidecar
+// holding the loopback port while the new application starts. Retrying the
+// bind lets the new installed copy take over as soon as the old process exits,
+// rather than making the new app fail permanently on startup.
+func serveBackendWithRetry(handler http.Handler) error {
+	const address = "127.0.0.1:31719"
+	var listener net.Listener
+	var err error
+	for attempt := 1; attempt <= 30; attempt++ {
+		listener, err = net.Listen("tcp", address)
+		if err == nil {
+			return http.Serve(listener, handler)
+		}
+		slog.Warn("backend port is in use; waiting for prior sidecar", "attempt", attempt, "err", err)
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("could not bind backend on %s after waiting for a prior sidecar: %w", address, err)
 }
 
 func apiKeyMiddleware(expected string, next http.Handler) http.Handler {

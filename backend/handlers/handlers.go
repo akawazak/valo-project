@@ -55,6 +55,20 @@ type Handler struct {
 	// false} so we don't hammer Riot on every poll.
 	playerStatsCache map[string]CachedPlayerStats
 	playerStatsMu    sync.RWMutex
+
+	// Party rank refreshes are a Riot-side request, not data returned by the
+	// initial party snapshot. Keep a short per-party cooldown so live polling
+	// can show ranks without repeatedly hitting the refresh endpoint.
+	partyRankRefreshMu sync.Mutex
+	partyRankRefreshAt map[string]time.Time
+
+	likelyStacksMu       sync.RWMutex
+	likelyStacks         map[string]likelyStackCache
+	liveRanksMu          sync.RWMutex
+	liveRanks            map[string]liveRankCache
+	liveExtrasMu         sync.Mutex
+	liveRanksInFlight    map[string]struct{}
+	likelyStacksInFlight map[string]struct{}
 }
 
 // CachedPlayerStats is the per-(puuid, agent) agent-specific record.
@@ -72,9 +86,14 @@ type CachedPlayerStats struct {
 
 func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
-		Val:              Val,
-		namesCache:       make(map[string]string),
-		playerStatsCache: make(map[string]CachedPlayerStats),
+		Val:                  Val,
+		namesCache:           make(map[string]string),
+		playerStatsCache:     make(map[string]CachedPlayerStats),
+		partyRankRefreshAt:   make(map[string]time.Time),
+		likelyStacks:         make(map[string]likelyStackCache),
+		liveRanks:            make(map[string]liveRankCache),
+		liveRanksInFlight:    make(map[string]struct{}),
+		likelyStacksInFlight: make(map[string]struct{}),
 	}
 }
 

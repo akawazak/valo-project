@@ -64,6 +64,8 @@ type DiscordMatchPhase = {
 export default function Home() {
     const {
         agents,
+        allAgents,
+        ownedAgentIDs,
         weapons,
         loading: dataContextLoading,
         isClientHealthy,
@@ -173,6 +175,7 @@ export default function Home() {
     const [isAccountsOpen, setIsAccountsOpen] = useState(false);
     const [showAddAccount, setShowAddAccount] = useState(false);
     const [appVersion, setAppVersion] = useState("");
+    const [isPortable, setIsPortable] = useState(false);
     const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
     const [updateReady, setUpdateReady] = useState(false);
@@ -201,10 +204,10 @@ export default function Home() {
         presets, selectedPreset, isEditing, editingPreset,
         showPresetNameModal, dropdownPreset, namingMode, showConfirmationModal, currentLoadout,
         handleSave, handleSavePresetName, handlePresetSelect, handlePresetDelete, handleConfirmDelete,
-        handleCloseConfirmationModal, handleCancel, handleApplyComplete, handleOpenPresetNameModal, handleOpenRenameModal,
+        handleCloseConfirmationModal, handleCancel, handleApplyComplete, handleApplyDraftComplete, handleOpenPresetNameModal, handleOpenRenameModal,
         handleDropdownVariant, handleClosePresetNameModal, handleTogglePreset,
         handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange, handleFlexesChange,
-        handleImportPresetAction, gameMeta,
+        handleImportPresetAction, handleApplySingleComplete, refreshFromGame, gameMeta,
     } = usePresets(initialData.presets, initialData.playerLoadout, (error) => {
         if (error instanceof LocalClientError) {
             setErrorMessage(error.message);
@@ -213,6 +216,22 @@ export default function Home() {
             console.error(error);
         }
     }, initialData.gameMeta, dataRevision);
+
+    const previousMatchPhaseRef = useRef<DiscordMatchPhase["phase"]>("none");
+    useEffect(() => {
+        const previous = previousMatchPhaseRef.current;
+        const current = discordMatchPhase.phase;
+        previousMatchPhaseRef.current = current;
+        if (!activeAccount || previous === "none" || current !== "none") return;
+
+        // The backend restores the pre-match snapshot after eight inactive
+        // checks. Re-read it shortly afterwards so Current Loadout reflects
+        // the restored game state without requiring an app restart.
+        const timer = window.setTimeout(() => {
+            void refreshFromGame();
+        }, 10_000);
+        return () => window.clearTimeout(timer);
+    }, [activeAccount, discordMatchPhase.phase, refreshFromGame]);
 
     const [showImportModal, setShowImportModal] = useState(false);
     const [importCode, setImportCode] = useState('');
@@ -230,13 +249,22 @@ export default function Home() {
         let alive = true;
         const checkForUpdates = async () => {
             try {
-                const [{ getVersion }, { check }] = await Promise.all([
+                const [{ getVersion }, { check }, { invoke }] = await Promise.all([
                     import("@tauri-apps/api/app"),
                     import("@tauri-apps/plugin-updater"),
+                    import("@tauri-apps/api/core"),
                 ]);
                 const version = await getVersion();
+                const portable = await invoke<boolean>("is_portable").catch(() => false);
                 if (!alive) return;
                 setAppVersion(version);
+                setIsPortable(portable);
+                if (portable) {
+                    setAvailableUpdate(null);
+                    setLastUpdateCheck(null);
+                    setUpdateCheckError(null);
+                    return;
+                }
                 const update = await check();
                 if (!alive) return;
                 setAvailableUpdate(update ?? null);
@@ -256,7 +284,7 @@ export default function Home() {
     }, []);
 
     const checkForUpdatesNow = useCallback(async () => {
-        if (isCheckingUpdate) return;
+        if (isCheckingUpdate || isPortable) return;
         setIsCheckingUpdate(true);
         setUpdateCheckError(null);
         try {
@@ -277,7 +305,7 @@ export default function Home() {
         } finally {
             setIsCheckingUpdate(false);
         }
-    }, [isCheckingUpdate]);
+    }, [isCheckingUpdate, isPortable]);
 
     // Background periodic re-check every 6 hours so users get notified
     // even if they leave the app running for days.
@@ -296,6 +324,12 @@ export default function Home() {
             await availableUpdate.downloadAndInstall();
             setUpdateReady(true);
             setAvailableUpdate(null);
+            // On Windows, the updater launches the NSIS installer and the
+            // installed app must reopen from its stable install location.
+            // Relaunching immediately avoids returning users to an older
+            // process or shortcut after a successful update.
+            const { relaunch } = await import("@tauri-apps/plugin-process");
+            await relaunch();
         } catch (error) {
             setErrorMessage(error instanceof Error ? error.message : String(error || "Update failed."));
             setShowErrorModal(true);
@@ -456,17 +490,25 @@ export default function Home() {
     const handleApply = async () => {
         const presetToApply = editingPreset || selectedPreset;
         if (!presetToApply) return;
-        if (isEditing && editingPreset && editingPreset.uuid !== defaultPreset.uuid) {
-            await handleSave();
-        }
         const requestToApply = buildApplyRequest(presetToApply);
         const applied = await handleApplyLoadout(requestToApply, presetToApply.name);
-        if (applied && isEditing) handleApplyComplete(presetToApply);
+        if (!applied) return;
+        if (isEditing) handleApplyDraftComplete(presetToApply);
+        else handleApplyComplete(presetToApply);
     };
 
-    const handlePresetApply = (preset: Preset) => {
+    const handlePresetApply = async (preset: Preset) => {
         const requestToApply = buildApplyRequest(preset);
-        handleApplyLoadout(requestToApply, preset.name);
+        const applied = await handleApplyLoadout(requestToApply, preset.name);
+        if (applied) handleApplyComplete(preset);
+    };
+
+    const handleApplyWeapon = async (weaponId: string) => {
+        const item = currentLoadout[weaponId];
+        if (!item) return false;
+        const applied = await handleApplyLoadout({ loadout: { [weaponId]: item } }, "weapon change");
+        if (applied) handleApplySingleComplete(weaponId);
+        return applied;
     };
 
     const buildApplyRequest = (preset: Preset) => {
@@ -542,8 +584,6 @@ export default function Home() {
     }
 
     const activePreset = editingPreset || selectedPreset;
-    const isDefaultPreset = activePreset?.uuid === defaultPreset.uuid;
-    const showPresetExtras = activePreset && !isDefaultPreset;
 
     return (
         <div className="app-container">
@@ -604,12 +644,15 @@ export default function Home() {
                                     handleOpenPresetNameModal(NamingMode.New);
                                 }}
                                 agents={agents}
+                                allAgents={allAgents}
+                                ownedAgentIds={ownedAgentIDs}
                                 isEditing={isEditing}
                                 editingPreset={editingPreset}
                                 onSave={handleSave}
                                 onCancel={handleCancel}
                                 onSaveAsNew={() => handleOpenPresetNameModal(NamingMode.SaveAsNew)}
                                 onApply={handleApply}
+                                onApplyWeapon={handleApplyWeapon}
                                 currentCardId={activePreset?.identity?.playerCardId || ""}
                                 currentTitleId={activePreset?.identity?.playerTitleId || ""}
                                 onSelectCard={(cardId) => handleIdentityChange(cardId, activePreset?.identity?.playerTitleId || "")}
@@ -618,7 +661,6 @@ export default function Home() {
                                 onUpdateSprays={handleSpraysChange}
                                 currentFlexes={activePreset?.flexes}
                                 onUpdateFlexes={handleFlexesChange}
-                                showPresetExtras={showPresetExtras || false}
                                 onAgentAssignment={handleAgentAssignment}
                                 gameIdentity={gameMeta.identity}
                                 gameSprays={gameMeta.sprays}
@@ -717,6 +759,7 @@ export default function Home() {
                 isLocalClientActive={isClientHealthy}
                 activeAccount={activeAccount}
                 appVersion={appVersion}
+                isPortable={isPortable}
                 updateAvailable={!!availableUpdate}
                 updateVersion={availableUpdate?.version ?? null}
                 isCheckingUpdate={isCheckingUpdate}

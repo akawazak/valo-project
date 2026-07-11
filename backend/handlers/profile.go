@@ -154,6 +154,14 @@ func (h *Handler) applyLiveMMRToOverview(r *http.Request, db *sql.DB, overview *
 		}
 		return nil
 	}
+	if content, err := val.GetContent(); err == nil && content != nil {
+		for _, season := range content.Seasons {
+			if season.IsActive && strings.EqualFold(string(season.Type), "act") {
+				overview.CurrentSeasonID = tracking.NormalizeSeasonID(season.ID)
+				break
+			}
+		}
+	}
 	mergeLiveMMR(overview, live)
 	if err := tracking.CacheRankActs(db, puuid, overview.RankActs); err != nil {
 		return fmt.Errorf("cache rank history: %w", err)

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
-import { getValorantPing, type ValorantPingResponse } from "@/services/api";
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
 
@@ -51,6 +50,7 @@ interface SettingsModalProps {
 
     // Updater state
     appVersion: string;
+    isPortable: boolean;
     updateAvailable: boolean;
     updateVersion: string | null;
     isCheckingUpdate: boolean;
@@ -112,6 +112,7 @@ export default function SettingsModal({
     isLocalClientActive,
     activeAccount,
     appVersion,
+    isPortable,
     updateAvailable,
     updateVersion,
     isCheckingUpdate,
@@ -130,9 +131,6 @@ export default function SettingsModal({
     const [storageMessage, setStorageMessage] = useState("");
     const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [recoveryMessage, setRecoveryMessage] = useState("");
-    const [pingBusy, setPingBusy] = useState(false);
-    const [pingResult, setPingResult] = useState<ValorantPingResponse | null>(null);
-    const [pingMessage, setPingMessage] = useState("");
     const backupInputRef = useRef<HTMLInputElement>(null);
 
     const refreshStorage = useCallback(async () => {
@@ -170,7 +168,9 @@ export default function SettingsModal({
                                 {appVersion && (
                                     <div className="settings-version-info">
                                         <span>Version {appVersion}</span>
-                                        {updateReady ? (
+                                        {isPortable ? (
+                                            <span className="settings-update-status clean">Portable build</span>
+                                        ) : updateReady ? (
                                             <button
                                                 type="button"
                                                 className="settings-update-now-btn"
@@ -191,7 +191,7 @@ export default function SettingsModal({
                                             <span className="settings-update-status clean">Up to date</span>
                                         )}
                                         <span className="settings-update-lastcheck">
-                                            Last check: {formatRelativeTime(lastUpdateCheck)}
+                                            {isPortable ? "Download portable releases manually" : `Last check: ${formatRelativeTime(lastUpdateCheck)}`}
                                         </span>
                                     </div>
                                 )}
@@ -367,7 +367,9 @@ export default function SettingsModal({
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Updates</div>
                                     <div className="settings-item-desc">
-                                        {isCheckingUpdate
+                                        {isPortable
+                                            ? "Portable build — download a newer portable file when you want to update."
+                                            : isCheckingUpdate
                                             ? "Contacting the update server..."
                                             : updateReady
                                             ? "An update is ready — restart VantaVault to apply it."
@@ -377,12 +379,14 @@ export default function SettingsModal({
                                             ? `Couldn't reach the update server: ${updateCheckError}`
                                             : "Manually check for new releases. VantaVault also checks automatically every 6 hours."}
                                         <span className="settings-update-lastcheck settings-update-lastcheck--inline">
-                                            Last check: {formatRelativeTime(lastUpdateCheck)}
+                                            {isPortable ? "Portable files are updated manually" : `Last check: ${formatRelativeTime(lastUpdateCheck)}`}
                                         </span>
                                     </div>
                                 </div>
                                 <div className="settings-item-control">
-                                    {updateReady ? (
+                                    {isPortable ? (
+                                        <span className="settings-update-status clean">Manual portable updates</span>
+                                    ) : updateReady ? (
                                         <button
                                             type="button"
                                             className="settings-update-now-btn"
@@ -462,50 +466,6 @@ export default function SettingsModal({
                                         <input aria-label="Party & Friends Widget" type="checkbox" checked={showPartyWidget} onChange={(e) => onShowPartyWidgetChange(e.target.checked)} />
                                         <span className="switch-slider" />
                                     </label>
-                                </div>
-                            </div>
-                            <div className="settings-item settings-item--stacked">
-                                <div className="settings-item-info">
-                                    <div className="settings-item-label">VALORANT Server Ping</div>
-                                    <div className="settings-item-desc">Measure connection latency from this PC to Riot&apos;s regional VALORANT endpoints.</div>
-                                </div>
-                                <div className="settings-item-control settings-item-control--wide">
-                                    <div className="valorant-ping-panel">
-                                        <div className="valorant-ping-toolbar">
-                                            <button
-                                                type="button"
-                                                className="settings-update-now-btn"
-                                                disabled={pingBusy}
-                                                onClick={async () => {
-                                                    setPingBusy(true);
-                                                    setPingMessage("");
-                                                    try {
-                                                        setPingResult(await getValorantPing());
-                                                    } catch (error) {
-                                                        setPingMessage(error instanceof Error ? error.message : String(error));
-                                                    } finally {
-                                                        setPingBusy(false);
-                                                    }
-                                                }}
-                                            >
-                                                {pingBusy ? "Testing..." : "Run Ping Test"}
-                                            </button>
-                                            {pingResult && <span>Last checked {formatRelativeTime(pingResult.checkedAt)}</span>}
-                                        </div>
-                                        {pingMessage && <div className="settings-storage-message">{pingMessage}</div>}
-                                        {pingResult && (
-                                            <div className="valorant-ping-grid">
-                                                {pingResult.targets.map((target) => (
-                                                    <div key={target.region} className={`valorant-ping-card${target.ok ? " is-ok" : " is-error"}`}>
-                                                        <span>{target.label}</span>
-                                                        <em>{target.region.toUpperCase()}</em>
-                                                        <strong>{target.ok ? `${target.ms} ms` : "Offline"}</strong>
-                                                        <small>{target.host}</small>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </div>
                                 </div>
                             </div>
                         </div>

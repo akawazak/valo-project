@@ -247,6 +247,8 @@ export interface LoginFlowState {
 
 interface DataContextType {
     agents: Agent[];
+    allAgents: Agent[];
+    ownedAgentIDs: string[];
     weapons: Weapon[];
     ownedBuddies: GunBuddy[];
     allBuddies: GunBuddy[];
@@ -329,6 +331,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [loginInFlight, setLoginInFlight] = useState<LoginFlowState | null>(null);
 
     const [agents, setAgents] = useState<Agent[]>([]);
+    const [allAgents, setAllAgents] = useState<Agent[]>([]);
+    const [ownedAgentIDs, setOwnedAgentIDs] = useState<string[]>([]);
     const [weapons, setWeapons] = useState<Weapon[]>([]);
     const [ownedBuddies, setOwnedBuddies] = useState<GunBuddy[]>([]);
     const [allBuddies, setAllBuddies] = useState<GunBuddy[]>([]);
@@ -418,6 +422,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 weaponsRef.current = weaponsData;
                 gunBuddiesRef.current = gunBuddiesData;
                 allAgentsRef.current = agentsData;
+				setAllAgents(agentsData);
 
                 setWeapons(weaponsData);
                 setAllBuddies(gunBuddiesData);
@@ -471,6 +476,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             const ownedAgentDetails = agentsData.filter(a => ownedAgents.AgentIds.includes(a.uuid) || a.isBaseContent);
             setAgents(ownedAgentDetails);
+			setOwnedAgentIDs(ownedAgents.AgentIds);
 
             const levels = ownedSkins.LevelIds.map(id => id.toLowerCase());
             for (const gun of weaponsData) {
@@ -511,6 +517,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             ]);
             const ownedAgentDetails = agentsData.filter(a => ownedAgents.AgentIds.includes(a.uuid) || a.isBaseContent);
             setAgents(ownedAgentDetails);
+			setOwnedAgentIDs(ownedAgents.AgentIds);
             const levels = ownedSkins.LevelIds.map(id => id.toLowerCase());
             for (const gun of weaponsData) {
                 const defaultSkin = gun.skins.find(s => s.uuid.toLowerCase() === gun.defaultSkinUuid.toLowerCase());
@@ -1255,7 +1262,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     return (
         <DataContext.Provider value={{
-            agents, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
+            agents, allAgents, ownedAgentIDs, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
             sprays, flexes, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,

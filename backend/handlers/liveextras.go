@@ -53,17 +53,24 @@ type SocialStatusResponse struct {
 	OnlineCount    int              `json:"onlineCount"`
 	InGameCount    int              `json:"inGameCount"`
 	Presences      []SocialPresence `json:"presences,omitempty"`
-	Error          string           `json:"error,omitempty"`
+	// SelfPresence stays backend-only. It carries the signed-in player's
+	// presence, which is needed for live-score enrichment but is not part of
+	// the friends response exposed to the UI.
+	SelfPresence *SocialPresence `json:"-"`
+	Error        string          `json:"error,omitempty"`
 }
 
 type SocialPresence struct {
-	Puuid    string `json:"puuid,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Product  string `json:"product,omitempty"`
-	State    string `json:"state,omitempty"`
-	QueueID  string `json:"queueId,omitempty"`
-	CardID   string `json:"cardId,omitempty"`
-	Platform string `json:"platform,omitempty"`
+	Puuid          string `json:"puuid,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Product        string `json:"product,omitempty"`
+	State          string `json:"state,omitempty"`
+	QueueID        string `json:"queueId,omitempty"`
+	CardID         string `json:"cardId,omitempty"`
+	Platform       string `json:"platform,omitempty"`
+	AllyScore      int    `json:"-"`
+	EnemyScore     int    `json:"-"`
+	ScoreAvailable bool   `json:"-"`
 	// PartyGroup is an anonymous, process-local grouping key derived from
 	// Riot presence data. Raw party IDs are never returned to the frontend.
 	PartyGroup string `json:"partyGroup,omitempty"`

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/truearken/valclient/valclient"
 )
@@ -119,6 +120,7 @@ func (h *Handler) fetchPartyResponse(val *valclient.ValClient, source string) (P
 	if err != nil {
 		return PartyResponse{}, err
 	}
+	details = h.refreshPartyCompetitiveTiers(val, current.CurrentPartyID, details)
 
 	return h.buildPartyResponse(val, source, details), nil
 }
@@ -178,6 +180,43 @@ func getPartyDetails(val *valclient.ValClient, partyID string) (*partyDetailsRes
 		return nil, err
 	}
 	return resp, nil
+}
+
+// refreshPartyCompetitiveTiers asks Riot to populate the CompetitiveTier
+// fields, then reads the party once more. The party endpoint can otherwise
+// return zeros until the official client has happened to refresh a member.
+func (h *Handler) refreshPartyCompetitiveTiers(val *valclient.ValClient, partyID string, details *partyDetailsResponse) *partyDetailsResponse {
+	if val == nil || partyID == "" || details == nil || len(details.Members) == 0 {
+		return details
+	}
+
+	h.partyRankRefreshMu.Lock()
+	last := h.partyRankRefreshAt[partyID]
+	if time.Since(last) < 45*time.Second {
+		h.partyRankRefreshMu.Unlock()
+		return details
+	}
+	h.partyRankRefreshAt[partyID] = time.Now()
+	h.partyRankRefreshMu.Unlock()
+
+	for _, member := range details.Members {
+		if member.Subject == "" {
+			continue
+		}
+		apiURL := val.BuildUrl(
+			"https://glz-{region}-1.{shard}.a.pvp.net/parties/v1/parties/{partyId}/members/{puuid}/refreshCompetitiveTier",
+			"{partyId}", partyID,
+			"{puuid}", member.Subject,
+		)
+		// Individual refresh failures are expected for private / unavailable
+		// players. Keep the original party response instead of failing the panel.
+		_ = runRiotJSON(http.MethodPost, apiURL, val.Header, nil, &struct{}{})
+	}
+
+	if refreshed, err := getPartyDetails(val, partyID); err == nil && refreshed != nil {
+		return refreshed
+	}
+	return details
 }
 
 func (h *Handler) buildPartyResponse(val *valclient.ValClient, source string, details *partyDetailsResponse) PartyResponse {

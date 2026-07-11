@@ -1,5 +1,6 @@
 import Image from 'next/image';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Agent } from '@/lib/types';
 
 type AgentSelectionModalProps = {
@@ -7,16 +8,43 @@ type AgentSelectionModalProps = {
     onClose: () => void;
     agents: Agent[];
     onAgentSelect: (agentIds: string[]) => void;
+    ownedAgentIds?: string[];
+    selectedAgentId?: string;
+    selectedAgentIds?: string[];
+    selectionMode?: 'single' | 'multiple';
 };
 
-export default function AgentSelectionModal({ show, onClose, agents, onAgentSelect }: AgentSelectionModalProps) {
+export default function AgentSelectionModal({
+    show,
+    onClose,
+    agents,
+    onAgentSelect,
+    ownedAgentIds,
+    selectedAgentId,
+    selectedAgentIds,
+    selectionMode = 'multiple',
+}: AgentSelectionModalProps) {
     const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+    const ownedSet = new Set((ownedAgentIds || agents.map((agent) => agent.uuid)).map((id) => id.toLowerCase()));
 
-    if (!show) {
+    useEffect(() => {
+        if (!show) return;
+        setSelectedAgents(
+            selectionMode === 'single'
+                ? (selectedAgentId ? [selectedAgentId] : [])
+                : [...new Set(selectedAgentIds || [])],
+        );
+    }, [selectedAgentId, selectedAgentIds, selectionMode, show]);
+
+    if (!show || typeof document === 'undefined') {
         return null;
     }
 
     const handleAgentClick = (agentId: string) => {
+        if (selectionMode === 'single') {
+            setSelectedAgents((current) => current[0] === agentId ? [] : [agentId]);
+            return;
+        }
         setSelectedAgents(prev =>
             prev.includes(agentId)
                 ? prev.filter(id => id !== agentId)
@@ -25,7 +53,7 @@ export default function AgentSelectionModal({ show, onClose, agents, onAgentSele
     };
 
     const handleConfirm = () => {
-        onAgentSelect(selectedAgents);
+        onAgentSelect(selectionMode === 'single' ? selectedAgents.slice(0, 1) : selectedAgents);
         handleClose();
     };
 
@@ -40,39 +68,56 @@ export default function AgentSelectionModal({ show, onClose, agents, onAgentSele
         }
     };
 
-    return (
-        <div className="modal modal-backdrop-valovault" onClick={handleBackdropClick}>
+    return createPortal(
+        <div className="modal modal-backdrop-valovault agent-selection-modal" onClick={handleBackdropClick}>
             <div className="modal-dialog modal-dialog-centered modal-lg">
                 <div className="modal-content">
                     <div className="modal-header">
-                        <h5 className="modal-title">Select Agent(s)</h5>
+                        <div>
+                            <span className="tactical-kicker">// PRESET ASSIGNMENT</span>
+                            <h5 className="modal-title">{selectionMode === 'single' ? 'Choose an agent' : 'Select agents'}</h5>
+                        </div>
                         <button type="button" className="btn-close" onClick={handleClose}></button>
                     </div>
                     <div className="modal-body">
-                        <div style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden', padding: '1rem' }}>
-                            <div className="row row-cols-2 row-cols-md-3 row-cols-lg-4 g-3">
-                                {agents.map((agent) => (
-                                    <div key={agent.uuid} className="col" onClick={() => handleAgentClick(agent.uuid)}>
-                                        <div className={`card card-hover h-100 agent-pick-card${selectedAgents.includes(agent.uuid) ? ' is-selected' : ''}`} style={{ cursor: 'pointer' }}>
-                                            <div className="card-body d-flex flex-column justify-content-center align-items-center p-2">
-                                                <Image src={agent.displayIcon} alt={agent.displayName} className="img-fluid rounded-circle" width={80} height={80} style={{ objectFit: 'cover' }} unoptimized />
-                                            </div>
-                                            <div className="card-footer text-center p-1">
-                                                <small className="text-muted text-center mt-1">{agent.displayName}</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                        <div className="agent-picker-grid" role="listbox" aria-label="Available agents">
+                            {agents.map((agent) => {
+                                const owned = agent.isBaseContent || ownedSet.has(agent.uuid.toLowerCase());
+                                const selected = selectedAgents.includes(agent.uuid);
+                                return (
+                                    <button
+                                        key={agent.uuid}
+                                        type="button"
+                                        className={`agent-pick-card${selected ? ' is-selected' : ''}${owned ? '' : ' is-locked'}`}
+                                        onClick={() => handleAgentClick(agent.uuid)}
+                                        aria-pressed={selected}
+                                        disabled={!owned}
+                                        title={owned ? `Assign ${agent.displayName}` : `${agent.displayName} is not unlocked on this account`}
+                                    >
+                                        <span className="agent-pick-card-art">
+                                            <Image src={agent.displayIcon} alt="" width={72} height={72} unoptimized />
+                                            {selected && <span className="agent-pick-card-check" aria-hidden="true" />}
+                                        </span>
+                                        <span className="agent-pick-card-name">{agent.displayName}</span>
+                                        {!owned && <span className="agent-pick-card-lock">Locked</span>}
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                     <div className="modal-footer">
+                        <span className="agent-picker-selection-count">
+                            {selectedAgents.length
+                                ? `${selectedAgents.length} selected`
+                                : selectionMode === 'single' ? 'Choose one unlocked agent' : 'Choose one or more unlocked agents'}
+                        </span>
                         <button type="button" className="btn btn-primary" onClick={handleConfirm} disabled={selectedAgents.length === 0}>
-                            Add ({selectedAgents.length})
+                            {selectionMode === 'single' ? 'Assign agent' : `Add (${selectedAgents.length})`}
                         </button>
                     </div>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }

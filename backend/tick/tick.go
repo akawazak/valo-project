@@ -26,7 +26,7 @@ type Ticker struct {
 }
 
 // Allow for temporary Riot API failures and the pregame-to-core-game handoff.
-const inactiveChecksBeforeRestore = 30
+const inactiveChecksBeforeRestore = 8
 
 type coreGamePlayer struct {
 	MatchID string `json:"MatchID"`
@@ -192,7 +192,11 @@ func (t *Ticker) Start() {
 			slog.Info("found active variants for preset", "amount", variantAmount, "preset", selectedPreset.Name, "uuid", selectedPreset.Uuid)
 
 			selectedVariant := variants[rand.IntN(variantAmount)]
-			maps.Copy(selectedPreset.Loadout, selectedVariant.Loadout)
+			// Do not mutate the stored base preset while combining a variant.
+			// Mutating it made later automatic selections inherit a previous
+			// variant's guns instead of returning cleanly to the saved preset.
+			loadout := maps.Clone(selectedPreset.Loadout)
+			maps.Copy(loadout, selectedVariant.Loadout)
 
 			var identity *presets.IdentityV1
 			if selectedVariant.Identity != nil {
@@ -227,7 +231,7 @@ func (t *Ticker) Start() {
 				}
 			}
 
-			if err := presets.Apply(t.Val, selectedPreset.Loadout, identity, sprays, expressions); err != nil {
+			if err := presets.Apply(t.Val, loadout, identity, sprays, expressions); err != nil {
 				slog.Error("error when applying", "err", err)
 				if t.originalLoadout == nil {
 					_ = presets.ClearRestoreSnapshot(t.Val.Player.Uuid)
