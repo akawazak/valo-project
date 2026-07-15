@@ -43,6 +43,47 @@ type PlayerStats struct {
 	HSPct           float64 `json:"hsPct"`
 }
 
+// MatchLocation is a Riot world-space coordinate captured at an event.
+// The frontend converts it to minimap space using the map metadata scalars.
+type MatchLocation struct {
+	Subject     string  `json:"subject,omitempty"`
+	ViewRadians float64 `json:"viewRadians,omitempty"`
+	X           int     `json:"x"`
+	Y           int     `json:"y"`
+}
+
+// KillEvent preserves the positional part of Riot's roundResults payload.
+// It is intentionally factual event data; heatmaps and hotspots are derived
+// by the UI rather than stored as opaque or AI-generated conclusions.
+type KillEvent struct {
+	RoundNum        int             `json:"roundNum"`
+	GameTime        int             `json:"gameTime"`
+	RoundTime       int             `json:"roundTime"`
+	Killer          string          `json:"killer"`
+	Victim          string          `json:"victim"`
+	VictimX         int             `json:"victimX"`
+	VictimY         int             `json:"victimY"`
+	DamageType      string          `json:"damageType,omitempty"`
+	DamageItem      string          `json:"damageItem,omitempty"`
+	SecondaryFire   bool            `json:"secondaryFire,omitempty"`
+	PlayerLocations []MatchLocation `json:"playerLocations,omitempty"`
+}
+
+// MatchRound is factual, post-match round metadata returned by Riot. Keeping
+// the winner and objective result lets the UI calculate conversion rates
+// without presenting a modelled win probability as if it were ground truth.
+type MatchRound struct {
+	RoundNum        int    `json:"roundNum"`
+	WinningTeam     string `json:"winningTeam"`
+	RoundResult     string `json:"roundResult,omitempty"`
+	RoundCeremony   string `json:"roundCeremony,omitempty"`
+	BombPlanter     string `json:"bombPlanter,omitempty"`
+	BombDefuser     string `json:"bombDefuser,omitempty"`
+	PlantRoundTime  int    `json:"plantRoundTime,omitempty"`
+	PlantSite       string `json:"plantSite,omitempty"`
+	DefuseRoundTime int    `json:"defuseRoundTime,omitempty"`
+}
+
 type MatchPartyMember struct {
 	Subject       string `json:"subject"`
 	GameName      string `json:"gameName"`
@@ -131,6 +172,8 @@ type MatchDetails struct {
 	MatchID    string        `json:"matchId"`
 	MatchInfo  MatchInfo     `json:"matchInfo"`
 	Players    []PlayerStats `json:"players"`
+	Kills      []KillEvent   `json:"kills,omitempty"`
+	Rounds     []MatchRound  `json:"rounds,omitempty"`
 	ServedFrom string        `json:"servedFrom"`
 }
 
@@ -245,6 +288,7 @@ type MatchRow struct {
 	RawJsonPath      string
 	CachedAt         int64
 	AccountPuuid     string
+	AnalyticsVersion int
 }
 
 // PlayerRow is a raw row from the `match_players` table.
@@ -276,6 +320,8 @@ type PlayerRow struct {
 type MatchCache struct {
 	Match   MatchRow
 	Players []PlayerRow
+	Kills   []KillEvent
+	Rounds  []MatchRound
 }
 
 // LocalPlayerRow is the per-row payload for the local player inside

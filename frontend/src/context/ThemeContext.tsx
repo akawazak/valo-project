@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useState, useEffect, ReactNode } from 'react';
 
 type Theme = 'light' | 'dark';
 type AccentTheme = 'valorant' | 'aqua' | 'violet' | 'gold';
@@ -33,6 +33,7 @@ type ThemeContextType = {
     interfaceTheme: InterfaceTheme;
     appearance: AppearanceSettings;
     toggleTheme: () => void;
+	setTheme: (theme: Theme) => void;
     setAccentTheme: (accent: AccentTheme) => void;
     setInterfaceTheme: (theme: InterfaceTheme) => void;
     setAppearance: (settings: Partial<AppearanceSettings>) => void;
@@ -121,26 +122,27 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         applyAppearance(appearance);
     }, [appearance]);
 
-    const toggleTheme = () => {
+    const toggleTheme = useCallback(() => {
         setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
-    };
+    }, []);
+	const setThemeValue = useCallback((nextTheme: Theme) => setTheme(nextTheme), []);
 
-    const setAccentTheme = (accent: AccentTheme) => {
+    const setAccentTheme = useCallback((accent: AccentTheme) => {
         setAccentThemeState(accent);
-    };
+    }, []);
 
-    const setInterfaceTheme = (nextTheme: InterfaceTheme) => {
+    const setInterfaceTheme = useCallback((nextTheme: InterfaceTheme) => {
         setInterfaceThemeState(nextTheme);
-    };
+    }, []);
 
-    const setAppearance = (settings: Partial<AppearanceSettings>) => {
+    const setAppearance = useCallback((settings: Partial<AppearanceSettings>) => {
         setAppearanceState((current) => ({ ...current, ...settings }));
-    };
+    }, []);
 
-    const resetAppearance = () => setAppearanceState(DEFAULT_APPEARANCE);
+	const resetAppearance = useCallback(() => setAppearanceState(DEFAULT_APPEARANCE), []);
 
     return (
-        <ThemeContext.Provider value={{ theme, accentTheme, interfaceTheme, appearance, toggleTheme, setAccentTheme, setInterfaceTheme, setAppearance, resetAppearance }}>
+		<ThemeContext.Provider value={{ theme, accentTheme, interfaceTheme, appearance, toggleTheme, setTheme: setThemeValue, setAccentTheme, setInterfaceTheme, setAppearance, resetAppearance }}>
             {children}
         </ThemeContext.Provider>
     );

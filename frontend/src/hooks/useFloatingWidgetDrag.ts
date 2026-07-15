@@ -15,6 +15,7 @@ type DragState = Position & {
 export function useFloatingWidgetDrag(storageKey: string) {
     const [position, setPosition] = useState<Position | null>(null);
     const elementRef = useRef<HTMLElement | null>(null);
+    const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const dragState = useRef<DragState | null>(null);
     const suppressClick = useRef(false);
     const viewportRef = useRef({ width: 0, height: 0 });
@@ -41,6 +42,8 @@ export function useFloatingWidgetDrag(storageKey: string) {
     }, []);
 
     const setElement = useCallback((element: HTMLElement | null) => {
+        resizeObserverRef.current?.disconnect();
+        resizeObserverRef.current = null;
         elementRef.current = element;
         if (!element) return;
         setPosition((current) => {
@@ -50,7 +53,21 @@ export function useFloatingWidgetDrag(storageKey: string) {
             window.localStorage.setItem(`vantavault:widget-position:${storageKey}`, JSON.stringify(next));
             return next;
         });
+        if (typeof ResizeObserver !== "undefined") {
+            resizeObserverRef.current = new ResizeObserver(() => {
+                setPosition((current) => {
+                    if (!current) return current;
+                    const next = clampPosition(current, element);
+                    if (next.x === current.x && next.y === current.y) return current;
+                    window.localStorage.setItem(`vantavault:widget-position:${storageKey}`, JSON.stringify(next));
+                    return next;
+                });
+            });
+            resizeObserverRef.current.observe(element);
+        }
     }, [clampPosition, storageKey]);
+
+    useEffect(() => () => resizeObserverRef.current?.disconnect(), []);
 
     useEffect(() => {
         viewportRef.current = { width: window.innerWidth, height: window.innerHeight };

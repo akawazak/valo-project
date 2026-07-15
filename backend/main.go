@@ -46,6 +46,7 @@ func main() {
 					h.SetLocalClient(val)
 
 					ticker := tick.NewTicker(val)
+					ticker.OnProgressionChanged = h.NotifyProgressionChanged
 					h.SetTicker(ticker)
 					go ticker.Start()
 				}
@@ -110,10 +111,25 @@ func main() {
 	mux.HandleFunc("GET /v1/storefront", h.GetStorefront)
 	mux.HandleFunc("GET /v1/wallet", h.GetWallet)
 	mux.HandleFunc("GET /v1/missions", h.GetMissions)
+	mux.HandleFunc("GET /v1/daily-ticket", h.GetDailyTicket)
+	mux.HandleFunc("GET /v1/career/account-xp", h.GetAccountXP)
 	mux.HandleFunc("GET /v1/contracts", h.GetContracts)
+	mux.HandleFunc("GET /v1/item-upgrades", h.GetItemUpgrades)
+	mux.HandleFunc("GET /v1/progression/events", h.ProgressionEvents)
 	mux.HandleFunc("GET /v1/party", h.GetParty)
 	mux.HandleFunc("GET /v1/live-loadouts", h.GetLiveLoadouts)
 	mux.HandleFunc("GET /v1/social", h.GetSocialStatus)
+	mux.HandleFunc("GET /v1/social/events", h.SocialEvents)
+	mux.HandleFunc("POST /v1/social/requests", h.PostSocialFriendRequest)
+	mux.HandleFunc("POST /v1/social/requests/{puuid}", h.PostSocialRequestAction)
+	mux.HandleFunc("GET /v1/chat/conversations", h.GetChatConversations)
+	mux.HandleFunc("GET /v1/chat/summary", h.ChatSummary)
+	mux.HandleFunc("GET /v1/chat/conversations/{key}/messages", h.GetChatMessages)
+	mux.HandleFunc("POST /v1/chat/conversations/{key}/snapshot", h.StartChatSnapshot)
+	mux.HandleFunc("POST /v1/chat/messages", h.PostChatMessage)
+	mux.HandleFunc("POST /v1/chat/conversations/{key}/read", h.PostChatRead)
+	mux.HandleFunc("DELETE /v1/chat/history", h.DeleteChatHistory)
+	mux.HandleFunc("GET /v1/chat/events", h.ChatEvents)
 	mux.HandleFunc("GET /v1/account-health", h.GetAccountHealth)
 
 	// /v1/profile/* — rank tracker + match history + sync control
@@ -128,6 +144,7 @@ func main() {
 	mux.HandleFunc("GET /v1/profile/match-details/", h.GetProfileMatchDetails)
 	mux.HandleFunc("POST /v1/profile/sync", h.PostProfileSync)
 	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
+	mux.HandleFunc("GET /v1/profile/leaderboard", h.GetProfileLeaderboard)
 
 	slog.Info("starting server")
 	// CORS must handle trusted browser preflights before API authentication:
@@ -219,7 +236,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-VantaVault-Key, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-VantaVault-Key, X-Riot-Access-Token, X-Riot-Entitlements-JWT, X-Riot-Puuid, X-Riot-Region, X-Riot-Selected-Puuid")
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return

@@ -480,11 +480,15 @@ export default function SettingsModal({
                             <div className="settings-item">
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Live Match Overlay</div>
-                                    <div className="settings-item-desc">Show player, score, party, profile, and loadout details during a match.</div>
+                                    <div className="settings-item-desc">
+                                        {useLocalSso && isLocalClientActive
+                                            ? "Show the centered app during your local VALORANT match. Alt+T toggles it while the game is focused."
+                                            : "Available only in local lockfile mode while VALORANT is running on this PC."}
+                                    </div>
                                 </div>
                                 <div className="settings-item-control">
                                     <label className="switch-control">
-                                        <input aria-label="Live Match Overlay" type="checkbox" checked={showLiveMatch} onChange={(e) => onShowLiveMatchChange(e.target.checked)} />
+                                        <input aria-label="Live Match Overlay" type="checkbox" checked={showLiveMatch} disabled={!useLocalSso || !isLocalClientActive} onChange={(e) => onShowLiveMatchChange(e.target.checked)} />
                                         <span className="switch-slider" />
                                     </label>
                                 </div>

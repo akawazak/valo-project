@@ -54,6 +54,16 @@ type localPresencesResponse struct {
 	Presences []chatPresenceEntry `json:"presences"`
 }
 
+type localFriendRequestsResponse struct {
+	Requests []struct {
+		PUUID        string `json:"puuid"`
+		GameName     string `json:"game_name"`
+		GameTag      string `json:"game_tag"`
+		Name         string `json:"name"`
+		Subscription string `json:"subscription"`
+	} `json:"requests"`
+}
+
 type localChatSessionResponse struct {
 	PUUID string `json:"puuid"`
 }
@@ -92,8 +102,8 @@ type remoteSocialProbe struct {
 	Error  string
 }
 
-// GetSocialStatus returns friend presence from token-authenticated XMPP,
-// falling back to the local Riot Client chat API when remote chat is unavailable.
+// GetSocialStatus keeps the selected account authoritative. A token-authenticated
+// account never falls through to a different account in the local Riot Client.
 func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	remoteOnly := strings.EqualFold(r.URL.Query().Get("remoteOnly"), "true")
 	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
@@ -103,7 +113,6 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	remoteProbe := remoteSocialProbe{Status: "missing"}
-	var pendingRemote *SocialStatusResponse
 	if remoteOnly && !hasRemoteAuth {
 		h.returnAny(w, SocialStatusResponse{
 			Status:       "unavailable",
@@ -124,22 +133,22 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			Error:  remoteResp.Error,
 		}
 		if remoteResp.Status == "ok" && remoteResp.RemoteStatus == "live" {
-			h.returnAny(w, remoteResp)
+			h.attachSocialHistory(remoteAuth.Puuid, &remoteResp)
+		}
+		h.returnAny(w, remoteResp)
+		return
+	}
+	selected := selectedAccountPuuid(r)
+	if selected != "" {
+		localSession, sessionErr := h.fetchLocalChatSession()
+		if sessionErr != nil || !strings.EqualFold(localSession.PUUID, selected) {
+			h.returnAny(w, SocialStatusResponse{Status: "unavailable", Source: "remote", RemoteStatus: "missing", Error: "The selected Riot account is not connected remotely. Refresh or reconnect it."})
 			return
 		}
-		if remoteOnly {
-			h.returnAny(w, remoteResp)
-			return
-		}
-		pendingRemote = &remoteResp
 	}
 
 	resp, err := h.fetchLocalSocialStatus()
 	if err != nil {
-		if pendingRemote != nil && (pendingRemote.RemoteStatus == "connecting" || pendingRemote.Status == "ok") {
-			h.returnAny(w, *pendingRemote)
-			return
-		}
 		source := "remote"
 		if !hasRemoteAuth {
 			source = "local"
@@ -158,7 +167,65 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	resp.RemoteChatHost = remoteProbe.Host
 	resp.RemoteChatPort = remoteProbe.Port
 	h.enrichSocialCards(&resp)
+	account := ""
+	if session, sessionErr := h.fetchLocalChatSession(); sessionErr == nil {
+		account = session.PUUID
+	}
+	h.attachSocialHistory(account, &resp)
 	h.returnAny(w, resp)
+}
+
+func (h *Handler) NotifySocialChanged() {
+	h.socialMu.Lock()
+	defer h.socialMu.Unlock()
+	if h.socialSubscribers == nil {
+		h.socialSubscribers = make(map[chan struct{}]struct{})
+	}
+	for ch := range h.socialSubscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (h *Handler) SocialEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	local := make(chan struct{}, 1)
+	h.socialMu.Lock()
+	if h.socialSubscribers == nil {
+		h.socialSubscribers = make(map[chan struct{}]struct{})
+	}
+	h.socialSubscribers[local] = struct{}{}
+	h.socialMu.Unlock()
+	defer func() { h.socialMu.Lock(); delete(h.socialSubscribers, local); h.socialMu.Unlock() }()
+	remote, unsubscribe := remoteSocialHub.subscribe()
+	defer unsubscribe()
+	fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+	flusher.Flush()
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-local:
+			fmt.Fprint(w, "event: social\ndata: {}\n\n")
+			flusher.Flush()
+		case <-remote:
+			fmt.Fprint(w, "event: social\ndata: {}\n\n")
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 func (h *Handler) enrichSocialCards(response *SocialStatusResponse) {
@@ -305,7 +372,32 @@ func (h *Handler) fetchLocalSocialStatus() (SocialStatusResponse, error) {
 		presences = localPresencesResponse{}
 	}
 
-	return buildLocalSocialResponse(friends, presences, "local"), nil
+	result := buildLocalSocialResponse(friends, presences, "local")
+	result.RosterComplete = true
+	requestsURL := fmt.Sprintf("https://127.0.0.1:%s/chat/v4/friendrequests", port)
+	requests, requestErr := doLocalChatRequest(localChatHTTPClient, requestsURL, auth, func(body []byte) (localFriendRequestsResponse, error) {
+		var out localFriendRequestsResponse
+		err := json.Unmarshal(body, &out)
+		return out, err
+	})
+	if requestErr == nil {
+		result.RequestsComplete = true
+		for _, request := range requests.Requests {
+			direction := ""
+			switch strings.ToLower(strings.TrimSpace(request.Subscription)) {
+			case "pending_in":
+				direction = "incoming"
+			case "pending_out":
+				direction = "outgoing"
+			}
+			puuid := strings.ToLower(strings.TrimSpace(request.PUUID))
+			if puuid == "" || direction == "" {
+				continue
+			}
+			result.Requests = append(result.Requests, SocialFriendRequest{Puuid: puuid, Name: firstNonEmpty(friendDisplayName(request.GameName, request.GameTag, puuid), request.Name), Direction: direction})
+		}
+	}
+	return result, nil
 }
 
 func (h *Handler) fetchLocalChatSession() (localChatSessionResponse, error) {
@@ -381,32 +473,42 @@ func doLocalChatRequest[T any](client *http.Client, url, auth string, decode fun
 func buildLocalSocialResponse(friends localFriendsResponse, presences localPresencesResponse, source string) SocialStatusResponse {
 	presencesByPuuid := make(map[string]chatPresenceEntry, len(presences.Presences))
 	for _, p := range presences.Presences {
-		current, exists := presencesByPuuid[p.Puuid]
-		if p.Puuid != "" && (!exists || !strings.EqualFold(current.Product, "valorant") ||
+		puuid := strings.ToLower(strings.TrimSpace(p.Puuid))
+		current, exists := presencesByPuuid[puuid]
+		if puuid != "" && (!exists || !strings.EqualFold(current.Product, "valorant") ||
 			(strings.EqualFold(p.Product, "valorant") && current.Private == "" && p.Private != "")) {
-			presencesByPuuid[p.Puuid] = p
+			p.Puuid = puuid
+			presencesByPuuid[puuid] = p
 		}
 	}
 
 	out := make([]SocialPresence, 0, len(friends.Friends))
+	seenFriends := make(map[string]struct{}, len(friends.Friends))
 	onlineCount := 0
 	inGameCount := 0
 	for _, f := range friends.Friends {
-		if f.PUUID == "" {
+		puuid := strings.ToLower(strings.TrimSpace(f.PUUID))
+		if puuid == "" {
 			continue
 		}
-		presence, ok := presencesByPuuid[f.PUUID]
+		if _, exists := seenFriends[puuid]; exists {
+			continue
+		}
+		seenFriends[puuid] = struct{}{}
+		presence, ok := presencesByPuuid[puuid]
 		if !ok {
-			// No presence means the friend is offline.
-			out = append(out, SocialPresence{
-				Puuid: f.PUUID,
-				Name:  friendDisplayName(f.GameName, f.GameTag, f.PUUID),
-				State: "offline",
-			})
+			fallback := SocialPresence{Puuid: puuid, Name: friendDisplayName(f.GameName, f.GameTag, puuid), State: "offline"}
+			if f.ActivePlatform != nil && isDesktopPlatform(*f.ActivePlatform) {
+				fallback.Product = "riotclient"
+				fallback.Platform = *f.ActivePlatform
+				fallback.State = "online"
+				onlineCount++
+			}
+			out = append(out, fallback)
 			continue
 		}
 		normalized := normalizeChatPresence(presence, map[string]string{
-			f.PUUID: friendDisplayName(f.GameName, f.GameTag, f.PUUID),
+			puuid: friendDisplayName(f.GameName, f.GameTag, puuid),
 		})
 		if socialPresenceIsActive(normalized) {
 			onlineCount++
@@ -425,6 +527,11 @@ func buildLocalSocialResponse(friends localFriendsResponse, presences localPrese
 		InGameCount: inGameCount,
 		Presences:   out,
 	}
+}
+
+func isDesktopPlatform(platform string) bool {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	return strings.Contains(platform, "pc") || strings.Contains(platform, "windows") || strings.Contains(platform, "desktop")
 }
 
 func extractChatConfig(cfg map[string]any) (map[string]string, int) {
@@ -564,22 +671,33 @@ func locateRiotLockfile() (string, error) {
 
 func normalizeChatPresence(entry chatPresenceEntry, nameByPuuid map[string]string) SocialPresence {
 	p := SocialPresence{
-		Puuid:    entry.Puuid,
-		Product:  strings.ToLower(entry.Product),
-		Name:     resolvePresenceName(entry, nameByPuuid),
-		State:    entry.State,
-		Platform: entry.Platform,
+		Puuid:        entry.Puuid,
+		Product:      strings.ToLower(entry.Product),
+		Name:         resolvePresenceName(entry, nameByPuuid),
+		State:        entry.State,
+		Availability: strings.ToLower(strings.TrimSpace(entry.State)),
+		Platform:     entry.Platform,
 	}
 	if rawPrivate := entry.Private; rawPrivate != "" {
 		if private, ok := decodePresencePayload(rawPrivate); ok {
 			p.State = firstString(private, "sessionLoopState", "SessionLoopState")
 			p.QueueID = firstString(private, "queueId", "QueueID")
+			p.PartyState = firstString(private, "partyState", "PartyState")
+			p.PartySize = intFromAny(private["partySize"])
+			p.MaxPartySize = intFromAny(private["maxPartySize"])
 			p.CardID = firstString(private, "playerCardId", "PlayerCardID")
 			p.PartyGroup = anonymousPartyGroup(firstString(private, "partyId", "PartyID", "partyID"))
 			p.AllyScore, p.EnemyScore, p.ScoreAvailable = presenceMatchScore(private)
 			if mpd, ok := private["matchPresenceData"].(map[string]any); ok {
 				p.State = firstNonEmpty(firstString(mpd, "sessionLoopState", "SessionLoopState"), p.State)
 				p.QueueID = firstNonEmpty(firstString(mpd, "queueId", "QueueID"), p.QueueID)
+				p.PartyState = firstNonEmpty(firstString(mpd, "partyState", "PartyState"), p.PartyState)
+				if size := intFromAny(mpd["partySize"]); size > 0 {
+					p.PartySize = size
+				}
+				if size := intFromAny(mpd["maxPartySize"]); size > 0 {
+					p.MaxPartySize = size
+				}
 				p.CardID = firstNonEmpty(firstString(mpd, "playerCardId", "PlayerCardID"), p.CardID)
 				p.PartyGroup = firstNonEmpty(anonymousPartyGroup(firstString(mpd, "partyId", "PartyID", "partyID")), p.PartyGroup)
 				if ally, enemy, ok := presenceMatchScore(mpd); ok {
@@ -677,6 +795,9 @@ func friendDisplayName(gameName, tag, _ string) string {
 
 func socialPresenceIsActive(p SocialPresence) bool {
 	if strings.EqualFold(p.Product, "valorant") {
+		return true
+	}
+	if p.Product != "" && strings.EqualFold(p.Availability, "mobile") {
 		return true
 	}
 	platform := strings.ToLower(p.Platform)

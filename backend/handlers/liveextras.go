@@ -44,15 +44,19 @@ type PenaltiesProbe struct {
 }
 
 type SocialStatusResponse struct {
-	Status         string           `json:"status"`
-	Source         string           `json:"source,omitempty"`
-	RemoteStatus   string           `json:"remoteStatus,omitempty"`
-	RemoteChatHost string           `json:"remoteChatHost,omitempty"`
-	RemoteChatPort int              `json:"remoteChatPort,omitempty"`
-	FriendCount    int              `json:"friendCount"`
-	OnlineCount    int              `json:"onlineCount"`
-	InGameCount    int              `json:"inGameCount"`
-	Presences      []SocialPresence `json:"presences,omitempty"`
+	Status           string                `json:"status"`
+	Source           string                `json:"source,omitempty"`
+	RemoteStatus     string                `json:"remoteStatus,omitempty"`
+	RemoteChatHost   string                `json:"remoteChatHost,omitempty"`
+	RemoteChatPort   int                   `json:"remoteChatPort,omitempty"`
+	FriendCount      int                   `json:"friendCount"`
+	OnlineCount      int                   `json:"onlineCount"`
+	InGameCount      int                   `json:"inGameCount"`
+	Presences        []SocialPresence      `json:"presences,omitempty"`
+	Requests         []SocialFriendRequest `json:"requests,omitempty"`
+	Activity         []SocialActivityEvent `json:"activity,omitempty"`
+	RosterComplete   bool                  `json:"-"`
+	RequestsComplete bool                  `json:"-"`
 	// SelfPresence stays backend-only. It carries the signed-in player's
 	// presence, which is needed for live-score enrichment but is not part of
 	// the friends response exposed to the UI.
@@ -60,12 +64,32 @@ type SocialStatusResponse struct {
 	Error        string          `json:"error,omitempty"`
 }
 
+type SocialFriendRequest struct {
+	Puuid       string `json:"puuid"`
+	Name        string `json:"name"`
+	Direction   string `json:"direction"`
+	FirstSeenAt int64  `json:"firstSeenAt,omitempty"`
+}
+
+type SocialActivityEvent struct {
+	ID         int64  `json:"id"`
+	PeerPuuid  string `json:"peerPuuid"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	OccurredAt int64  `json:"occurredAt"`
+	Evidence   string `json:"evidence"`
+}
+
 type SocialPresence struct {
 	Puuid          string `json:"puuid,omitempty"`
 	Name           string `json:"name,omitempty"`
 	Product        string `json:"product,omitempty"`
 	State          string `json:"state,omitempty"`
+	Availability   string `json:"availability,omitempty"`
 	QueueID        string `json:"queueId,omitempty"`
+	PartyState     string `json:"partyState,omitempty"`
+	PartySize      int    `json:"partySize,omitempty"`
+	MaxPartySize   int    `json:"maxPartySize,omitempty"`
 	CardID         string `json:"cardId,omitempty"`
 	Platform       string `json:"platform,omitempty"`
 	AllyScore      int    `json:"-"`
@@ -240,9 +264,11 @@ func normalizePresences(raw map[string]any) []SocialPresence {
 			continue
 		}
 		p := SocialPresence{
-			Puuid:   firstString(m, "puuid", "PUUID", "Puuid"),
-			Name:    displayNameFromPresence(m),
-			Product: firstString(m, "product", "Product"),
+			Puuid:        firstString(m, "puuid", "PUUID", "Puuid"),
+			Name:         displayNameFromPresence(m),
+			Product:      firstString(m, "product", "Product"),
+			State:        firstString(m, "state", "State"),
+			Availability: strings.ToLower(firstString(m, "state", "State")),
 		}
 		if rawPrivate := firstString(m, "private", "Private"); rawPrivate != "" {
 			if decoded, err := base64.StdEncoding.DecodeString(rawPrivate); err == nil {

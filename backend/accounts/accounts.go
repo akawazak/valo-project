@@ -2,6 +2,8 @@ package accounts
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,6 +38,10 @@ func SaveRaw(data []byte) error {
 	if len(data) == 0 {
 		data = []byte("[]")
 	}
+	data, err = stripSecrets(data)
+	if err != nil {
+		return err
+	}
 
 	saveMu.Lock()
 	defer saveMu.Unlock()
@@ -43,6 +49,19 @@ func SaveRaw(data []byte) error {
 		return nil
 	}
 	return writeFileAtomically(path, data)
+}
+
+func stripSecrets(data []byte) ([]byte, error) {
+	var accounts []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &accounts); err != nil {
+		return nil, fmt.Errorf("invalid accounts JSON: %w", err)
+	}
+	for _, account := range accounts {
+		delete(account, "accessToken")
+		delete(account, "entitlementsToken")
+		delete(account, "ssid")
+	}
+	return json.Marshal(accounts)
 }
 
 func writeFileAtomically(path string, data []byte) error {

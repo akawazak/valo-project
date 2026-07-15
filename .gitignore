@@ -1,7 +1,9 @@
 # Build artifacts
 /.gocache/
+/.gocache-test/
 /.cargo-target-check/
 frontend/src-tauri/.cargo-target-check/
+frontend/src-tauri/target-*/
 backend/*.exe
 backend/*.exe~
 backend/bin/
@@ -30,6 +32,7 @@ MEMORY.md
 /RELEASE_CHECKLIST.md
 memory/
 frontend/.codex-*.png
+frontend/*-qa.png
 VantaVault-portable.exe
 VantaVault-portable.exe.sig
 latest-portable.json

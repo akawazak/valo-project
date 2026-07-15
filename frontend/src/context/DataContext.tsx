@@ -2,8 +2,9 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { accountRequiresManualRepair, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount, FlexAsset } from '@/lib/types';
-import { appFetch, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getPersistedAccounts, savePersistedAccounts, getAuthUrl, submitTokenUrl, getFlexes } from '@/services/api';
+import { activateAccount as activateRemoteAccount, appFetch, clearActiveAccount, clearChatHistory, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getAuthUrl, hasActiveRemoteAuth, submitTokenUrl, getFlexes } from '@/services/api';
 import { pushAuthDebugEvent } from '@/lib/authDebug';
+import { deleteStoredAccountSecrets, getStoredAccounts, hydrateStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
@@ -25,6 +26,11 @@ function hasSsidCookie(cookies: string | null | undefined): cookies is string {
 type LoginRedirectPayload = { sessionId: string; url: string };
 type LoginCookiesPayload = { sessionId: string; cookies: string };
 type LoginSessionPayload = { sessionId: string };
+
+const COOKIE_MAINTENANCE_AGE_MS = 24 * 60 * 60 * 1000;
+const COOKIE_MAINTENANCE_POLL_MS = 60 * 60 * 1000;
+const COOKIE_MAINTENANCE_START_DELAY_MS = 30_000;
+const COOKIE_MAINTENANCE_SPACING_MS = 3_000;
 
 /**
  * closeLoginWindowAndWait asks Tauri to close the popup for the given
@@ -140,21 +146,11 @@ async function completeLoginFlow(
         sessionId,
         ssid: finalSsid,
         lastRenewedAt: Date.now(),
+        lastCookieRotatedAt: hasSsidCookie(finalSsid) ? Date.now() : undefined,
         lastRefreshAttemptAt: Date.now(),
         lastRefreshError: undefined,
         lastRefreshErrorCode: undefined,
     };
-}
-
-function mergeAccounts(localAccounts: RiotAccount[], persistedAccounts: RiotAccount[]) {
-    const merged = new Map<string, RiotAccount>();
-    for (const account of persistedAccounts) {
-        merged.set(account.puuid, account);
-    }
-    for (const account of localAccounts) {
-        merged.set(account.puuid, account);
-    }
-    return Array.from(merged.values());
 }
 
 function getOwnedBuddyDetails(gunBuddies: GunBuddy[], ownedBuddies: OwnedBuddy[]) {
@@ -175,19 +171,6 @@ function getOwnedBuddyDetails(gunBuddies: GunBuddy[], ownedBuddies: OwnedBuddy[]
         .filter((buddy): buddy is GunBuddy => Boolean(buddy));
 }
 
-export function getStoredAccounts(): RiotAccount[] {
-    try {
-        return JSON.parse(localStorage.getItem("riot_accounts") || "[]");
-    } catch {
-        return [];
-    }
-}
-
-export function saveStoredAccounts(accounts: RiotAccount[]) {
-    localStorage.setItem("riot_accounts", JSON.stringify(accounts));
-    return savePersistedAccounts(accounts);
-}
-
 async function deleteSavedLoginSession(sessionId: string | undefined) {
     if (!sessionId?.startsWith("account_")) return;
     try {
@@ -202,7 +185,7 @@ async function deleteSavedLoginSession(sessionId: string | undefined) {
 // Legacy accounts without one still use their existing PUUID-based folder.
 export function migrateSessionIds(): void {
     try {
-        const accounts: RiotAccount[] = JSON.parse(localStorage.getItem("riot_accounts") || "[]");
+        const accounts = getStoredAccounts();
         let changed = false;
         const migrated = accounts.map(acc => {
             const stableId = `session_${acc.puuid}`;
@@ -213,8 +196,7 @@ export function migrateSessionIds(): void {
             return acc;
         });
         if (changed) {
-            localStorage.setItem("riot_accounts", JSON.stringify(migrated));
-            void savePersistedAccounts(migrated);
+            void saveStoredAccounts(migrated);
         }
     } catch {
         // silently ignore migration errors
@@ -222,15 +204,7 @@ export function migrateSessionIds(): void {
 }
 
 export function activateAccount(account: RiotAccount) {
-    localStorage.setItem("riot_puuid", account.puuid);
-    localStorage.setItem("riot_region", account.region);
-    if (isAccountExpired(account)) {
-        localStorage.removeItem("riot_access_token");
-        localStorage.removeItem("riot_entitlements");
-    } else {
-        localStorage.setItem("riot_access_token", account.accessToken);
-        localStorage.setItem("riot_entitlements", account.entitlementsToken);
-    }
+    activateRemoteAccount(account);
 }
 
 export interface LoginFlowState {
@@ -268,6 +242,8 @@ interface DataContextType {
     loading: boolean;
     isClientHealthy: boolean;
     isBackendOnline: boolean;
+    isLocalClientActive: boolean;
+    localPuuid: string;
     refreshLoadout: () => Promise<void>;
 
     // Accounts management state
@@ -355,6 +331,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     // Lifted accounts state
     const [accounts, setAccounts] = useState<RiotAccount[]>([]);
+    const [accountsHydrated, setAccountsHydrated] = useState(false);
     const [activeAccount, setActiveAccount] = useState<RiotAccount | null>(null);
     const [isTokenExpired, setIsTokenExpired] = useState(false);
     const [isLocalClientActive, setIsLocalClientActive] = useState(false);
@@ -384,13 +361,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const expired = checkTokenExpired(found, isLocalClientActive, localPuuid);
             setIsTokenExpired(prev => prev === expired ? prev : expired);
         } else {
-            localStorage.removeItem("riot_access_token");
-            localStorage.removeItem("riot_entitlements");
+            clearActiveAccount();
             localStorage.removeItem("riot_puuid");
             localStorage.removeItem("riot_region");
             setIsTokenExpired(prev => prev === false ? prev : false);
         }
-        setActiveAccount(prev => prev?.puuid === found?.puuid ? prev : found);
+        // Secure hydration may replace the public, tokenless copy for the same
+        // PUUID. Always accept the freshly cached account instead of comparing
+        // only its identifier and accidentally retaining blank credentials.
+        setActiveAccount(found);
     }, [isLocalClientActive, localPuuid]);
 
     useEffect(() => {
@@ -557,7 +536,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const updated = stored.filter(a => a.puuid !== puuid);
         const persisted = saveStoredAccounts(updated);
         setAccounts(updated);
-        void persisted.then(() => deleteSavedLoginSession(removed?.sessionId));
+        void persisted.then(async () => {
+			await clearChatHistory(undefined, puuid).catch(() => undefined);
+            await deleteStoredAccountSecrets(puuid);
+            await deleteSavedLoginSession(removed?.sessionId);
+        });
         
         if (activeAccount?.puuid === puuid) {
             const next = updated[0] ?? null;
@@ -568,8 +551,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 setStorefrontRefreshKey(k => k + 1);
             } else {
                 setActiveAccount(null);
-                localStorage.removeItem("riot_access_token");
-                localStorage.removeItem("riot_entitlements");
+                clearActiveAccount();
                 localStorage.removeItem("riot_puuid");
                 localStorage.removeItem("riot_region");
             }
@@ -709,16 +691,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             region: data.region || acc.region,
                             gameName: data.game_name || acc.gameName,
                             tagLine: data.tag_line || acc.tagLine,
-                            ssid: data.cookies || acc.ssid,
+                            ssid: hasSsidCookie(data.cookies) ? data.cookies : acc.ssid,
                             sessionId,
                             lastRenewedAt: Date.now(),
+                            lastCookieRotatedAt: hasSsidCookie(data.cookies)
+                                ? Date.now()
+                                : acc.lastCookieRotatedAt,
                             lastRefreshAttemptAt: Date.now(),
                             lastRefreshError: undefined,
                             lastRefreshErrorCode: undefined,
                         };
                         const stored = getStoredAccounts();
                         const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
-                        saveStoredAccounts(updated);
+                        // Do not report success until the rotated cookies are safely
+                        // committed to Windows Credential Manager.
+                        await saveStoredAccounts(updated);
                         setAccounts(updated);
                         if (activeAccount?.puuid === acc.puuid) {
                             activateAccount(updatedAcc);
@@ -755,7 +742,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
         if (cancelled) return false;
         if (!allowPopup) {
-            recordFailure(failureReason, "silent_reauth_failed");
+            recordFailure(failureReason, failureCode);
             releaseLock();
             return false;
         }
@@ -882,15 +869,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         await closedPromise;
                         if (resolved) return;
 
+                        // A missing/stale session directory may have been recreated by
+                        // the fallback login. Keep that exact WebView2 profile so it can
+                        // repair this account again later.
+                        await invoke("claim_login_session", { sessionId }).catch(() => {});
+
                         // Fetch the ssid cookie from the session directory now that the lock is released
                         const raw = hasSsidCookie(capturedCookies)
                             ? capturedCookies
                             : await invoke<string | null>("get_ssid_cookie", { sessionId, waitMs: 15000 }) ?? undefined;
                         if (resolved) return;
-                        const finalAcc = { ...updatedAcc, ssid: hasSsidCookie(raw) ? raw : updatedAcc.ssid };
+                        const finalAcc = {
+                            ...updatedAcc,
+                            ssid: hasSsidCookie(raw) ? raw : updatedAcc.ssid,
+                            lastCookieRotatedAt: hasSsidCookie(raw)
+                                ? Date.now()
+                                : updatedAcc.lastCookieRotatedAt,
+                        };
                         pushAuthDebugEvent("refresh.popup_cookie_read", finalAcc, { outcome: hasSsidCookie(raw) ? "success" : "failed", code: hasSsidCookie(raw) ? undefined : "ssid_missing" });
                         const finalUpdated = getStoredAccounts().map(a => a.puuid === acc.puuid ? finalAcc : a);
-                        saveStoredAccounts(finalUpdated);
+                        await saveStoredAccounts(finalUpdated);
                         setAccounts(finalUpdated);
                         if (activeAccount?.puuid === acc.puuid) {
                             activateAccount(finalAcc);
@@ -944,6 +942,71 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refreshWaitersRef.current = refreshWaitersRef.current.filter((waiter) => waiter.sessionKey !== sessionKey);
         pending.forEach(({ resolve }) => resolve(false));
     }, []);
+
+    const refreshAccountTokenRef = useRef(refreshAccountToken);
+    useEffect(() => {
+        refreshAccountTokenRef.current = refreshAccountToken;
+    }, [refreshAccountToken]);
+
+    // Riot rotates the reusable auth cookies during successful reauth. Keep
+    // inactive accounts alive too, but serialize and space the requests so a
+    // large account list does not create a startup burst or rate-limit storm.
+    useEffect(() => {
+        if (!accountsHydrated || !isBackendOnline) return;
+        let cancelled = false;
+        let running = false;
+
+        const maintainCookies = async () => {
+            if (cancelled || running || loginInFlightRef.current) return;
+            running = true;
+            try {
+                const now = Date.now();
+                const dueAccounts = getStoredAccounts().filter((account) => {
+                    if (!hasSsidCookie(account.ssid)) return false;
+                    if (["login_required", "cookies_expired", "account_mismatch", "missing_cookies"].includes(account.lastRefreshErrorCode || "")) {
+                        return false;
+                    }
+                    const lastMaintenance = Math.max(
+                        account.lastCookieRotatedAt || 0,
+                        account.lastRefreshAttemptAt || 0,
+                        account.lastRenewedAt || 0,
+                    );
+                    return now - lastMaintenance >= COOKIE_MAINTENANCE_AGE_MS;
+                });
+
+                for (const account of dueAccounts) {
+                    if (cancelled || loginInFlightRef.current) break;
+                    const ok = await refreshAccountTokenRef.current(account, false, false);
+                    if (!ok) {
+                        const current = getStoredAccounts().find((item) => item.puuid === account.puuid);
+                        // A network/backend failure affects the whole queue. Stop and
+                        // let the hourly poll retry instead of marking every account.
+                        if (current?.lastRefreshErrorCode === "temporary") break;
+                    }
+                    if (!cancelled) {
+                        await new Promise<void>((resolve) => {
+                            window.setTimeout(resolve, COOKIE_MAINTENANCE_SPACING_MS);
+                        });
+                    }
+                }
+            } finally {
+                running = false;
+            }
+        };
+
+        const initialTimer = window.setTimeout(() => {
+            void maintainCookies();
+        }, COOKIE_MAINTENANCE_START_DELAY_MS);
+        const pollTimer = window.setInterval(() => {
+            void maintainCookies();
+        }, COOKIE_MAINTENANCE_POLL_MS);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(initialTimer);
+            window.clearInterval(pollTimer);
+        };
+    }, [accountsHydrated, isBackendOnline]);
 
     /**
      * Settle the in-flight login flow: either resolve with the new account
@@ -1125,20 +1188,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // Initialize accounts list and load static data on mount
     useEffect(() => {
         migrateSessionIds();
-        refreshAccountsList();
         loadStaticData();
-    }, [loadStaticData, refreshAccountsList]);
+    }, [loadStaticData]);
 
     useEffect(() => {
         let cancelled = false;
 
         const hydrateAccounts = async () => {
-            const persisted = await getPersistedAccounts();
-            if (cancelled || persisted.length === 0) return;
-
-            const merged = mergeAccounts(getStoredAccounts(), persisted);
-            saveStoredAccounts(merged);
-            refreshAccountsList();
+            try {
+                const hydrated = await hydrateStoredAccounts();
+                if (cancelled) return;
+                if (hydrated.length > 0) refreshAccountsList();
+            } finally {
+                if (!cancelled) setAccountsHydrated(true);
+            }
         };
 
         hydrateAccounts();
@@ -1203,7 +1266,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             saveStoredAccounts(deduped);
             setAccounts(deduped);
 
-            const hasRemoteSession = Boolean(localStorage.getItem('riot_access_token'));
+            const hasRemoteSession = hasActiveRemoteAuth();
             const conflictWithActive = activeAccount && activeAccount.puuid.toLowerCase() !== newAcc.puuid.toLowerCase();
 
             if (hasRemoteSession || conflictWithActive) {
@@ -1234,7 +1297,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const healthCheck = async () => {
             const useLocalSso = typeof window !== 'undefined' && localStorage.getItem('use_local_sso') === 'true';
-            const hasRemoteSession = !useLocalSso && typeof window !== 'undefined' && Boolean(localStorage.getItem('riot_access_token'));
+            const hasRemoteSession = !useLocalSso && hasActiveRemoteAuth();
             const health = await getHealth();
             setIsBackendOnline(health.online);
             setIsLocalClientActive(health.localClientActive);
@@ -1262,7 +1325,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     return (
         <DataContext.Provider value={{
-            agents, allAgents, ownedAgentIDs, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, refreshLoadout,
+            agents, allAgents, ownedAgentIDs, weapons, ownedBuddies, allBuddies, contentTiers, ownedLevelIDs, ownedChromaIDs, ownedBuddyIDs, bundles, loading, isClientHealthy, isBackendOnline, isLocalClientActive, localPuuid, refreshLoadout,
             sprays, flexes, playerCards, playerTitles, ownedSprayIDs, ownedCardIDs, ownedTitleIDs, playerSpraySlots,
             accounts, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,

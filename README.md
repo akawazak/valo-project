@@ -4,7 +4,7 @@
   <p>A private, open-source Windows VALORANT companion app for loadouts, the storefront, profiles, friends, parties, and live-match context.</p>
   <p>
     <a href="https://github.com/akawazak/valo-project/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/akawazak/valo-project?style=flat-square&color=ff4655" /></a>
-    <a href="LICENSE.md"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1923?style=flat-square" /></a>
+    <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1923?style=flat-square" /></a>
     <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-0078d4?style=flat-square" />
     <img alt="Tauri" src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" />
   </p>
@@ -30,7 +30,8 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 - **Portable-first releases:** the main download is now a single VantaVault portable EXE with the app and backend bundled together.
 - Portable builds can check for updates from Settings, download the signed new portable EXE in the background, and switch to it with **Restart now** without showing a setup wizard.
 - Release packaging now publishes `VantaVault-portable.exe`, its signature, and a small portable update manifest alongside the normal Windows installer.
-- **Live Match overlay window:** VantaVault can open a focused live-match companion window automatically during agent select and toggle it while VALORANT is focused with **Alt + T**.
+- **In-app live match view:** VantaVault can reveal the already-loaded main app during agent select or with **Alt + T**, without launching a second overlay window or intentionally taking focus from VALORANT.
+- Alt + T shows the normal VantaVault app window centered at a fixed 1280 × 720 above VALORANT without activating it, then hides the same window when pressed again. Opening VantaVault normally restores its previous size and position. It does not make VantaVault fullscreen or inject code into the game.
 - Live-match profile checks reuse already fetched rank and likely-stack data while Riot rate limits cool down, so opening a player profile no longer throws away useful match context.
 
 ## What's new in 0.5.21
@@ -66,10 +67,6 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 
 ![VantaVault live match overlay showing Haven, live score, teams, ranks, and likely duo indicators](docs/screenshots/live-match.png)
 
-### Live Match overlay window
-
-![VantaVault live match overlay window showing Fracture, team score, ranks, and likely duo indicators](docs/screenshots/live-match-fracture.png)
-
 ### Cosmetic picker
 
 ![VantaVault spray picker showing owned cosmetics](docs/screenshots/cosmetic-picker.png)
@@ -87,7 +84,7 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 | Accounts | Manage multiple Riot accounts with persistent WebView2 sessions and sequential access renewal. |
 | Profile | Automatically sync your profile, inspect rank and match history, and open friends or party members directly in the profile view. |
 | Social | See local and remote friend presence, known party groups, player cards when Riot exposes or cached match data provides them, pregame state, and live-match information when available. The docked Party & Friends panel stays reachable when the app window changes size. |
-| Live Match | View agent picks, teams, map, queue type, live score when Riot presence provides it, direct rank refreshes, current and peak ranks where available, confirmed own-party markers, and clearly marked likely stacks from recent-match evidence. Agent select can open a dedicated overlay-style window automatically, and **Alt + T** toggles it while VALORANT is focused. |
+| Live Match | View agent picks, teams, map, queue type, live score when Riot presence provides it, direct rank refreshes, current and peak ranks where available, confirmed own-party markers, and clearly marked likely stacks from recent-match evidence. Agent select and **Alt + T** can reveal the existing app without starting a second data-loading window. |
 | Discord | Show Browsing Store, Building a Loadout, Agent Select, agent, queue, map, and In Match activity through Rich Presence. |
 | Privacy | Keep match history locally with configurable retention and sanitized diagnostics export. |
 
@@ -214,4 +211,4 @@ Fork the repository, branch from the latest `main`, keep changes focused, run th
 - [truearken/valovault](https://github.com/truearken/valovault) — original loadout workflow, local-client integration, and Tauri foundation.
 - [victorxia18/valorant-shop-checker](https://github.com/victorxia18/valorant-shop-checker) — inspiration for Riot OAuth and remote storefront retrieval.
 
-Released under the [MIT License](LICENSE.md).
+Released under the [MIT License](LICENSE).

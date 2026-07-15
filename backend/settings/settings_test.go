@@ -51,3 +51,20 @@ func TestSaveRawRejectsInvalidRetention(t *testing.T) {
 		t.Fatal("expected invalid retention to be rejected")
 	}
 }
+
+func TestSaveRawPersistsCompleteUISettings(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("APPDATA", configDir)
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	raw := []byte(`{"theme":"light","accentTheme":"aqua","interfaceTheme":"cinematic","uiSettingsSaved":true,"appearance":{"backgroundId":"deadlock","backgroundUrl":"/themes/deadlock.jpg","backgroundName":"Deadlock","strength":52,"blur":3,"saturation":110,"panelOpacity":76,"position":"right"}}`)
+	if err := SaveRaw(raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Theme != "light" || got.AccentTheme != "aqua" || got.InterfaceTheme != "cinematic" || !got.UISettingsSaved || got.Appearance.BackgroundID != "deadlock" || got.Appearance.Position != "right" || got.Appearance.PanelOpacity != 76 {
+		t.Fatalf("UI settings were not persisted: %+v", got)
+	}
+}

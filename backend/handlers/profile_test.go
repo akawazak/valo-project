@@ -34,6 +34,33 @@ func TestSyncInFlightGuardRejectsDuplicateSync(t *testing.T) {
 	}
 }
 
+func TestBuildMatchDetailsKeepsPartyIDs(t *testing.T) {
+	cache := &tracking.MatchCache{
+		Match:  tracking.MatchRow{MatchID: "party-match"},
+		Rounds: []tracking.MatchRound{{RoundNum: 0, WinningTeam: "Red", RoundResult: "Eliminated"}},
+		Players: []tracking.PlayerRow{
+			{Subject: "local", TeamID: "Red", PartyID: "party-123", GameName: "Local", IsLocal: true, RoundsPlayed: 5},
+			{Subject: "duo", TeamID: "Red", PartyID: "party-123", GameName: "Duo", RoundsPlayed: 5},
+			{Subject: "enemy", TeamID: "Blue", PartyID: "party-999", GameName: "Enemy", RoundsPlayed: 5},
+		},
+	}
+
+	detail := buildMatchDetails(cache)
+	if len(detail.Players) != 3 {
+		t.Fatalf("players = %d, want 3", len(detail.Players))
+	}
+	if len(detail.Rounds) != 1 || detail.Rounds[0].WinningTeam != "Red" {
+		t.Fatalf("rounds = %+v, want copied round metadata", detail.Rounds)
+	}
+	got := map[string]string{}
+	for _, player := range detail.Players {
+		got[player.Subject] = player.PartyID
+	}
+	if got["local"] != "party-123" || got["duo"] != "party-123" || got["enemy"] != "party-999" {
+		t.Fatalf("detail party IDs = %#v", got)
+	}
+}
+
 func TestMergeLiveMMRUsesDocumentedSeasonFields(t *testing.T) {
 	var live playerMMRResponse
 	if err := json.Unmarshal([]byte(`{

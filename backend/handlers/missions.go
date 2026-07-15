@@ -23,6 +23,7 @@ type RiotMissionsResponse struct {
 	ActiveSpecialContract string                 `json:"ActiveSpecialContract"`
 	Contracts             []RiotContractProgress `json:"Contracts"`
 	Missions              []RiotMissionProgress  `json:"Missions"`
+	ProcessedMatches      []map[string]any       `json:"ProcessedMatches"`
 	MissionMetadata       RiotMissionMetadata    `json:"MissionMetadata"`
 }
 

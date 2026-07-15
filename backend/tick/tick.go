@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/truearken/valclient/valclient"
@@ -18,11 +19,15 @@ import (
 const TICK_SPEED_SECONDS = 1
 
 type Ticker struct {
-	Val             *valclient.ValClient
-	stopCh          chan struct{}
-	running         bool
-	originalLoadout *valclient.GetPlayerLoadoutRequest
-	inactiveChecks  int
+	Val                  *valclient.ValClient
+	stopCh               chan struct{}
+	running              bool
+	originalLoadout      *valclient.GetPlayerLoadoutRequest
+	inactiveChecks       int
+	OnProgressionChanged func()
+	OnChatChanged        func()
+	OnChatEvent          func(string, []byte)
+	OnSocialChanged      func()
 }
 
 // Allow for temporary Riot API failures and the pregame-to-core-game handoff.
@@ -95,6 +100,21 @@ func (t *Ticker) Start() {
 			if err != nil {
 				slog.Error("error marshalling event payload", "err", err)
 				continue
+			}
+			if t.OnProgressionChanged != nil && (bytes.Contains(dataBytes, []byte("daily-ticket")) || bytes.Contains(dataBytes, []byte("contracts")) || bytes.Contains(dataBytes, []byte("account-xp")) || bytes.Contains(dataBytes, []byte("match-details"))) {
+				t.OnProgressionChanged()
+			}
+			chatURI := strings.ToLower(event.Payload.URI)
+			if t.OnSocialChanged != nil && (strings.HasPrefix(chatURI, "/chat/v4/friends") || strings.HasPrefix(chatURI, "/chat/v4/presences") || strings.HasPrefix(chatURI, "/chat/v4/friendrequests")) {
+				t.OnSocialChanged()
+			}
+			if strings.HasPrefix(chatURI, "/chat/") && (strings.Contains(chatURI, "/messages") || strings.Contains(chatURI, "/conversations")) {
+				if t.OnChatChanged != nil {
+					t.OnChatChanged()
+				}
+				if t.OnChatEvent != nil {
+					t.OnChatEvent(event.Payload.URI, dataBytes)
+				}
 			}
 
 			if !bytes.Contains(dataBytes, []byte("ares-pregame/pregame/v1/matches")) || fired {

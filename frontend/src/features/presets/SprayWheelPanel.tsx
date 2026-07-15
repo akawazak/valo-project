@@ -34,6 +34,7 @@ export default function SprayWheelPanel({
     const [modalFlexTypeId, setModalFlexTypeId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<PickerTab>("sprays");
     const [searchQuery, setSearchQuery] = useState("");
+    const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
 
     const ownedSpraySet = useMemo(
         () => new Set(ownedSprayIDs.map(id => id.toLowerCase())),
@@ -80,6 +81,12 @@ export default function SprayWheelPanel({
     const activeFlexAsset = activeFlexSlot?.assetId
         ? flexAssetMap.get(activeFlexSlot.assetId.toLowerCase())
         : undefined;
+    const pendingSprayAsset = pendingAssetId
+        ? sprays.find(spray => spray.uuid.toLowerCase() === pendingAssetId.toLowerCase())
+        : undefined;
+    const pendingFlexAsset = pendingAssetId
+        ? flexAssetMap.get(pendingAssetId.toLowerCase())
+        : undefined;
     const modalOpen = Boolean(activeSlot) || modalFlexTypeId !== null;
 
     const displayFlexes = useMemo(() => {
@@ -99,6 +106,7 @@ export default function SprayWheelPanel({
     const openSprayModal = (slotId: string) => {
         setModalSlotId(slotId);
         setModalFlexTypeId(null);
+        setPendingAssetId(slotSprayMap[slotId]?.uuid || null);
         setActiveTab("sprays");
         setSearchQuery("");
     };
@@ -106,50 +114,39 @@ export default function SprayWheelPanel({
     const handleCloseModal = () => {
         setModalSlotId(null);
         setModalFlexTypeId(null);
+        setPendingAssetId(null);
         setActiveTab("sprays");
         setSearchQuery("");
     };
 
-    const handleSelectSpray = (sprayUuid: string) => {
-        if (!modalSlotId) return;
-        const updated = currentSprays.filter(s => s.equipSlotId.toLowerCase() !== modalSlotId.toLowerCase());
-        updated.push({ equipSlotId: modalSlotId, sprayId: sprayUuid });
-        onUpdateSprays(updated);
-        handleCloseModal();
-    };
-
-    const handleClearSpray = () => {
-        if (!activeSlot) return;
-        onUpdateSprays(currentSprays.filter(s => s.equipSlotId.toLowerCase() !== activeSlot.id.toLowerCase()));
-        handleCloseModal();
-    };
-
-    const handleSelectFlex = (flexUuid: string) => {
-        if (!activeFlexSlot || activeFlexSlot.typeId === "pending-flex-slot" || !onUpdateFlexes) return;
-        onUpdateFlexes(
-            currentFlexes.map(slot =>
+    const handleApplySelection = () => {
+        if (activeTab === "sprays" && modalSlotId) {
+            const updated = currentSprays.filter(s => s.equipSlotId.toLowerCase() !== modalSlotId.toLowerCase());
+            if (pendingAssetId) updated.push({ equipSlotId: modalSlotId, sprayId: pendingAssetId });
+            onUpdateSprays(updated);
+        } else if (activeFlexSlot && activeFlexSlot.typeId !== "pending-flex-slot" && onUpdateFlexes && pendingAssetId) {
+            onUpdateFlexes(currentFlexes.map(slot =>
                 slot.typeId.toLowerCase() === activeFlexSlot.typeId.toLowerCase()
-                    ? { ...slot, assetId: flexUuid }
+                    ? { ...slot, assetId: pendingAssetId }
                     : slot,
-            ),
-        );
+            ));
+        }
         handleCloseModal();
-    };
-
-    const handleClearFlex = () => {
-        const noneFlex = flexes.find(flex => flex.displayName.toLowerCase() === "none");
-        if (noneFlex) handleSelectFlex(noneFlex.uuid);
     };
 
     const switchTab = (tab: PickerTab) => {
         setActiveTab(tab);
         setSearchQuery("");
         if (tab === "sprays") {
-            setModalSlotId(modalSlotId || SPRAY_SLOTS[0].id);
+            const slotId = modalSlotId || SPRAY_SLOTS[0].id;
+            setModalSlotId(slotId);
             setModalFlexTypeId(null);
+            setPendingAssetId(slotSprayMap[slotId]?.uuid || null);
         } else {
             setModalSlotId(null);
-            setModalFlexTypeId(currentFlexes[0]?.typeId || "pending-flex-slot");
+            const flexSlot = currentFlexes[0];
+            setModalFlexTypeId(flexSlot?.typeId || "pending-flex-slot");
+            setPendingAssetId(flexSlot?.assetId || null);
         }
     };
 
@@ -203,17 +200,17 @@ export default function SprayWheelPanel({
                             <div className="unified-modal-left spray-picker-modal-left">
                                 <div className="unified-modal-preview-box spray-picker-modal-preview">
                                     <div className="unified-modal-card-tier-line" style={{ backgroundColor: "var(--accent)" }} />
-                                    {activeTab === "sprays" && activeSlot && slotSprayMap[activeSlot.id] ? (
+                                    {activeTab === "sprays" && pendingSprayAsset ? (
                                         <img
-                                            src={slotSprayMap[activeSlot.id].icon}
-                                            alt={slotSprayMap[activeSlot.id].name}
+                                            src={pendingSprayAsset.displayIcon || pendingSprayAsset.fullIcon || pendingSprayAsset.fullTransparentIcon}
+                                            alt={pendingSprayAsset.displayName}
                                             className="unified-modal-preview-img"
                                             style={{ maxHeight: "70%", maxWidth: "70%", objectFit: "contain" }}
                                         />
-                                    ) : activeTab === "flexes" && activeFlexAsset?.displayIcon ? (
+                                    ) : activeTab === "flexes" && pendingFlexAsset?.displayIcon ? (
                                         <img
-                                            src={activeFlexAsset.displayIcon}
-                                            alt={activeFlexAsset.displayName}
+                                            src={pendingFlexAsset.displayIcon}
+                                            alt={pendingFlexAsset.displayName}
                                             className="unified-modal-preview-img"
                                             style={{ maxHeight: "68%", maxWidth: "68%", objectFit: "contain" }}
                                         />
@@ -225,13 +222,13 @@ export default function SprayWheelPanel({
                                 <div className="unified-modal-skin-meta">
                                     <h4>
                                         {activeTab === "sprays" && activeSlot
-                                            ? slotSprayMap[activeSlot.id]?.name || "Empty Slot"
-                                            : activeFlexAsset?.displayName || "No Flex Selected"}
+                                            ? pendingSprayAsset?.displayName || "Empty Slot"
+                                            : pendingFlexAsset?.displayName || "No Flex Selected"}
                                     </h4>
                                     <span>
                                         {activeTab === "sprays"
-                                            ? activeSlot && slotSprayMap[activeSlot.id] ? "Equipped in preset" : "No spray selected"
-                                            : currentFlexes.length > 0 ? "Equipped in preset" : "Flex slot not discovered from live loadout"}
+                                            ? pendingSprayAsset ? "Selected — apply to keep" : "No spray selected"
+                                            : currentFlexes.length > 0 ? "Selected — apply to keep" : "Flex slot not discovered from live loadout"}
                                     </span>
                                 </div>
 
@@ -242,7 +239,10 @@ export default function SprayWheelPanel({
                                                 key={slot.typeId}
                                                 type="button"
                                                 className={slot.typeId === activeFlexSlot?.typeId ? "active" : ""}
-                                                onClick={() => setModalFlexTypeId(slot.typeId)}
+                                                onClick={() => {
+                                                    setModalFlexTypeId(slot.typeId);
+                                                    setPendingAssetId(slot.assetId || null);
+                                                }}
                                             >
                                                 {index + 1}
                                             </button>
@@ -250,12 +250,12 @@ export default function SprayWheelPanel({
                                     </div>
                                 )}
 
-                                {activeTab === "sprays" && activeSlot && slotSprayMap[activeSlot.id] && (
+                                {activeTab === "sprays" && activeSlot && pendingAssetId && (
                                     <div className="spray-picker-clear-action">
                                         <button
                                             type="button"
                                             className="btn-tactical btn-tactical-ghost"
-                                            onClick={handleClearSpray}
+                                            onClick={() => setPendingAssetId(null)}
                                         >
                                             Clear Spray Slot
                                         </button>
@@ -267,7 +267,10 @@ export default function SprayWheelPanel({
                                         <button
                                             type="button"
                                             className="btn-tactical btn-tactical-ghost"
-                                            onClick={handleClearFlex}
+                                            onClick={() => {
+                                                const noneFlex = flexes.find(flex => flex.displayName.toLowerCase() === "none");
+                                                if (noneFlex) setPendingAssetId(noneFlex.uuid);
+                                            }}
                                             disabled={!onUpdateFlexes || !activeFlexSlot || activeFlexSlot.typeId === "pending-flex-slot"}
                                         >
                                             Clear Flex
@@ -316,14 +319,14 @@ export default function SprayWheelPanel({
                                         ) : (
                                             <div className="unified-modal-cards-grid">
                                                 {displaySprays.map(spray => {
-                                                    const isEquipped = activeSlot ? slotSprayMap[activeSlot.id]?.uuid === spray.uuid : false;
+                                                    const isEquipped = pendingAssetId?.toLowerCase() === spray.uuid.toLowerCase();
                                                     const sprayIcon = spray.displayIcon || spray.fullIcon || spray.fullTransparentIcon;
                                                     return (
                                                         <button
                                                             key={spray.uuid}
                                                             type="button"
                                                             className={`unified-modal-card-item${isEquipped ? " active" : ""}`}
-                                                            onClick={() => handleSelectSpray(spray.uuid)}
+                                                            onClick={() => setPendingAssetId(spray.uuid)}
                                                             title={spray.displayName}
                                                         >
                                                             <div className="unified-modal-card-img-wrap expression-asset-img-wrap">
@@ -351,14 +354,14 @@ export default function SprayWheelPanel({
                                             )}
                                             <div className="unified-modal-cards-grid expression-flex-grid">
                                                 {displayFlexes.map(flex => {
-                                                    const isEquipped = activeFlexSlot?.assetId.toLowerCase() === flex.uuid.toLowerCase();
+                                                    const isEquipped = pendingAssetId?.toLowerCase() === flex.uuid.toLowerCase();
                                                     const canEquip = Boolean(onUpdateFlexes && activeFlexSlot && activeFlexSlot.typeId !== "pending-flex-slot");
                                                     return (
                                                         <button
                                                             key={flex.uuid}
                                                             type="button"
                                                             className={`unified-modal-card-item expression-flex-card${isEquipped ? " active" : ""}`}
-                                                            onClick={() => handleSelectFlex(flex.uuid)}
+                                                            onClick={() => setPendingAssetId(flex.uuid)}
                                                             title={flex.displayName}
                                                             disabled={!canEquip}
                                                         >
@@ -380,6 +383,23 @@ export default function SprayWheelPanel({
                                         </>
                                     )}
                                 </div>
+                            </div>
+                        </div>
+                        <div className="unified-modal-footer">
+                            <div className="unified-modal-footer-copy">
+                                <strong>{activeTab === "sprays" ? pendingSprayAsset?.displayName || "Empty spray slot" : pendingFlexAsset?.displayName || "No flex selected"}</strong>
+                                <span>The selection is kept only when you apply it.</span>
+                            </div>
+                            <div className="unified-modal-footer-actions">
+                                <button type="button" className="btn-tactical btn-tactical-ghost" onClick={handleCloseModal}>Cancel</button>
+                                <button
+                                    type="button"
+                                    className="btn-tactical btn-tactical-accent"
+                                    onClick={handleApplySelection}
+                                    disabled={activeTab === "flexes" && (!onUpdateFlexes || !activeFlexSlot || activeFlexSlot.typeId === "pending-flex-slot")}
+                                >
+                                    Apply {activeTab === "sprays" ? "Spray" : "Flex"}
+                                </button>
                             </div>
                         </div>
                     </div>

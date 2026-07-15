@@ -8,14 +8,17 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-var remoteSocialHub = &xmppSocialHub{sessions: map[string]*xmppSocialSession{}}
+var remoteSocialHub = &xmppSocialHub{sessions: map[string]*xmppSocialSession{}, subscribers: map[chan struct{}]struct{}{}}
 
 // ChatMessage remains internal to the XMPP transport so incoming message
 // stanzas can be safely consumed. VantaVault no longer exposes chat routes.
@@ -24,68 +27,129 @@ type ChatMessage struct {
 	FromPuuid string `json:"fromPuuid"`
 	Body      string `json:"body"`
 	Time      int64  `json:"time"`
+	Archived  bool   `json:"-"`
 }
 
 type xmppSocialHub struct {
-	mu       sync.Mutex
-	sessions map[string]*xmppSocialSession
+	mu          sync.Mutex
+	sessions    map[string]*xmppSocialSession
+	subscribers map[chan struct{}]struct{}
 }
 
 type xmppSocialSession struct {
-	mu            sync.RWMutex
-	writeMu       sync.Mutex
-	key           string
-	auth          remoteAuthHeaders
-	host          string
-	domain        string
-	port          int
-	state         string
-	lastError     string
-	lastAttempt   time.Time
-	roster        map[string]xmppRosterItem
-	presences     map[string]chatPresenceEntry
-	selfPresences map[string]chatPresenceEntry
-	running       bool
-	conn          net.Conn
-	messages      map[string][]ChatMessage
+	mu                 sync.RWMutex
+	writeMu            sync.Mutex
+	key                string
+	auth               remoteAuthHeaders
+	host               string
+	domain             string
+	port               int
+	state              string
+	lastError          string
+	lastAttempt        time.Time
+	reconnectDelay     time.Duration
+	roster             map[string]xmppRosterItem
+	requests           map[string]SocialFriendRequest
+	requestJIDs        map[string]string
+	optimisticRequests map[string]time.Time
+	suppressedRequests map[string]time.Time
+	rosterLoaded       bool
+	presences          map[string]chatPresenceEntry
+	selfPresences      map[string]chatPresenceEntry
+	running            bool
+	conn               net.Conn
+	messages           map[string][]ChatMessage
+	archiveRequests    map[string]string
+	archiveRequested   map[string]time.Time
+	archiveQueued      map[string]struct{}
+	archivePaused      bool
+	archivePausedAt    time.Time
+	archiveDiagnostics map[string]xmppArchiveDiagnostic
+	messageSink        func(peer string, message ChatMessage)
+	archiveSink        func(peer string, diagnostic xmppArchiveDiagnostic)
+}
+
+// xmppArchiveDiagnostic deliberately excludes XMPP payloads, JIDs, player
+// names, tokens, and message bodies. It is only for determining which archive
+// response shape Riot actually returns to a request.
+type xmppArchiveDiagnostic struct {
+	RequestID     string   `json:"requestId"`
+	ResponseType  string   `json:"responseType"`
+	ErrorCode     string   `json:"errorCode,omitempty"`
+	ErrorText     string   `json:"errorText,omitempty"`
+	MessageCount  int      `json:"messageCount"`
+	MessageShapes []string `json:"messageShapes,omitempty"`
 }
 
 type xmppMessage struct {
-	From string `xml:"from,attr"`
-	To   string `xml:"to,attr"`
-	Type string `xml:"type,attr"`
-	ID   string `xml:"id,attr"`
-	Body string `xml:"body"`
+	From  string `xml:"from,attr"`
+	To    string `xml:"to,attr"`
+	Type  string `xml:"type,attr"`
+	ID    string `xml:"id,attr"`
+	Body  string `xml:"body"`
+	Stamp string `xml:"stamp,attr"`
+	Delay struct {
+		Stamp string `xml:"stamp,attr"`
+	} `xml:"delay"`
+	LegacyDelay struct {
+		Stamp string `xml:"stamp,attr"`
+	} `xml:"x"`
+	Archived struct {
+		ID        string `xml:"id,attr"`
+		Stamp     string `xml:"stamp,attr"`
+		Timestamp string `xml:"timestamp,attr"`
+	} `xml:"archived"`
 }
 
 type xmppRosterItem struct {
-	PUUID    string
-	Name     string
-	GameName string
-	GameTag  string
+	JID          string
+	PUUID        string
+	Name         string
+	GameName     string
+	GameTag      string
+	Subscription string
 }
 
 type xmppIQ struct {
-	Query struct {
-		Items []struct {
+	ID       string `xml:"id,attr"`
+	Type     string `xml:"type,attr"`
+	InnerXML string `xml:",innerxml"`
+	Query    struct {
+		XMLName  xml.Name
+		InnerXML string `xml:",innerxml"`
+		Items    []struct {
 			JID          string `xml:"jid,attr"`
 			Name         string `xml:"name,attr"`
 			GameName     string `xml:"game_name,attr"`
 			GameTag      string `xml:"game_tag,attr"`
 			PUUID        string `xml:"puuid,attr"`
 			Subscription string `xml:"subscription,attr"`
+			Ask          string `xml:"ask,attr"`
+			ID           struct {
+				Name    string `xml:"name,attr"`
+				Tagline string `xml:"tagline,attr"`
+			} `xml:"id"`
 		} `xml:"item"`
 	} `xml:"query"`
+	Error struct {
+		Code     string `xml:"code,attr"`
+		Type     string `xml:"type,attr"`
+		Text     string `xml:"text"`
+		InnerXML string `xml:",innerxml"`
+	} `xml:"error"`
 }
 
 type xmppPresence struct {
 	From   string `xml:"from,attr"`
 	Type   string `xml:"type,attr"`
+	Name   string `xml:"name,attr"`
 	Show   string `xml:"show"`
 	Status string `xml:"status"`
 	Games  *struct {
 		Valorant *struct {
-			Payload string `xml:"p"`
+			State     string `xml:"st"`
+			Timestamp int64  `xml:"s.t"`
+			Payload   string `xml:"p"`
 		} `xml:"valorant"`
 	} `xml:"games"`
 }
@@ -101,12 +165,20 @@ func (h *xmppSocialHub) ensure(auth *remoteAuthHeaders) *xmppSocialSession {
 	session := h.sessions[key]
 	if session == nil {
 		session = &xmppSocialSession{
-			key:           key,
-			roster:        map[string]xmppRosterItem{},
-			presences:     map[string]chatPresenceEntry{},
-			selfPresences: map[string]chatPresenceEntry{},
-			state:         "connecting",
-			messages:      map[string][]ChatMessage{},
+			key:                key,
+			roster:             map[string]xmppRosterItem{},
+			requests:           map[string]SocialFriendRequest{},
+			requestJIDs:        map[string]string{},
+			optimisticRequests: map[string]time.Time{},
+			suppressedRequests: map[string]time.Time{},
+			presences:          map[string]chatPresenceEntry{},
+			selfPresences:      map[string]chatPresenceEntry{},
+			state:              "connecting",
+			messages:           map[string][]ChatMessage{},
+			archiveRequests:    map[string]string{},
+			archiveRequested:   map[string]time.Time{},
+			archiveQueued:      map[string]struct{}{},
+			archiveDiagnostics: map[string]xmppArchiveDiagnostic{},
 		}
 		h.sessions[key] = session
 	}
@@ -184,6 +256,7 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 	s.mu.Lock()
 	s.state = "live"
 	s.lastError = ""
+	s.reconnectDelay = 0
 	s.mu.Unlock()
 
 	go s.keepAlive(conn)
@@ -191,6 +264,13 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 	s.writeMu.Lock()
 	_, _ = io.WriteString(conn, `<iq type="get" id="1"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq><presence/>`)
 	s.writeMu.Unlock()
+	// A chat view can be opened before authentication finishes. Give the
+	// roster a chance to provide the exact peer JID, then send queued archive
+	// requests without requiring a second UI interaction.
+	go func() {
+		time.Sleep(time.Second)
+		s.flushArchiveRequests()
+	}()
 
 	decoder := xml.NewDecoder(reader)
 	for {
@@ -209,6 +289,12 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 			var iq xmppIQ
 			if err := decoder.DecodeElement(&iq, &start); err == nil {
 				s.applyRoster(iq)
+				s.applyArchive(iq)
+				if strings.EqualFold(iq.Type, "set") && iq.ID != "" {
+					s.writeMu.Lock()
+					_, _ = io.WriteString(conn, `<iq type="result" id="`+xmlEscapeAttribute(iq.ID)+`"/>`)
+					s.writeMu.Unlock()
+				}
 			}
 		case "presence":
 			var presence xmppPresence
@@ -218,7 +304,7 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 		case "message":
 			var message xmppMessage
 			if err := decoder.DecodeElement(&message, &start); err == nil {
-				s.applyMessage(message)
+				s.applyMessage(message, false)
 			}
 		default:
 			_ = decoder.Skip()
@@ -245,7 +331,7 @@ func (s *xmppSocialSession) keepAlive(conn net.Conn) {
 	}
 }
 
-func (s *xmppSocialSession) applyMessage(message xmppMessage) {
+func (s *xmppSocialSession) applyMessage(message xmppMessage, archived bool) {
 	body := strings.TrimSpace(message.Body)
 	if body == "" || (message.Type != "" && message.Type != "chat") {
 		return
@@ -259,24 +345,338 @@ func (s *xmppSocialSession) applyMessage(message xmppMessage) {
 	if peer == "" {
 		return
 	}
+	timestamp := xmppMessageTime(message)
 	s.appendMessage(peer, ChatMessage{
 		ID:        firstNonEmpty(message.ID, fmt.Sprintf("xmpp-%d", time.Now().UnixNano())),
 		FromPuuid: from,
 		Body:      body,
-		Time:      time.Now().UnixMilli(),
+		Time:      timestamp,
+		Archived:  archived,
 	})
+}
+
+func xmppMessageTime(message xmppMessage) int64 {
+	for _, stamp := range []string{message.Delay.Stamp, message.LegacyDelay.Stamp, message.Stamp, message.Archived.Stamp, message.Archived.Timestamp} {
+		stamp = strings.TrimSpace(stamp)
+		if stamp == "" {
+			continue
+		}
+		if millis, err := strconv.ParseInt(stamp, 10, 64); err == nil {
+			if millis < 1e12 {
+				millis *= 1000
+			}
+			return millis
+		}
+		for _, layout := range []string{time.RFC3339Nano, "20060102T15:04:05", "20060102T15:04:05Z"} {
+			if parsed, err := time.Parse(layout, stamp); err == nil {
+				return parsed.UnixMilli()
+			}
+		}
+	}
+	// Riot message IDs use "<unix-milliseconds>:<sequence>". Archive
+	// responses commonly omit delayed-delivery metadata but retain this ID,
+	// so it is the only original send time available for those messages.
+	if timestamp, ok := epochTimestampFromID(message.ID); ok {
+		return timestamp
+	}
+	// Standard XMPP archive IDs are often epoch microseconds.
+	if timestamp, ok := epochTimestampFromID(message.Archived.ID); ok {
+		return timestamp
+	}
+	return time.Now().UnixMilli()
+}
+
+func epochTimestampFromID(value string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if prefix, _, found := strings.Cut(value, ":"); found {
+		value = prefix
+	}
+	raw, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || raw <= 0 {
+		return 0, false
+	}
+	switch {
+	case raw >= 1e18:
+		raw /= 1e6
+	case raw >= 1e15:
+		raw /= 1e3
+	case raw < 1e12:
+		raw *= 1e3
+	}
+	oldest := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	newest := time.Now().Add(24 * time.Hour).UnixMilli()
+	return raw, raw >= oldest && raw <= newest
+}
+
+func (s *xmppSocialSession) requestArchive(peer string) error {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	if peer == "" {
+		return fmt.Errorf("chat recipient is required")
+	}
+	now := time.Now()
+	s.mu.Lock()
+	if s.archiveRequested == nil {
+		s.archiveRequested = map[string]time.Time{}
+	}
+	if s.archiveRequests == nil {
+		s.archiveRequests = map[string]string{}
+	}
+	if s.archiveQueued == nil {
+		s.archiveQueued = map[string]struct{}{}
+	}
+	if s.archiveDiagnostics == nil {
+		s.archiveDiagnostics = map[string]xmppArchiveDiagnostic{}
+	}
+	if s.archivePaused && now.Sub(s.archivePausedAt) < time.Minute {
+		s.archiveDiagnostics[peer] = xmppArchiveDiagnostic{ResponseType: "paused"}
+		s.mu.Unlock()
+		return fmt.Errorf("Riot chat history requests are cooling down after an archive error")
+	}
+	if s.archivePaused {
+		s.archivePaused = false
+	}
+	for _, pendingPeer := range s.archiveRequests {
+		if pendingPeer == peer {
+			s.mu.Unlock()
+			return nil
+		}
+	}
+	// The archive query has no documented pagination or "since" field. Refresh
+	// only the selected peer after a short cooldown and deduplicate in SQLite.
+	if requested := s.archiveRequested[peer]; !requested.IsZero() && now.Sub(requested) < chatSnapshotRefreshInterval {
+		s.mu.Unlock()
+		return nil
+	}
+	if len(s.archiveRequests) > 0 {
+		s.archiveDiagnostics[peer] = xmppArchiveDiagnostic{ResponseType: "deferred"}
+		s.archiveQueued[peer] = struct{}{}
+		s.mu.Unlock()
+		return nil
+	}
+	conn, domain, live := s.conn, s.domain, s.state == "live"
+	recipient := ""
+	if roster, ok := s.roster[peer]; ok {
+		recipient = strings.TrimSpace(roster.JID)
+	}
+	if !live || conn == nil || domain == "" {
+		s.archiveQueued[peer] = struct{}{}
+		s.mu.Unlock()
+		return nil
+	}
+	if recipient == "" {
+		recipient = fmt.Sprintf("%s@%s.pvp.net", peer, domain)
+	}
+	id := fmt.Sprintf("vv_archive_%d", now.UnixNano())
+	s.archiveRequested[peer] = now
+	s.archiveRequests[id] = peer
+	delete(s.archiveQueued, peer)
+	s.mu.Unlock()
+	var escaped strings.Builder
+	if err := xml.EscapeText(&escaped, []byte(recipient)); err != nil {
+		return err
+	}
+	stanza := fmt.Sprintf(`<iq type="get" id="%s"><query xmlns="jabber:iq:riotgames:archive"><with>%s</with></query></iq>`, id, escaped.String())
+	s.writeMu.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_, err := io.WriteString(conn, stanza)
+	_ = conn.SetWriteDeadline(time.Time{})
+	s.writeMu.Unlock()
+	if err != nil {
+		s.mu.Lock()
+		delete(s.archiveRequests, id)
+		s.archivePaused = true
+		s.archivePausedAt = time.Now()
+		clear(s.archiveQueued)
+		s.archiveDiagnostics[peer] = xmppArchiveDiagnostic{RequestID: id, ResponseType: "request_failed"}
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
+		return fmt.Errorf("request XMPP chat archive: %w", err)
+	}
+	slog.Info("xmpp archive request sent", "request_id", id, "recipient_jid_length", len(recipient))
+	return nil
+}
+
+func (s *xmppSocialSession) applyArchive(iq xmppIQ) {
+	s.mu.Lock()
+	peer := s.archiveRequests[iq.ID]
+	if peer != "" {
+		delete(s.archiveRequests, iq.ID)
+	}
+	s.mu.Unlock()
+	if peer == "" {
+		return
+	}
+	diagnostic := xmppArchiveResponseDiagnostic(iq)
+	s.mu.Lock()
+	if s.archiveDiagnostics == nil {
+		s.archiveDiagnostics = map[string]xmppArchiveDiagnostic{}
+	}
+	s.archiveDiagnostics[peer] = diagnostic
+	if !strings.EqualFold(iq.Type, "result") {
+		s.archivePaused = true
+		s.archivePausedAt = time.Now()
+		clear(s.archiveQueued)
+	}
+	s.mu.Unlock()
+	go s.flushArchiveRequests()
+	slog.Info("xmpp archive response", "request_id", diagnostic.RequestID, "response_type", diagnostic.ResponseType, "error_code", diagnostic.ErrorCode, "error_text", diagnostic.ErrorText, "message_count", diagnostic.MessageCount, "message_shapes", strings.Join(diagnostic.MessageShapes, ","))
+	remoteSocialHub.broadcast()
+	payload := iqArchivePayload(iq)
+	if !strings.EqualFold(iq.Type, "result") || strings.TrimSpace(payload) == "" {
+		s.notifyArchiveSink(peer, diagnostic)
+		return
+	}
+	decoder := xml.NewDecoder(strings.NewReader("<root>" + payload + "</root>"))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			s.notifyArchiveSink(peer, diagnostic)
+			return
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok || start.Name.Local != "message" {
+			continue
+		}
+		var message xmppMessage
+		if err := decoder.DecodeElement(&message, &start); err != nil {
+			continue
+		}
+		if message.From == "" && message.To == "" {
+			message.From = peer
+		}
+		s.applyMessage(message, true)
+	}
+}
+
+func iqArchivePayload(iq xmppIQ) string {
+	if strings.TrimSpace(iq.InnerXML) != "" {
+		return iq.InnerXML
+	}
+	return iq.Query.InnerXML
+}
+
+func (s *xmppSocialSession) archiveDiagnostic(peer string) *xmppArchiveDiagnostic {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if diagnostic, ok := s.archiveDiagnostics[peer]; ok {
+		copy := diagnostic
+		copy.MessageShapes = append([]string(nil), diagnostic.MessageShapes...)
+		return &copy
+	}
+	for id, requestedPeer := range s.archiveRequests {
+		if requestedPeer == peer {
+			return &xmppArchiveDiagnostic{RequestID: id, ResponseType: "pending"}
+		}
+	}
+	return nil
+}
+
+func (s *xmppSocialSession) flushArchiveRequests() {
+	s.mu.Lock()
+	peers := make([]string, 0, len(s.archiveQueued))
+	for peer := range s.archiveQueued {
+		peers = append(peers, peer)
+	}
+	s.mu.Unlock()
+	if len(peers) > 0 {
+		_ = s.requestArchive(peers[0])
+	}
+}
+
+func (s *xmppSocialSession) setMessageSink(sink func(peer string, message ChatMessage)) {
+	s.mu.Lock()
+	s.messageSink = sink
+	s.mu.Unlock()
+}
+
+func (s *xmppSocialSession) setArchiveSink(sink func(peer string, diagnostic xmppArchiveDiagnostic)) {
+	s.mu.Lock()
+	s.archiveSink = sink
+	s.mu.Unlock()
+}
+
+func (s *xmppSocialSession) notifyArchiveSink(peer string, diagnostic xmppArchiveDiagnostic) {
+	s.mu.RLock()
+	sink := s.archiveSink
+	s.mu.RUnlock()
+	if sink != nil {
+		sink(peer, diagnostic)
+	}
+}
+
+func (s *xmppSocialSession) peerDisplayName(peer string) string {
+	s.mu.RLock()
+	roster := s.roster[strings.ToLower(strings.TrimSpace(peer))]
+	s.mu.RUnlock()
+	return firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, peer), "Direct message")
+}
+
+func xmppArchiveResponseDiagnostic(iq xmppIQ) xmppArchiveDiagnostic {
+	diagnostic := xmppArchiveDiagnostic{
+		RequestID:    iq.ID,
+		ResponseType: firstNonEmpty(strings.TrimSpace(iq.Type), "unknown"),
+		ErrorCode:    firstNonEmpty(strings.TrimSpace(iq.Error.Code), strings.TrimSpace(iq.Error.Type)),
+		ErrorText:    sanitizeArchiveDiagnosticText(iq.Error.Text),
+	}
+	payload := iqArchivePayload(iq)
+	if strings.TrimSpace(payload) == "" {
+		return diagnostic
+	}
+	decoder := xml.NewDecoder(strings.NewReader("<root>" + payload + "</root>"))
+	stack := make([]string, 0, 4)
+	shapes := map[string]struct{}{}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		switch element := token.(type) {
+		case xml.StartElement:
+			stack = append(stack, element.Name.Local)
+			if element.Name.Local == "message" {
+				diagnostic.MessageCount++
+				shapes[strings.Join(stack[1:], "/")] = struct{}{}
+			}
+		case xml.EndElement:
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	for shape := range shapes {
+		diagnostic.MessageShapes = append(diagnostic.MessageShapes, shape)
+	}
+	sort.Strings(diagnostic.MessageShapes)
+	return diagnostic
+}
+
+func sanitizeArchiveDiagnosticText(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if strings.Contains(value, "@") {
+		return "redacted"
+	}
+	if len(value) > 160 {
+		return value[:160]
+	}
+	return value
 }
 
 func (s *xmppSocialSession) appendMessage(peer string, message ChatMessage) {
 	peer = strings.ToLower(strings.TrimSpace(peer))
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.messages == nil {
 		s.messages = map[string][]ChatMessage{}
 	}
 	for i, existing := range s.messages[peer] {
 		if message.ID != "" && existing.ID == message.ID {
 			s.messages[peer][i] = message
+			sink := s.messageSink
+			s.mu.Unlock()
+			if sink != nil {
+				sink(peer, message)
+			}
+			remoteSocialHub.broadcast()
 			return
 		}
 	}
@@ -285,6 +685,45 @@ func (s *xmppSocialSession) appendMessage(peer string, message ChatMessage) {
 		history = history[len(history)-100:]
 	}
 	s.messages[peer] = history
+	sink := s.messageSink
+	s.mu.Unlock()
+	if sink != nil {
+		sink(peer, message)
+	}
+	remoteSocialHub.broadcast()
+}
+
+func (h *xmppSocialHub) broadcast() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (h *xmppSocialHub) subscribe() (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	h.subscribers[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch, func() { h.mu.Lock(); delete(h.subscribers, ch); h.mu.Unlock() }
+}
+
+func (s *xmppSocialSession) chatSnapshot() (string, map[string]xmppRosterItem, map[string][]ChatMessage) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	roster := make(map[string]xmppRosterItem, len(s.roster))
+	for k, v := range s.roster {
+		roster[k] = v
+	}
+	messages := make(map[string][]ChatMessage, len(s.messages))
+	for k, v := range s.messages {
+		messages[k] = append([]ChatMessage(nil), v...)
+	}
+	return s.state, roster, messages
 }
 
 func (s *xmppSocialSession) conversation(peer string) []ChatMessage {
@@ -305,12 +744,19 @@ func (s *xmppSocialSession) sendMessage(peer, body string) (ChatMessage, error) 
 	domain := s.domain
 	localPuuid := s.auth.Puuid
 	live := s.state == "live"
+	recipient := ""
+	if roster, ok := s.roster[peer]; ok {
+		recipient = strings.TrimSpace(roster.JID)
+	}
 	s.mu.RUnlock()
 	if !live || conn == nil || domain == "" {
 		return ChatMessage{}, fmt.Errorf("Riot XMPP chat is still connecting")
 	}
 	message := ChatMessage{
-		ID:        fmt.Sprintf("vv-%d", time.Now().UnixNano()),
+		// Riot's clients use a millisecond Unix timestamp followed by the
+		// message sequence. Arbitrary IDs are accepted by generic XMPP servers
+		// but are ignored by Riot's chat pipeline.
+		ID:        fmt.Sprintf("%d:1", time.Now().UnixMilli()),
 		FromPuuid: strings.ToLower(localPuuid),
 		Body:      body,
 		Time:      time.Now().UnixMilli(),
@@ -319,7 +765,10 @@ func (s *xmppSocialSession) sendMessage(peer, body string) (ChatMessage, error) 
 	if err := xml.EscapeText(&escaped, []byte(body)); err != nil {
 		return ChatMessage{}, err
 	}
-	stanza := fmt.Sprintf(`<message to="%s@%s.pvp.net" type="chat" id="%s"><body>%s</body></message>`, peer, domain, message.ID, escaped.String())
+	if recipient == "" {
+		recipient = fmt.Sprintf("%s@%s.pvp.net", peer, domain)
+	}
+	stanza := fmt.Sprintf(`<message to="%s" type="chat" id="%s"><body>%s</body></message>`, xmlEscapeAttribute(recipient), message.ID, escaped.String())
 	s.writeMu.Lock()
 	_, err := io.WriteString(conn, stanza)
 	s.writeMu.Unlock()
@@ -332,21 +781,63 @@ func (s *xmppSocialSession) sendMessage(peer, body string) (ChatMessage, error) 
 
 func (s *xmppSocialSession) fail(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.state = "error"
 	s.lastError = err.Error()
+	if s.reconnectDelay < 15*time.Second {
+		s.reconnectDelay = 15 * time.Second
+	} else {
+		s.reconnectDelay *= 2
+		if s.reconnectDelay > 5*time.Minute {
+			s.reconnectDelay = 5 * time.Minute
+		}
+	}
+	delay := s.reconnectDelay
+	auth := s.auth
 	if s.conn != nil {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+	s.mu.Unlock()
+	remoteSocialHub.broadcast()
+	time.AfterFunc(delay, func() { s.ensureRunning(auth) })
 }
 
 func (s *xmppSocialSession) applyRoster(iq xmppIQ) {
-	if len(iq.Query.Items) == 0 {
+	if iq.Query.XMLName.Space != "jabber:iq:riotgames:roster" {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
+	}()
+	s.rosterLoaded = true
+	// A roster result is a complete snapshot. A roster push (type=set) is an
+	// incremental update. Replacing only complete results prevents requests
+	// removed by Riot from lingering forever in VantaVault.
+	optimistic := map[string]SocialFriendRequest{}
+	if strings.EqualFold(iq.Type, "result") {
+		for key, requestedAt := range s.optimisticRequests {
+			if time.Since(requestedAt) <= 2*time.Minute {
+				if request, ok := s.requests[key]; ok {
+					optimistic[key] = request
+				}
+			} else {
+				delete(s.optimisticRequests, key)
+			}
+		}
+		s.roster = map[string]xmppRosterItem{}
+		s.requests = map[string]SocialFriendRequest{}
+		s.requestJIDs = map[string]string{}
+	} else if s.roster == nil {
+		s.roster = map[string]xmppRosterItem{}
+	}
+	if s.requests == nil {
+		s.requests = map[string]SocialFriendRequest{}
+	}
+	if s.requestJIDs == nil {
+		s.requestJIDs = map[string]string{}
+	}
 	for _, item := range iq.Query.Items {
 		puuid := strings.ToLower(strings.TrimSpace(item.PUUID))
 		if puuid == "" {
@@ -355,18 +846,74 @@ func (s *xmppSocialSession) applyRoster(iq xmppIQ) {
 		if puuid == "" || puuid == strings.ToLower(s.auth.Puuid) {
 			continue
 		}
+		subscription := strings.ToLower(strings.TrimSpace(item.Subscription))
+		ask := strings.ToLower(strings.TrimSpace(item.Ask))
+		gameName := firstNonEmpty(item.GameName, item.ID.Name)
+		gameTag := firstNonEmpty(item.GameTag, item.ID.Tagline)
+		if subscription == "remove" {
+			delete(s.roster, puuid)
+			delete(s.requests, puuid)
+			delete(s.requestJIDs, puuid)
+			continue
+		}
+		if subscription == "pending_in" || subscription == "pending_out" || ask == "subscribe" {
+			if until := s.suppressedRequests[puuid]; until.After(time.Now()) {
+				delete(s.roster, puuid)
+				delete(s.requests, puuid)
+				delete(s.requestJIDs, puuid)
+				continue
+			}
+			delete(s.suppressedRequests, puuid)
+			direction := "incoming"
+			if subscription == "pending_out" || ask == "subscribe" {
+				direction = "outgoing"
+			}
+			s.requests[puuid] = SocialFriendRequest{Puuid: puuid, Name: firstNonEmpty(friendDisplayName(gameName, gameTag, puuid), item.Name), Direction: direction}
+			for key, pending := range optimistic {
+				if direction == "outgoing" && strings.EqualFold(pending.Name, s.requests[puuid].Name) {
+					delete(optimistic, key)
+					delete(s.optimisticRequests, key)
+				}
+			}
+			s.requestJIDs[puuid] = item.JID
+			delete(s.roster, puuid)
+			continue
+		}
+		delete(s.suppressedRequests, puuid)
+		delete(s.requests, puuid)
+		delete(s.requestJIDs, puuid)
 		s.roster[puuid] = xmppRosterItem{
-			PUUID:    puuid,
-			Name:     item.Name,
-			GameName: item.GameName,
-			GameTag:  item.GameTag,
+			JID:          item.JID,
+			PUUID:        puuid,
+			Name:         item.Name,
+			GameName:     gameName,
+			GameTag:      gameTag,
+			Subscription: subscription,
 		}
 	}
+	for key, request := range optimistic {
+		s.requests[key] = request
+	}
+	go s.flushArchiveRequests()
 }
 
 func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	puuid := jidLocalpart(p.From)
 	if puuid == "" {
+		return
+	}
+	if strings.EqualFold(p.Type, "subscribe") {
+		s.mu.Lock()
+		if s.requests == nil {
+			s.requests = map[string]SocialFriendRequest{}
+		}
+		s.requests[puuid] = SocialFriendRequest{Puuid: puuid, Name: firstNonEmpty(strings.TrimSpace(p.Name), s.roster[puuid].Name), Direction: "incoming"}
+		if s.requestJIDs == nil {
+			s.requestJIDs = map[string]string{}
+		}
+		s.requestJIDs[puuid] = bareJID(p.From)
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
 		return
 	}
 	entry := chatPresenceEntry{
@@ -379,21 +926,30 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	}
 	if p.Type == "" || p.Type == "available" {
 		entry.State = firstNonEmpty(p.Status, p.Show, "online")
-		// Receiving an available XMPP stanza proves that this particular
-		// desktop resource is online even when Riot omits game metadata.
-		entry.Product = "riot_chat"
-		entry.Platform = "desktop"
 	}
 	if p.Type == "unavailable" {
 		entry.State = "offline"
 	}
 	if payload := p.Games; payload != nil && payload.Valorant != nil && payload.Valorant.Payload != "" {
 		entry.Product = "valorant"
+		entry.State = firstNonEmpty(payload.Valorant.State, entry.State)
+		entry.TimeStamp = payload.Valorant.Timestamp
 		entry.Private = payload.Valorant.Payload
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
+	}()
+	if current, exists := s.presences[resourceKey]; exists &&
+		strings.EqualFold(entry.Product, "valorant") &&
+		strings.EqualFold(current.Product, "valorant") &&
+		entry.TimeStamp > 0 && current.TimeStamp > entry.TimeStamp {
+		// XMPP resources can deliver an older presence after a newer update.
+		// Riot clients resolve the newest game timestamp, so keep it here too.
+		return
+	}
 	if strings.EqualFold(puuid, s.auth.Puuid) {
 		if entry.State == "offline" {
 			delete(s.selfPresences, resourceKey)
@@ -419,6 +975,193 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	s.presences[resourceKey] = entry
 }
 
+func bareJID(value string) string {
+	if index := strings.IndexByte(value, '/'); index >= 0 {
+		value = value[:index]
+	}
+	return strings.TrimSpace(value)
+}
+
+func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error) {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	action = strings.ToLower(strings.TrimSpace(action))
+	s.mu.RLock()
+	request, exists := s.requests[peer]
+	jid := s.requestJIDs[peer]
+	conn := s.conn
+	state := s.state
+	s.mu.RUnlock()
+	if !exists {
+		return false, fmt.Errorf("friend request is no longer pending")
+	}
+	id := fmt.Sprintf("vv_friend_%d", time.Now().UnixNano())
+	var mutation string
+	switch action {
+	case "accept":
+		if request.Direction != "incoming" {
+			return false, fmt.Errorf("only incoming requests can be accepted")
+		}
+		mutation = `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item subscription="pending_out" puuid="` + xmlEscapeAttribute(peer) + `"/></query></iq>`
+	case "deny":
+		if request.Direction != "incoming" {
+			return false, fmt.Errorf("only incoming requests can be denied")
+		}
+		if jid == "" {
+			return false, fmt.Errorf("Riot request JID is unavailable")
+		}
+		mutation = `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item jid="` + xmlEscapeAttribute(jid) + `" subscription="remove"/></query></iq>`
+	case "cancel":
+		if request.Direction != "outgoing" {
+			return false, fmt.Errorf("only outgoing requests can be cancelled")
+		}
+		if jid == "" {
+			return false, fmt.Errorf("Riot request JID is unavailable")
+		}
+		mutation = `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item jid="` + xmlEscapeAttribute(jid) + `" subscription="remove"/></query></iq>`
+	default:
+		return false, fmt.Errorf("unsupported friend request action")
+	}
+	if conn == nil || state != "live" {
+		return false, fmt.Errorf("remote Riot social session is not connected")
+	}
+	stanza := mutation + `<iq type="get" id="` + id + `_roster"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq>`
+	s.writeMu.Lock()
+	_, err := io.WriteString(conn, stanza)
+	s.writeMu.Unlock()
+	if err != nil {
+		return false, fmt.Errorf("send Riot friend action: %w", err)
+	}
+	if action == "cancel" || action == "deny" {
+		s.mu.Lock()
+		if s.suppressedRequests == nil {
+			s.suppressedRequests = map[string]time.Time{}
+		}
+		delete(s.requests, peer)
+		delete(s.requestJIDs, peer)
+		delete(s.optimisticRequests, peer)
+		s.suppressedRequests[peer] = time.Now().Add(30 * time.Second)
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
+		return true, nil
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		s.mu.RLock()
+		_, stillPending := s.requests[peer]
+		_, nowFriend := s.roster[peer]
+		s.mu.RUnlock()
+		if !stillPending && (action != "accept" || nowFriend) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *xmppSocialSession) sendFriendRequest(peer string) (bool, error) {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	if peer == "" {
+		return false, fmt.Errorf("friend request target is required")
+	}
+	s.mu.RLock()
+	_, alreadyFriend := s.roster[peer]
+	_, alreadyPending := s.requests[peer]
+	conn, state := s.conn, s.state
+	s.mu.RUnlock()
+	if alreadyFriend {
+		return false, fmt.Errorf("account is already in the Riot friends roster")
+	}
+	if alreadyPending {
+		return false, fmt.Errorf("a friend request is already pending")
+	}
+	if conn == nil || state != "live" {
+		return false, fmt.Errorf("remote Riot social session is not connected")
+	}
+	id := fmt.Sprintf("vv_friend_%d", time.Now().UnixNano())
+	stanza := `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item subscription="pending_out" puuid="` + xmlEscapeAttribute(peer) + `"/></query></iq>` +
+		`<iq type="get" id="` + id + `_roster"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq>`
+	s.writeMu.Lock()
+	_, err := io.WriteString(conn, stanza)
+	s.writeMu.Unlock()
+	if err != nil {
+		return false, fmt.Errorf("send Riot friend request: %w", err)
+	}
+	s.mu.Lock()
+	if s.requests == nil {
+		s.requests = map[string]SocialFriendRequest{}
+	}
+	if s.optimisticRequests == nil {
+		s.optimisticRequests = map[string]time.Time{}
+	}
+	delete(s.suppressedRequests, peer)
+	s.requests[peer] = SocialFriendRequest{Puuid: peer, Name: s.roster[peer].Name, Direction: "outgoing"}
+	s.optimisticRequests[peer] = time.Now()
+	s.mu.Unlock()
+	remoteSocialHub.broadcast()
+	return true, nil
+}
+
+func (s *xmppSocialSession) sendFriendRequestByRiotID(gameName, gameTag string) (bool, error) {
+	gameName = strings.TrimSpace(gameName)
+	gameTag = strings.TrimPrefix(strings.TrimSpace(gameTag), "#")
+	if gameName == "" || gameTag == "" {
+		return false, fmt.Errorf("Riot ID must include both name and tag")
+	}
+	s.mu.RLock()
+	conn, state := s.conn, s.state
+	for _, request := range s.requests {
+		if request.Direction == "outgoing" && strings.EqualFold(request.Name, friendDisplayName(gameName, gameTag, "")) {
+			s.mu.RUnlock()
+			return false, fmt.Errorf("a friend request is already pending")
+		}
+	}
+	s.mu.RUnlock()
+	if conn == nil || state != "live" {
+		return false, fmt.Errorf("remote Riot social session is not connected")
+	}
+
+	id := fmt.Sprintf("vv_friend_%d", time.Now().UnixNano())
+	target := friendDisplayName(gameName, gameTag, "")
+	// Riot identifies this request by Riot ID until the roster push supplies
+	// its PUUID/JID. Show that real pending state immediately; the complete
+	// roster query below then confirms it or removes it if Riot rejected it.
+	requestKey := "riot-id:" + strings.ToLower(gameName) + "#" + strings.ToLower(gameTag)
+	s.mu.Lock()
+	if s.requests == nil {
+		s.requests = map[string]SocialFriendRequest{}
+	}
+	if s.optimisticRequests == nil {
+		s.optimisticRequests = map[string]time.Time{}
+	}
+	s.requests[requestKey] = SocialFriendRequest{Puuid: requestKey, Name: target, Direction: "outgoing"}
+	s.optimisticRequests[requestKey] = time.Now()
+	s.mu.Unlock()
+	remoteSocialHub.broadcast()
+
+	stanza := `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item subscription="pending_out"><id name="` + xmlEscapeAttribute(gameName) + `" tagline="` + xmlEscapeAttribute(gameTag) + `"/></item></query></iq>` +
+		`<iq type="get" id="` + id + `_roster"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq>`
+	s.writeMu.Lock()
+	_, err := io.WriteString(conn, stanza)
+	s.writeMu.Unlock()
+	if err != nil {
+		s.mu.Lock()
+		delete(s.requests, requestKey)
+		delete(s.optimisticRequests, requestKey)
+		s.mu.Unlock()
+		remoteSocialHub.broadcast()
+		return false, fmt.Errorf("send Riot friend request: %w", err)
+	}
+
+	return true, nil
+}
+
+func xmlEscapeAttribute(value string) string {
+	var escaped strings.Builder
+	_ = xml.EscapeText(&escaped, []byte(value))
+	return escaped.String()
+}
+
 func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -426,14 +1169,20 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 	out := make([]SocialPresence, 0, len(s.roster))
 	onlineCount := 0
 	inGameCount := 0
+	presenceKeys := make([]string, 0, len(s.presences))
+	for key := range s.presences {
+		presenceKeys = append(presenceKeys, key)
+	}
+	sort.Strings(presenceKeys)
 	for puuid, roster := range s.roster {
 		var entry chatPresenceEntry
 		ok := false
-		for _, candidate := range s.presences {
-			if !strings.EqualFold(candidate.Puuid, puuid) {
+		for _, key := range presenceKeys {
+			candidate := s.presences[key]
+			if !strings.EqualFold(candidate.Puuid, puuid) || !strings.EqualFold(candidate.Product, "valorant") {
 				continue
 			}
-			if !ok || (strings.EqualFold(candidate.Product, "valorant") && !strings.EqualFold(entry.Product, "valorant")) {
+			if !ok || candidate.TimeStamp > entry.TimeStamp {
 				entry = candidate
 				ok = true
 			}
@@ -465,26 +1214,43 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 		status = "unavailable"
 	}
 	var self *SocialPresence
+	var selfTimestamp int64
 	for _, entry := range s.selfPresences {
+		if !strings.EqualFold(entry.Product, "valorant") {
+			continue
+		}
 		normalized := normalizeChatPresence(entry, nil)
-		if self == nil || (strings.EqualFold(normalized.Product, "valorant") && !strings.EqualFold(self.Product, "valorant")) {
+		if self == nil || entry.TimeStamp > selfTimestamp {
 			copy := normalized
 			self = &copy
+			selfTimestamp = entry.TimeStamp
 		}
 	}
 	return SocialStatusResponse{
-		Status:         status,
-		Source:         "remote",
-		RemoteStatus:   s.state,
-		RemoteChatHost: s.host,
-		RemoteChatPort: s.port,
-		FriendCount:    len(s.roster),
-		OnlineCount:    onlineCount,
-		InGameCount:    inGameCount,
-		Presences:      out,
-		SelfPresence:   self,
-		Error:          s.lastError,
+		Status:           status,
+		Source:           "remote",
+		RemoteStatus:     s.state,
+		RemoteChatHost:   s.host,
+		RemoteChatPort:   s.port,
+		FriendCount:      len(s.roster),
+		OnlineCount:      onlineCount,
+		InGameCount:      inGameCount,
+		Presences:        out,
+		Requests:         cloneSocialRequests(s.requests),
+		RosterComplete:   s.rosterLoaded,
+		RequestsComplete: s.rosterLoaded,
+		SelfPresence:     self,
+		Error:            s.lastError,
 	}
+}
+
+func cloneSocialRequests(source map[string]SocialFriendRequest) []SocialFriendRequest {
+	out := make([]SocialFriendRequest, 0, len(source))
+	for _, request := range source {
+		out = append(out, request)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out
 }
 
 func fetchChatPASToken(accessToken string) (string, string, error) {

@@ -15,9 +15,10 @@ export interface RiotAccount {
     tagLine: string;
     sessionId?: string;
     ssid?: string;      // Riot auth cookies used to renew short-lived access tokens
-    favorite?: boolean; // user-pinned account
-    lastRenewedAt?: number;
-    lastRefreshAttemptAt?: number;
+      favorite?: boolean; // user-pinned account
+      lastRenewedAt?: number;
+      lastCookieRotatedAt?: number;
+      lastRefreshAttemptAt?: number;
     lastRefreshError?: string;
     lastRefreshErrorCode?: string;
 }
@@ -96,6 +97,7 @@ export interface SkinLevel {
     uuid: string;
     displayName: string;
     displayIcon: string;
+    streamedVideo?: string;
 }
 
 export interface GunBuddyLevel {
@@ -109,6 +111,7 @@ export interface Chroma {
     displayIcon: string;
     fullRender: string;
     swatch: string;
+    streamedVideo?: string;
 }
 
 export interface OwnedSkinsResponse {

@@ -58,6 +58,7 @@ export default function AccountManagerModal({
     const [authDebugCopied, setAuthDebugCopied] = useState(false);
     const bulkCancelRef = useRef(false);
     const accountsListRef = useRef<HTMLDivElement>(null);
+    const positionedOnOpenRef = useRef(false);
     const refreshTimeoutMs = 30_000;
     const bulkAttemptIntervalMs = 2_000;
 
@@ -95,14 +96,19 @@ export default function AccountManagerModal({
     // Opening a long account list should always reveal the account currently
     // driving the app, without changing the user's saved favorite ordering.
     useEffect(() => {
-        if (!isOpen || !activeAccount?.puuid) return;
+        if (!isOpen) {
+            positionedOnOpenRef.current = false;
+            return;
+        }
+        if (!activeAccount?.puuid || positionedOnOpenRef.current) return;
+        positionedOnOpenRef.current = true;
         const frame = window.requestAnimationFrame(() => {
             accountsListRef.current
                 ?.querySelector<HTMLElement>('[data-active-account-row="true"]')
                 ?.scrollIntoView({ block: "center", behavior: "auto" });
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [activeAccount?.puuid, displayOrder.length, isOpen]);
+    }, [activeAccount?.puuid, isOpen]);
 
     if (!isOpen) return null;
 

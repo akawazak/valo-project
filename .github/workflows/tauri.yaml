@@ -77,6 +77,20 @@ jobs:
           releaseBody: |
             ## VantaVault v__VERSION__
 
+            ### Added
+            - Interactive post-match fight maps with duel positions, weapons, abilities, zoom, and pan.
+            - Profile progression for account XP, missions, contracts, and Battle Pass progress.
+            - Riot chat, conversation history, social requests, and skin video previews.
+
+            ### Improved
+            - Clearer match history, party indicators, player names, map reviews, and round-impact insights.
+            - A polished Profile experience with a sticky identity card and denser performance views.
+
+            ### Fixed
+            - Restored party detection and post-match names where Riot returns them.
+            - Hardened portable updates with signed manifests and SHA-256 verification.
+            - Fixed account, presence, match sync, and UI state issues found during the redesign.
+
             ### Download
             - **Windows Portable:** `VantaVault-portable.exe` - run directly with no setup. It can download and switch to later portable releases from Settings.
             - **Windows Installer:** `VantaVault_*_x64-setup.exe` - optional per-user installation. No administrator rights are required.
@@ -139,10 +153,22 @@ jobs:
           }
           Invoke-PortableCommand $tauriCli $signerArgs 120
           if (!(Test-Path VantaVault-portable.exe.sig)) { throw "Portable EXE signature was not created." }
+          $portableUrl = "https://github.com/akawazak/valo-project/releases/download/v$version/VantaVault-portable.exe"
+          $portableSha256 = (Get-FileHash VantaVault-portable.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifestPayload = "VantaVault portable update v1`nversion=$version`nurl=$portableUrl`nsha256=$portableSha256`n"
+          [System.IO.File]::WriteAllText("portable-update-payload.txt", $manifestPayload, [System.Text.UTF8Encoding]::new($false))
+          $manifestSignerArgs = @("signer", "sign", "portable-update-payload.txt")
+          if (![string]::IsNullOrWhiteSpace($env:TAURI_PRIVATE_KEY_PASSWORD)) {
+            $manifestSignerArgs += @("--password", $env:TAURI_PRIVATE_KEY_PASSWORD)
+          }
+          Invoke-PortableCommand $tauriCli $manifestSignerArgs 120
+          if (!(Test-Path portable-update-payload.txt.sig)) { throw "Portable manifest signature was not created." }
           $portableManifest = [ordered]@{
             version = $version
-            url = "https://github.com/akawazak/valo-project/releases/download/v$version/VantaVault-portable.exe"
+            url = $portableUrl
+            sha256 = $portableSha256
             signature = (Get-Content VantaVault-portable.exe.sig -Raw).Trim()
+            manifest_signature = (Get-Content portable-update-payload.txt.sig -Raw).Trim()
           } | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("latest-portable.json", $portableManifest, [System.Text.UTF8Encoding]::new($false))
           Invoke-PortableCommand "gh" @("release", "upload", "v$version", "VantaVault-portable.exe", "VantaVault-portable.exe.sig", "latest-portable.json", "--repo", "akawazak/valo-project", "--clobber") 300

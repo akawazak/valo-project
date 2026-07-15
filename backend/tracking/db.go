@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS matches (
     redRoundsWon       INTEGER NOT NULL DEFAULT 0,
     rawJsonPath        TEXT    NOT NULL,
     cachedAt           INTEGER NOT NULL,
-    accountPuuid       TEXT    NOT NULL
+    accountPuuid       TEXT    NOT NULL,
+    analyticsVersion   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_matches_account_start      ON matches(accountPuuid, gameStartMillis DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_account_queue_start ON matches(accountPuuid, queueID, gameStartMillis DESC);
@@ -62,6 +63,40 @@ CREATE TABLE IF NOT EXISTS match_players (
     PRIMARY KEY (matchID, subject)
 );
 CREATE INDEX IF NOT EXISTS idx_match_players_subject ON match_players(subject);
+
+CREATE TABLE IF NOT EXISTS match_kills (
+    matchID          TEXT    NOT NULL,
+    roundNum         INTEGER NOT NULL,
+    gameTime         INTEGER NOT NULL DEFAULT 0,
+    roundTime        INTEGER NOT NULL DEFAULT 0,
+    killer           TEXT    NOT NULL,
+    victim           TEXT    NOT NULL,
+    victimX          INTEGER NOT NULL,
+    victimY          INTEGER NOT NULL,
+    damageType       TEXT    NOT NULL DEFAULT '',
+    damageItem       TEXT    NOT NULL DEFAULT '',
+    secondaryFire    INTEGER NOT NULL DEFAULT 0,
+    playerLocations  TEXT    NOT NULL DEFAULT '[]',
+    PRIMARY KEY (matchID, roundNum, gameTime, killer, victim)
+);
+CREATE INDEX IF NOT EXISTS idx_match_kills_match_round ON match_kills(matchID, roundNum, gameTime);
+CREATE INDEX IF NOT EXISTS idx_match_kills_killer ON match_kills(killer);
+CREATE INDEX IF NOT EXISTS idx_match_kills_victim ON match_kills(victim);
+
+CREATE TABLE IF NOT EXISTS match_rounds (
+    matchID          TEXT    NOT NULL,
+    roundNum         INTEGER NOT NULL,
+    winningTeam      TEXT    NOT NULL DEFAULT '',
+    roundResult      TEXT    NOT NULL DEFAULT '',
+    roundCeremony    TEXT    NOT NULL DEFAULT '',
+    bombPlanter      TEXT    NOT NULL DEFAULT '',
+    bombDefuser      TEXT    NOT NULL DEFAULT '',
+    plantRoundTime   INTEGER NOT NULL DEFAULT 0,
+    plantSite        TEXT    NOT NULL DEFAULT '',
+    defuseRoundTime  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (matchID, roundNum)
+);
+CREATE INDEX IF NOT EXISTS idx_match_rounds_match_round ON match_rounds(matchID, roundNum);
 
 CREATE TABLE IF NOT EXISTS rr_snapshots (
     puuid          TEXT    NOT NULL DEFAULT '',
@@ -122,6 +157,81 @@ CREATE TABLE IF NOT EXISTS sync_state (
     lastHistoryEndIndex     INTEGER NOT NULL DEFAULT 0,
     lastCompetitiveEndIndex INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+    accountPuuid       TEXT NOT NULL,
+    conversationKey    TEXT NOT NULL,
+    type               TEXT NOT NULL,
+    peerPuuid          TEXT NOT NULL DEFAULT '',
+    riotCID            TEXT NOT NULL DEFAULT '',
+    historySnapshotState TEXT NOT NULL DEFAULT '',
+    historySnapshotAt  INTEGER NOT NULL DEFAULT 0,
+    unreadCount        INTEGER NOT NULL DEFAULT 0,
+    encryptedTitle     BLOB,
+    source             TEXT NOT NULL DEFAULT '',
+    lastMessageAt      INTEGER NOT NULL DEFAULT 0,
+    lastReadAt         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (accountPuuid, conversationKey)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_account_time
+    ON chat_conversations(accountPuuid, lastMessageAt DESC);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    accountPuuid       TEXT NOT NULL,
+    conversationKey    TEXT NOT NULL,
+    messageId          TEXT NOT NULL,
+    clientId           TEXT NOT NULL DEFAULT '',
+    senderPuuid        TEXT NOT NULL DEFAULT '',
+    encryptedSenderName BLOB,
+    encryptedBody      BLOB NOT NULL,
+    sentAt             INTEGER NOT NULL,
+    direction          TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    PRIMARY KEY (accountPuuid, conversationKey, messageId)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_client
+    ON chat_messages(accountPuuid, conversationKey, clientId) WHERE clientId <> '';
+CREATE INDEX IF NOT EXISTS idx_chat_messages_page
+    ON chat_messages(accountPuuid, conversationKey, sentAt DESC);
+
+CREATE TABLE IF NOT EXISTS social_contacts (
+    accountPuuid TEXT NOT NULL,
+    peerPuuid TEXT NOT NULL,
+    displayName TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'friend',
+    firstSeenAt INTEGER NOT NULL,
+    lastSeenAt INTEGER NOT NULL,
+    lastSeenOnlineAt INTEGER NOT NULL DEFAULT 0,
+    friendshipCount INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (accountPuuid, peerPuuid)
+);
+CREATE TABLE IF NOT EXISTS social_requests (
+    accountPuuid TEXT NOT NULL,
+    peerPuuid TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    displayName TEXT NOT NULL DEFAULT '',
+    firstSeenAt INTEGER NOT NULL,
+    lastSeenAt INTEGER NOT NULL,
+    resolvedAt INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (accountPuuid, peerPuuid, direction)
+);
+CREATE TABLE IF NOT EXISTS social_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    accountPuuid TEXT NOT NULL,
+    peerPuuid TEXT NOT NULL,
+    displayName TEXT NOT NULL DEFAULT '',
+    eventType TEXT NOT NULL,
+    occurredAt INTEGER NOT NULL,
+    evidence TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_social_events_account_time ON social_events(accountPuuid, occurredAt DESC, id DESC);
+CREATE TABLE IF NOT EXISTS social_snapshot_state (
+    accountPuuid TEXT NOT NULL PRIMARY KEY,
+    friendsBaselineAt INTEGER NOT NULL DEFAULT 0,
+    requestsBaselineAt INTEGER NOT NULL DEFAULT 0,
+    lastCompleteAt INTEGER NOT NULL DEFAULT 0
+);
 `
 
 const sqliteDriverName = "sqlite"
@@ -142,7 +252,12 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 	}
 	dsn := filepath.Join(dir, "tracking.db")
 
-	db, err := sql.Open(sqliteDriverName, dsn+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	// VantaVault has concurrent request and background-sync paths. SQLite
+	// permits one writer, so let a short-lived lock wait rather than surfacing
+	// SQLITE_BUSY to the UI. modernc's _pragma values run for every connection
+	// it opens; do not collapse this pool to one connection because existing
+	// tracking reads legitimately issue nested queries.
+	db, err := sql.Open(sqliteDriverName, dsn+"?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("tracking: open %s: %w", dsn, err)
 	}
@@ -162,7 +277,27 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := addColumnIfMissing(db, "matches", "analyticsVersion", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := addColumnIfMissing(db, "sync_state", "lastCompetitiveEndIndex", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "chat_conversations", "riotCID", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "chat_conversations", "historySnapshotState", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "chat_conversations", "historySnapshotAt", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "chat_conversations", "unreadCount", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -287,9 +422,9 @@ func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
 	return nil
 }
 
-// IsMatchCached reports whether the given matchID already has a row
-// in `matches` (regardless of age). Used by the sync worker to skip
-// Riot detail fetches for matches we already have.
+// IsMatchCached reports whether the given matchID already has a row. Analytics
+// backfills are intentionally separate so a normal sync never re-downloads an
+// account's entire cached history and burns Riot requests unexpectedly.
 func IsMatchCached(db *sql.DB, matchID string) (bool, error) {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(1) FROM matches WHERE matchID = ?`, matchID).Scan(&n)
@@ -339,6 +474,18 @@ func PruneMatchesBefore(db *sql.DB, cutoffMillis int64) (int64, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`
+		DELETE FROM match_rounds
+		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
+	`, cutoffMillis); err != nil {
+		return 0, fmt.Errorf("tracking: prune match rounds: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM match_kills
+		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
+	`, cutoffMillis); err != nil {
+		return 0, fmt.Errorf("tracking: prune match kills: %w", err)
+	}
+	if _, err := tx.Exec(`
 		DELETE FROM match_players
 		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
 	`, cutoffMillis); err != nil {
@@ -372,7 +519,7 @@ func ClearMatchCache(db *sql.DB) error {
 		return fmt.Errorf("tracking: begin cache clear: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{"match_players", "matches", "agent_stats", "map_stats", "sync_state"} {
+	for _, table := range []string{"match_rounds", "match_kills", "match_players", "matches", "agent_stats", "map_stats", "sync_state"} {
 		if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
 			return fmt.Errorf("tracking: clear %s: %w", table, err)
 		}
@@ -418,8 +565,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		INSERT OR REPLACE INTO matches
 		    (matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId,
 		     gameLengthMillis, completionState, blueWins, blueRoundsWon, redRoundsWon,
-		     rawJsonPath, cachedAt, accountPuuid)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     rawJsonPath, cachedAt, accountPuuid, analyticsVersion)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		parsed.Match.MatchID,
 		parsed.Match.QueueID,
@@ -436,6 +583,7 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		"",
 		cachedAt,
 		puuid,
+		2,
 	)
 	if err != nil {
 		return fmt.Errorf("tracking: insert match: %w", err)
@@ -487,6 +635,56 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		}
 	}
 
+	if _, err := tx.Exec(`DELETE FROM match_kills WHERE matchID = ?`, matchID); err != nil {
+		return fmt.Errorf("tracking: clear old kill events: %w", err)
+	}
+	killStmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO match_kills
+		    (matchID, roundNum, gameTime, roundTime, killer, victim, victimX, victimY,
+		     damageType, damageItem, secondaryFire, playerLocations)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("tracking: prepare kill insert: %w", err)
+	}
+	defer killStmt.Close()
+	for _, event := range parsed.Kills {
+		locations, err := json.Marshal(event.PlayerLocations)
+		if err != nil {
+			return fmt.Errorf("tracking: encode kill locations: %w", err)
+		}
+		if _, err := killStmt.Exec(
+			matchID, event.RoundNum, event.GameTime, event.RoundTime, event.Killer, event.Victim,
+			event.VictimX, event.VictimY, event.DamageType, event.DamageItem,
+			boolToInt(event.SecondaryFire), string(locations),
+		); err != nil {
+			return fmt.Errorf("tracking: insert kill event: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM match_rounds WHERE matchID = ?`, matchID); err != nil {
+		return fmt.Errorf("tracking: clear old round results: %w", err)
+	}
+	roundStmt, err := tx.Prepare(`
+		INSERT OR REPLACE INTO match_rounds
+		    (matchID, roundNum, winningTeam, roundResult, roundCeremony, bombPlanter,
+		     bombDefuser, plantRoundTime, plantSite, defuseRoundTime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("tracking: prepare round insert: %w", err)
+	}
+	defer roundStmt.Close()
+	for _, round := range parsed.Rounds {
+		if _, err := roundStmt.Exec(
+			matchID, round.RoundNum, round.WinningTeam, round.RoundResult, round.RoundCeremony,
+			round.BombPlanter, round.BombDefuser, round.PlantRoundTime, round.PlantSite,
+			round.DefuseRoundTime,
+		); err != nil {
+			return fmt.Errorf("tracking: insert round %d: %w", round.RoundNum, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("tracking: commit: %w", err)
 	}
@@ -504,12 +702,13 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	err := db.QueryRow(`
 		SELECT matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId,
 		       gameLengthMillis, completionState, blueWins, blueRoundsWon, redRoundsWon,
-		       rawJsonPath, cachedAt, accountPuuid
+		       rawJsonPath, cachedAt, accountPuuid, analyticsVersion
 		FROM matches WHERE matchID = ?`, matchID,
 	).Scan(
 		&m.MatchID, &m.QueueID, &m.MapID, &m.GameMode, &m.IsRanked, &m.GameStartMillis,
 		&m.SeasonID, &m.GameLengthMillis, &m.CompletionState, &m.BlueWins,
 		&m.BlueRoundsWon, &m.RedRoundsWon, &m.RawJsonPath, &m.CachedAt, &m.AccountPuuid,
+		&m.AnalyticsVersion,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -550,8 +749,70 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracking: iterate players: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("tracking: close players: %w", err)
+	}
 
-	return &MatchCache{Match: m, Players: players}, nil
+	killRows, err := db.Query(`
+		SELECT roundNum, gameTime, roundTime, killer, victim, victimX, victimY,
+		       damageType, damageItem, secondaryFire, playerLocations
+		FROM match_kills WHERE matchID = ? ORDER BY roundNum, gameTime`, matchID)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: select kill events: %w", err)
+	}
+	defer killRows.Close()
+	var kills []KillEvent
+	for killRows.Next() {
+		var event KillEvent
+		var secondaryFire int
+		var locations string
+		if err := killRows.Scan(
+			&event.RoundNum, &event.GameTime, &event.RoundTime, &event.Killer, &event.Victim,
+			&event.VictimX, &event.VictimY, &event.DamageType, &event.DamageItem,
+			&secondaryFire, &locations,
+		); err != nil {
+			return nil, fmt.Errorf("tracking: scan kill event: %w", err)
+		}
+		event.SecondaryFire = secondaryFire == 1
+		if locations != "" {
+			if err := json.Unmarshal([]byte(locations), &event.PlayerLocations); err != nil {
+				return nil, fmt.Errorf("tracking: decode kill locations: %w", err)
+			}
+		}
+		kills = append(kills, event)
+	}
+	if err := killRows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: iterate kill events: %w", err)
+	}
+	if err := killRows.Close(); err != nil {
+		return nil, fmt.Errorf("tracking: close kill events: %w", err)
+	}
+
+	roundRows, err := db.Query(`
+		SELECT roundNum, winningTeam, roundResult, roundCeremony, bombPlanter,
+		       bombDefuser, plantRoundTime, plantSite, defuseRoundTime
+		FROM match_rounds WHERE matchID = ? ORDER BY roundNum`, matchID)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: select round results: %w", err)
+	}
+	defer roundRows.Close()
+	var rounds []MatchRound
+	for roundRows.Next() {
+		var round MatchRound
+		if err := roundRows.Scan(
+			&round.RoundNum, &round.WinningTeam, &round.RoundResult, &round.RoundCeremony,
+			&round.BombPlanter, &round.BombDefuser, &round.PlantRoundTime, &round.PlantSite,
+			&round.DefuseRoundTime,
+		); err != nil {
+			return nil, fmt.Errorf("tracking: scan round result: %w", err)
+		}
+		rounds = append(rounds, round)
+	}
+	if err := roundRows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: iterate round results: %w", err)
+	}
+
+	return &MatchCache{Match: m, Players: players, Kills: kills, Rounds: rounds}, nil
 }
 
 // UpsertRRSnapshot inserts a new RR snapshot row, or REPLACES an
@@ -1619,6 +1880,8 @@ func maxInt(a, b int) int {
 type parsedMatch struct {
 	Match   parsedMatchHeader
 	Players []parsedPlayer
+	Kills   []KillEvent
+	Rounds  []MatchRound
 }
 
 type parsedMatchHeader struct {
@@ -1710,9 +1973,41 @@ type rawMatchDetails struct {
 		RoundsWon int    `json:"roundsWon"`
 	} `json:"teams"`
 	RoundResults []struct {
-		PlayerStats []struct {
+		RoundNum        int    `json:"roundNum"`
+		WinningTeam     string `json:"winningTeam"`
+		RoundResult     string `json:"roundResult"`
+		RoundCeremony   string `json:"roundCeremony"`
+		BombPlanter     string `json:"bombPlanter"`
+		BombDefuser     string `json:"bombDefuser"`
+		PlantRoundTime  int    `json:"plantRoundTime"`
+		PlantSite       string `json:"plantSite"`
+		DefuseRoundTime int    `json:"defuseRoundTime"`
+		PlayerStats     []struct {
 			Subject string `json:"subject"`
-			Damage  []struct {
+			Kills   []struct {
+				GameTime       int    `json:"gameTime"`
+				RoundTime      int    `json:"roundTime"`
+				Killer         string `json:"killer"`
+				Victim         string `json:"victim"`
+				VictimLocation struct {
+					X int `json:"x"`
+					Y int `json:"y"`
+				} `json:"victimLocation"`
+				PlayerLocations []struct {
+					Subject     string  `json:"subject"`
+					ViewRadians float64 `json:"viewRadians"`
+					Location    struct {
+						X int `json:"x"`
+						Y int `json:"y"`
+					} `json:"location"`
+				} `json:"playerLocations"`
+				FinishingDamage struct {
+					DamageType          string `json:"damageType"`
+					DamageItem          string `json:"damageItem"`
+					IsSecondaryFireMode bool   `json:"isSecondaryFireMode"`
+				} `json:"finishingDamage"`
+			} `json:"kills"`
+			Damage []struct {
 				Receiver  string `json:"receiver"`
 				Damage    int    `json:"damage"`
 				Legshots  int    `json:"legshots"`
@@ -1766,7 +2061,39 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 	type shotTally struct{ head, body, leg, dmg int }
 	shots := map[string]*shotTally{}
 	for _, rr := range r.RoundResults {
+		out.Rounds = append(out.Rounds, MatchRound{
+			RoundNum:        rr.RoundNum,
+			WinningTeam:     rr.WinningTeam,
+			RoundResult:     rr.RoundResult,
+			RoundCeremony:   rr.RoundCeremony,
+			BombPlanter:     strings.ToLower(rr.BombPlanter),
+			BombDefuser:     strings.ToLower(rr.BombDefuser),
+			PlantRoundTime:  rr.PlantRoundTime,
+			PlantSite:       rr.PlantSite,
+			DefuseRoundTime: rr.DefuseRoundTime,
+		})
 		for _, ps := range rr.PlayerStats {
+			for _, kill := range ps.Kills {
+				event := KillEvent{
+					RoundNum:      rr.RoundNum,
+					GameTime:      kill.GameTime,
+					RoundTime:     kill.RoundTime,
+					Killer:        strings.ToLower(kill.Killer),
+					Victim:        strings.ToLower(kill.Victim),
+					VictimX:       kill.VictimLocation.X,
+					VictimY:       kill.VictimLocation.Y,
+					DamageType:    kill.FinishingDamage.DamageType,
+					DamageItem:    kill.FinishingDamage.DamageItem,
+					SecondaryFire: kill.FinishingDamage.IsSecondaryFireMode,
+				}
+				for _, location := range kill.PlayerLocations {
+					event.PlayerLocations = append(event.PlayerLocations, MatchLocation{
+						Subject: strings.ToLower(location.Subject), ViewRadians: location.ViewRadians,
+						X: location.Location.X, Y: location.Location.Y,
+					})
+				}
+				out.Kills = append(out.Kills, event)
+			}
 			t, ok := shots[ps.Subject]
 			if !ok {
 				t = &shotTally{}

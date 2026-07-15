@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useEffect } from "react";
 import Image from "next/image";
+import SkinVideoModal from "@/components/SkinVideoModal";
+import SkinVideoPlayer from "@/components/SkinVideoPlayer";
 import { useData } from "@/context/DataContext";
 import { Weapon, Skin, LoadoutItemV1 } from "@/lib/types";
 
@@ -43,7 +45,6 @@ export default function UnifiedSkinSelectorModal({
     onBuddySelect,
     onApplyWeapon,
     saveAction,
-    editingContext,
     show,
     onClose,
 }: UnifiedSkinSelectorModalProps) {
@@ -68,6 +69,8 @@ export default function UnifiedSkinSelectorModal({
     // Tab switching state: "skins" or "buddies"
     const [activeTab, setActiveTab] = useState<"skins" | "buddies">("skins");
     const [searchTerm, setSearchTerm] = useState("");
+    const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+    const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
 
     // Sync state when weapon or active selection changes
     useEffect(() => {
@@ -77,6 +80,8 @@ export default function UnifiedSkinSelectorModal({
             setSelectedChromaId(activeItem?.chromaId || initialSkin.chromas[0]?.uuid || "");
             setSearchTerm("");
             setActiveTab("skins");
+            setIsVideoPlaying(false);
+            setIsVideoModalOpen(false);
         }
     }, [show, initialSkin, activeItem]);
 
@@ -125,6 +130,8 @@ export default function UnifiedSkinSelectorModal({
     // Handlers
     const handleSkinClick = (skin: Skin) => {
         setSelectedSkin(skin);
+        setIsVideoPlaying(false);
+        setIsVideoModalOpen(false);
         
         // Find default owned level & chroma
         const ownedLevels = skin.levels.filter(l => ownedLevelIDs.includes(l.uuid));
@@ -168,6 +175,11 @@ export default function UnifiedSkinSelectorModal({
 
     // Current selection render properties
     const activeChromaObj = selectedSkin.chromas.find(c => c.uuid === selectedChromaId) || selectedSkin.chromas[0];
+    const activeLevelObj = selectedSkin.levels.find(level => level.uuid === selectedLevelId) || selectedSkin.levels[0];
+    const selectedChromaIndex = selectedSkin.chromas.findIndex(chroma => chroma.uuid === activeChromaObj?.uuid);
+    const previewVideoUrl = selectedChromaIndex > 0
+        ? activeChromaObj?.streamedVideo || activeLevelObj?.streamedVideo || ""
+        : activeLevelObj?.streamedVideo || activeChromaObj?.streamedVideo || "";
     const previewRenderUrl = activeChromaObj?.fullRender || selectedSkin.displayIcon || weapon.displayIcon;
     const tierColor = TIER_COLORS[selectedSkin.contentTierUuid] || "#6b7280";
 
@@ -182,29 +194,21 @@ export default function UnifiedSkinSelectorModal({
 
     const isMelee = weapon.category === "EEquippableCategory::Melee";
 
-    return (
+    return (<>
         <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="unified-modal-container">
-                {/* Header */}
-                <div className="unified-modal-header">
-                    <div className="unified-modal-title-wrap">
-                        <span className="kicker">// Customize Arsenal</span>
-                        <h3 className="unified-modal-title">{weapon.displayName}</h3>
-                        <span className="unified-modal-editing-context">Editing {editingContext}</span>
-                    </div>
-                    <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">
-                        ✕
-                    </button>
-                </div>
+                <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">✕</button>
 
                 {/* Grid Split Content */}
                 <div className="unified-modal-content">
                     {/* Left Pane: Preview, Chromas, Levels, Buddy */}
                     <div className="unified-modal-left">
                         {/* Preview Render */}
-                        <div className="unified-modal-preview-box">
+                        <div className={`unified-modal-preview-box${isVideoPlaying ? " is-video" : ""}`}>
                             <div className="unified-modal-card-tier-line" style={{ backgroundColor: tierColor }} />
-                            <img src={previewRenderUrl} alt={selectedSkin.displayName} className="unified-modal-preview-img" />
+                            {isVideoPlaying && previewVideoUrl
+                                ? <SkinVideoPlayer key={previewVideoUrl} className="unified-modal-inline-player" videoUrl={previewVideoUrl} posterUrl={previewRenderUrl} />
+                                : <img src={previewRenderUrl} alt={selectedSkin.displayName} className="unified-modal-preview-img" />}
                         </div>
 
                         {/* Metadata */}
@@ -212,54 +216,13 @@ export default function UnifiedSkinSelectorModal({
                             <h4>{selectedSkin.displayName}</h4>
                             <span>{activeChromaObj?.displayName || "Default Variant"}</span>
                         </div>
+                        {(previewVideoUrl || ownedLevels.length > 1) && <div className="preset-inspect-rail">
+                            {previewVideoUrl && <button type="button" className="preset-preview-mode" onClick={() => setIsVideoPlaying((playing) => !playing)} aria-label={isVideoPlaying ? "Return to weapon view" : `Play ${selectedSkin.displayName} preview`}><i aria-hidden="true">{isVideoPlaying ? "×" : "▶"}</i>{isVideoPlaying ? "Weapon" : "Preview"}</button>}
+                            {previewVideoUrl && isVideoPlaying && <button type="button" className="preset-preview-expand" onClick={() => setIsVideoModalOpen(true)} aria-label={`Open ${selectedSkin.displayName} preview in a large window`} title="Open large preview">↗</button>}
+                            {ownedLevels.length > 1 && <div className="preset-level-switcher" aria-label="Upgrade level"><span>Level</span>{ownedLevels.map((level, index) => <button key={level.uuid} type="button" className={selectedLevelId === level.uuid ? "active" : ""} onClick={() => handleLevelSelect(level.uuid)} aria-label={`Show level ${index + 1}`} aria-pressed={selectedLevelId === level.uuid}>{index + 1}</button>)}</div>}
+                        </div>}
 
-                        {/* Chroma selection (if multiple chromas are owned) */}
-                        {ownedChromas.length > 1 && (
-                            <div>
-                                <div className="unified-modal-section-title">Variants</div>
-                                <div className="chroma-swatches-grid">
-                                    {ownedChromas.map((chroma, index) => (
-                                        <button
-                                            key={chroma.uuid}
-                                            type="button"
-                                            className={`chroma-swatch-item${selectedChromaId === chroma.uuid ? " active" : ""}`}
-                                            onClick={() => handleChromaSelect(chroma.uuid)}
-                                            title={chroma.displayName}
-                                        >
-                                            <div className="chroma-swatch-inner">
-                                                {index === 0 && !chroma.swatch
-                                                    ? <span className="chroma-base-mark" aria-hidden="true" />
-                                                    : <img src={chroma.swatch || chroma.displayIcon || previewRenderUrl} alt="" />}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Level selection (if multiple levels are owned) */}
-                        {ownedLevels.length > 1 && (
-                            <div>
-                                <div className="unified-modal-section-title">Levels / Upgrades</div>
-                                <div className="levels-select-grid">
-                                    {ownedLevels.map((lvl) => (
-                                        <button
-                                            key={lvl.uuid}
-                                            type="button"
-                                            className={`level-select-row${selectedLevelId === lvl.uuid ? " active" : ""}`}
-                                            onClick={() => handleLevelSelect(lvl.uuid)}
-                                        >
-                                            <span className="level-row-name">{lvl.displayName}</span>
-                                            <span className="level-row-status">
-                                                {selectedLevelId === lvl.uuid ? "Equipped" : "Owned"}
-                                            </span>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Gun Buddy Slot (Left side quick view) */}
+                        {/* Keep the equipped buddy visible before the variant gallery. */}
                         {!isMelee && (
                             <div className="unified-modal-buddy-section">
                                 <div className="unified-modal-section-title">Gun Buddy</div>
@@ -281,9 +244,7 @@ export default function UnifiedSkinSelectorModal({
                                     </div>
                                     <div className="equipped-buddy-info">
                                         <span className="equipped-buddy-label">Current Buddy</span>
-                                        <span className="equipped-buddy-name">
-                                            {equippedBuddy?.displayName || "None"}
-                                        </span>
+                                        <span className="equipped-buddy-name">{equippedBuddy?.displayName || "None"}</span>
                                     </div>
                                     <span style={{ fontSize: "0.6rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
                                         {activeTab === "buddies" ? "SHOW SKINS" : "CHANGE"}
@@ -291,6 +252,30 @@ export default function UnifiedSkinSelectorModal({
                                 </button>
                             </div>
                         )}
+
+                        {/* Chroma selection (if multiple chromas are owned) */}
+                        {ownedChromas.length > 1 && (
+                            <div>
+                                <div className="unified-modal-section-title">Variants</div>
+                                <div className="preset-chroma-gallery">
+                                    {ownedChromas.map((chroma, index) => (
+                                        <button
+                                            key={chroma.uuid}
+                                            type="button"
+                                            className={selectedChromaId === chroma.uuid ? "active" : ""}
+                                            onClick={() => handleChromaSelect(chroma.uuid)}
+                                            title={chroma.displayName}
+                                            aria-label={index === 0 ? "Show default variant" : `Show variant ${index + 1}`}
+                                        >
+                                            <img src={chroma.fullRender || chroma.displayIcon || chroma.swatch || previewRenderUrl} alt="" />
+                                            {chroma.streamedVideo ? <span aria-hidden="true">▶</span> : null}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+
                     </div>
 
                     {/* Right Pane: Search list */}
@@ -444,5 +429,13 @@ export default function UnifiedSkinSelectorModal({
                 </div>
             </div>
         </div>
-    );
+        {isVideoModalOpen && previewVideoUrl ? (
+            <SkinVideoModal
+                title={selectedSkin.displayName}
+                videoUrl={previewVideoUrl}
+                posterUrl={previewRenderUrl}
+                onClose={() => setIsVideoModalOpen(false)}
+            />
+        ) : null}
+    </>);
 }

@@ -97,11 +97,14 @@ func TestDesktopCORSPreflightThenAuthenticatedRequest(t *testing.T) {
 	preflight := httptest.NewRequest(http.MethodOptions, "/v1/health", nil)
 	preflight.Header.Set("Origin", "http://tauri.localhost")
 	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	preflight.Header.Set("Access-Control-Request-Headers", "X-VantaVault-Key")
+	preflight.Header.Set("Access-Control-Request-Headers", "X-VantaVault-Key, X-Riot-Selected-Puuid")
 	preflightResult := httptest.NewRecorder()
 	handler.ServeHTTP(preflightResult, preflight)
 	if preflightResult.Code != http.StatusOK {
 		t.Fatalf("preflight got %d, want 200", preflightResult.Code)
+	}
+	if allowed := preflightResult.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allowed, "X-Riot-Selected-Puuid") {
+		t.Fatalf("selected-account header is not allowed by CORS: %q", allowed)
 	}
 	if called != 0 {
 		t.Fatal("preflight unexpectedly reached the API handler")

@@ -168,7 +168,6 @@ export default function MatchHistoryPanel({ onConnectAccount }: Props) {
 
     const [agents, setAgents] = useState<Record<string, AgentMeta>>({});
     const [maps, setMaps] = useState<Record<string, MapMeta>>({});
-
     const [agentStats, setAgentStats] = useState<ProfileAgentStatsResponse | null>(null);
     const [mapStats, setMapStats] = useState<ProfileMapStatsResponse | null>(null);
 

@@ -339,10 +339,11 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		slog.Warn("tracking: RecomputeAggregates failed", "err", err)
 	}
 
-	// Step 8.5: resolve any missing names in the database for older matches.
-	// New match payloads already ran name-service above; defer legacy cleanup
-	// to an otherwise idle sync instead of making the user wait twice.
-	if inserted == 0 {
+	// Step 8.5: resolve missing names from older matches and immediately retry
+	// an incomplete name-service response from this batch. Riot occasionally
+	// returns match details before its bulk identity lookup succeeds; without
+	// this retry that single match remains anonymous until a later idle sync.
+	if inserted == 0 || len(resolvedNames) < len(emptyPUUIDs) {
 		if resolved, err := m.resolveMissingNames(puuid, region); err != nil {
 			slog.Warn("tracking: background name resolution failed", "err", err)
 		} else if resolved > 0 {

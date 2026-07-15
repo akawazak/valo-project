@@ -4,6 +4,12 @@ import { LocalClientError } from '@/lib/errors';
 export const LOCAL_URL = "http://localhost:31719/v1"
 const PUBLIC_API_TIMEOUT_MS = 8000;
 let backendTokenPromise: Promise<string> | null = null;
+let activeRemoteAccount: {
+    puuid: string;
+    region: string;
+    accessToken: string;
+    entitlementsToken: string;
+} | null = null;
 
 export function reportAppError(message: string) {
     if (typeof window !== "undefined") {
@@ -30,8 +36,8 @@ export async function appFetch(input: string | URL | Request, init?: RequestInit
 }
 
 /**
- * Activate an account in localStorage: writes riot_puuid / riot_region /
- * riot_access_token / riot_entitlements. Used by both the login card
+ * Activate an account for this process. Only the non-secret PUUID and region
+ * remain in localStorage; bearer credentials stay in memory. Used by the login card
  * (initial local-client login) and the DataContext switch/refresh paths.
  *
  * Note: tokens with `expiresAt` already in the past are NOT written —
@@ -47,19 +53,33 @@ export function activateAccount(account: {
 }) {
     localStorage.setItem("riot_puuid", account.puuid);
     localStorage.setItem("riot_region", account.region);
+    localStorage.removeItem("riot_access_token");
+    localStorage.removeItem("riot_entitlements");
     const expiresAt = account.expiresAt ?? 0;
     if (expiresAt > 0 && Date.now() >= expiresAt - 60_000) {
-        localStorage.removeItem("riot_access_token");
-        localStorage.removeItem("riot_entitlements");
+        activeRemoteAccount = null;
     } else if (account.accessToken) {
-        localStorage.setItem("riot_access_token", account.accessToken);
-        localStorage.setItem("riot_entitlements", account.entitlementsToken);
+        activeRemoteAccount = {
+            puuid: account.puuid,
+            region: account.region,
+            accessToken: account.accessToken,
+            entitlementsToken: account.entitlementsToken,
+        };
     } else {
         // No tokens yet — likely a local-client-only account. Clear so the
         // storefront fetch doesn't send empty Bearer headers.
-        localStorage.removeItem("riot_access_token");
-        localStorage.removeItem("riot_entitlements");
+        activeRemoteAccount = null;
     }
+}
+
+export function clearActiveAccount() {
+    activeRemoteAccount = null;
+    localStorage.removeItem("riot_access_token");
+    localStorage.removeItem("riot_entitlements");
+}
+
+export function hasActiveRemoteAuth() {
+    return Boolean(activeRemoteAccount?.accessToken && activeRemoteAccount.entitlementsToken);
 }
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEOUT_MS): Promise<T> {
@@ -99,16 +119,16 @@ async function fetchWithAuth(
     const headers = new Headers(init?.headers || {});
     if (typeof window !== "undefined") {
         const useLocalSso = localStorage.getItem("use_local_sso") === "true";
+        if (options.forceRemoteAuth) {
+            const selectedPuuid = localStorage.getItem("riot_puuid")?.trim();
+            if (selectedPuuid) headers.set("X-Riot-Selected-Puuid", selectedPuuid);
+        }
         if (options.forceRemoteAuth || !useLocalSso) {
-            const token = localStorage.getItem("riot_access_token");
-            const entitlements = localStorage.getItem("riot_entitlements");
-            const puuid = localStorage.getItem("riot_puuid");
-            const region = localStorage.getItem("riot_region");
-            if (token && entitlements && puuid && region) {
-                headers.set("X-Riot-Access-Token", token);
-                headers.set("X-Riot-Entitlements-JWT", entitlements);
-                headers.set("X-Riot-Puuid", puuid);
-                headers.set("X-Riot-Region", region);
+            if (activeRemoteAccount) {
+                headers.set("X-Riot-Access-Token", activeRemoteAccount.accessToken);
+                headers.set("X-Riot-Entitlements-JWT", activeRemoteAccount.entitlementsToken);
+                headers.set("X-Riot-Puuid", activeRemoteAccount.puuid);
+                headers.set("X-Riot-Region", activeRemoteAccount.region);
             }
         }
     }
@@ -334,7 +354,12 @@ export async function getPersistedAccounts(): Promise<RiotAccount[]> {
 let accountSaveQueue: Promise<void> = Promise.resolve();
 
 export function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
-    const snapshot = JSON.stringify(accounts);
+    const snapshot = JSON.stringify(accounts.map((account) => ({
+        ...account,
+        accessToken: undefined,
+        entitlementsToken: undefined,
+        ssid: undefined,
+    })));
     accountSaveQueue = accountSaveQueue.then(async () => {
         const response = await appFetch(LOCAL_URL + '/accounts', {
             method: 'POST',
@@ -582,23 +607,18 @@ export interface PlayerMMRResponse {
 export interface AccountXPResponse {
     Version: number;
     Subject: string;
-    // Total XP earned across all seasons (cumulative)
-    TotalXP: number;
-    // XP history per season
+    Progress: { Level: number; XP: number };
     History: Array<{
         ID: string;
-        MatchStartTime: number;
-        StartXP: number;
-        EndXP: number;
+        MatchStart: string;
+        StartProgress: { Level: number; XP: number };
+        EndProgress: { Level: number; XP: number };
         XPDelta: number;
-        XPMultiplier: number;
-        TierBeforeChange?: number;
-        TierAfterChange?: number;
-        LevelBeforeChange?: number;
-        LevelAfterChange?: number;
-        [key: string]: unknown;
+        XPSources: Array<{ ID: "time-played" | "match-win" | "first-win-of-the-day" | string; Amount: number }>;
+        XPMultipliers: unknown[];
     }>;
-    [key: string]: unknown;
+    LastTimeGrantedFirstWin: string;
+    NextTimeFirstWinAvailable: string;
 }
 
 export interface MatchHistoryResponse {
@@ -944,6 +964,35 @@ export interface ProfileMatchDetails {
     matchId: string;
     matchInfo: ProfileMatchInfo;
     players: ProfilePlayerStats[];
+    kills?: Array<{
+        roundNum: number;
+        gameTime: number;
+        roundTime: number;
+        killer: string;
+        victim: string;
+        victimX: number;
+        victimY: number;
+        damageType?: string;
+        damageItem?: string;
+        secondaryFire?: boolean;
+        playerLocations?: Array<{
+            subject?: string;
+            viewRadians?: number;
+            x: number;
+            y: number;
+        }>;
+    }>;
+    rounds?: Array<{
+        roundNum: number;
+        winningTeam: string;
+        roundResult?: string;
+        roundCeremony?: string;
+        bombPlanter?: string;
+        bombDefuser?: string;
+        plantRoundTime?: number;
+        plantSite?: string;
+        defuseRoundTime?: number;
+    }>;
     servedFrom: string;
 }
 
@@ -1073,10 +1122,11 @@ export async function getProfileMatchHistory(
 
 export async function getProfileMatchDetails(
     matchID: string,
-    opts: { puuid?: string; region?: string } = {},
+    opts: { puuid?: string; region?: string; analytics?: boolean } = {},
 ): Promise<ProfileMatchDetails> {
     const params = new URLSearchParams();
     appendProfileParams(params, opts);
+    if (opts.analytics) params.set("analytics", "true");
     const qs = params.toString();
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/match-details/${encodeURIComponent(matchID)}${qs ? `?${qs}` : ""}`);
     if (!response.ok) {
@@ -1170,6 +1220,33 @@ export async function getLiveMatch(): Promise<LiveMatchResponse> {
     }
 }
 
+export interface ProfileLeaderboardPlayer {
+    PlayerCardID?: string;
+    puuid: string;
+    gameName: string;
+    tagLine: string;
+    leaderboardRank: number;
+    rankedRating: number;
+    numberOfWins: number;
+    competitiveTier: number;
+    IsAnonymized?: boolean;
+}
+
+export interface ProfileLeaderboard {
+    SeasonID: string;
+    Players: ProfileLeaderboardPlayer[];
+    totalPlayers: number;
+}
+
+export async function getProfileLeaderboard(seasonId?: string, query = "", startIndex = 0, size = 25): Promise<ProfileLeaderboard> {
+    const params = new URLSearchParams({ startIndex: String(startIndex), size: String(size) });
+    if (seasonId) params.set("seasonId", seasonId);
+    if (query.trim()) params.set("query", query.trim());
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/leaderboard?${params.toString()}`);
+    if (!response.ok) throw new Error(await response.text() || "Failed to fetch leaderboard.");
+    return response.json();
+}
+
 /**
  * Rebuild the active match with current Riot MMR for players whose identity
  * Riot exposes. This deliberately bypasses the local match-history cache.
@@ -1243,6 +1320,7 @@ export interface RiotMissionsResponse {
     ActiveSpecialContract: string;
     Contracts: RiotContractProgress[];
     Missions: RiotMissionProgress[];
+    ProcessedMatches: RiotProcessedContractMatch[];
     MissionMetadata: {
         NPECompleted: boolean;
         WeeklyCheckpoint: string;
@@ -1265,7 +1343,7 @@ export interface RiotMissionProgress {
 }
 
 export async function getMissions(): Promise<RiotMissionsResponse> {
-    const response = await fetchWithAuth(LOCAL_URL + '/missions', undefined, { forceRemoteAuth: true });
+    const response = await fetchWithAuth(LOCAL_URL + '/missions');
     if (!response.ok) {
         const text = await response.text();
         throw new Error(text || 'Failed to fetch player missions.');
@@ -1390,7 +1468,25 @@ export interface SocialStatusResponse {
     onlineCount: number;
     inGameCount: number;
     presences?: SocialPresence[];
+    requests?: SocialFriendRequest[];
+    activity?: SocialActivityEvent[];
     error?: string;
+}
+
+export interface SocialFriendRequest {
+    puuid: string;
+    name: string;
+    direction: "incoming" | "outgoing";
+    firstSeenAt?: number;
+}
+
+export interface SocialActivityEvent {
+    id: number;
+    peerPuuid: string;
+    name: string;
+    type: "friend_first_observed" | "friend_readded" | "friendship_ended" | "request_received" | "request_sent" | "request_cancelled" | "request_accepted_by_you" | "request_accepted_by_them" | "request_closed_unknown";
+    occurredAt: number;
+    evidence: string;
 }
 
 export interface SocialPresence {
@@ -1398,10 +1494,80 @@ export interface SocialPresence {
     name?: string;
     product?: string;
     state?: string;
+    availability?: string;
     queueId?: string;
+    partyState?: string;
+    partySize?: number;
+    maxPartySize?: number;
     cardId?: string;
     platform?: string;
     partyGroup?: string;
+}
+
+export interface DailyTicketResponse {
+    RemainingLifetimeSeconds: number;
+    BonusMilestonesPending?: number;
+    Milestones: Array<{ Progress: number; BonusApplied: boolean }>;
+}
+
+export async function getDailyTicket(): Promise<DailyTicketResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/daily-ticket');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch daily checkpoints.');
+    }
+    return response.json();
+}
+
+export interface ItemUpgradeDefinition {
+    ID: string;
+    Item: { ItemTypeID: string; ItemID: string };
+    RequiredEntitlement: { ItemTypeID: string; ItemID: string };
+    ProgressionSchedule: { Name: string; ProgressionCurrencyID: string; ProgressionDeltaPerLevel: number[] | null };
+    RewardSchedule: {
+        ID: string; Name: string;
+        RewardsPerLevel: Array<{ EntitlementRewards: Array<{ Amount: number; ItemTypeID: string; ItemID: string }> }> | null;
+    };
+}
+
+export async function getItemUpgrades(): Promise<ItemUpgradeDefinition[]> {
+    const response = await fetchWithAuth(LOCAL_URL + '/item-upgrades');
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch Agent Gear definitions.');
+    }
+    const data = await response.json() as { Definitions?: ItemUpgradeDefinition[] };
+    return data.Definitions || [];
+}
+
+export async function subscribeProgressionEvents(onProgression: () => void, signal: AbortSignal): Promise<void> {
+    const response = await appFetch(LOCAL_URL + '/progression/events', { signal });
+    if (!response.ok || !response.body) throw new Error('Progression event stream unavailable.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+        for (const event of events) if (event.includes('event: progression')) onProgression();
+    }
+}
+
+export interface RiotProcessedContractMatch {
+    ID: string;
+    StartTime: number;
+    XPGrants: null | {
+        GamePlayed: number; GameWon: number; RoundPlayed: number; RoundWon: number;
+        Missions: Record<string, number>;
+        Modifier: { Value: number; BaseMultiplierValue: number; Modifiers: Array<{ Value: number; Name: string; BaseOnly: boolean }> };
+        NumAFKRounds: number;
+    };
+    MissionDeltas: null | Record<string, { ID: string; Objectives: Record<string, number>; ObjectiveDeltas: Record<string, { ID: string; ProgressBefore: number; ProgressAfter: number }> }>;
+    ContractDeltas: null | Record<string, { ID: string; TotalXPBefore: number; TotalXPAfter: number }>;
+    CouldProgressMissions: boolean;
 }
 
 export async function getFlexes(): Promise<FlexAsset[]> {
@@ -1416,7 +1582,7 @@ export async function getFlexes(): Promise<FlexAsset[]> {
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/social', undefined, { forceRemoteAuth: true });
+        const response = await fetchWithAuth(LOCAL_URL + `/social${hasActiveRemoteAuth() ? '?remoteOnly=true' : ''}`, undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };
@@ -1424,5 +1590,131 @@ export async function getSocialStatus(): Promise<SocialStatusResponse> {
         return await response.json();
     } catch (err) {
         return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: err instanceof Error ? err.message : String(err || "") };
+    }
+}
+
+export async function subscribeSocialEvents(onSocial: () => void, signal: AbortSignal): Promise<void> {
+    const response = await appFetch(LOCAL_URL + '/social/events', { signal });
+    if (!response.ok || !response.body) throw new Error('Social event stream unavailable.');
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+    while (!signal.aborted) {
+        const { value, done } = await reader.read(); if (done) return;
+        buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() || '';
+        // Refetch on ready as well as on changes. This closes the startup race
+        // where XMPP can load the roster just before the SSE subscription is
+        // registered, without introducing a polling loop.
+        for (const event of events) if (event.includes('event: ready') || event.includes('event: social')) onSocial();
+    }
+}
+
+export async function actOnSocialRequest(puuid: string, action: "accept" | "deny" | "cancel" | "send"): Promise<{ status: "confirmed" | "pending"; confirmed: boolean }> {
+    const response = await fetchWithAuth(`${LOCAL_URL}/social/requests/${encodeURIComponent(puuid)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+    }, { forceRemoteAuth: true });
+    if (!response.ok) throw new Error(await response.text() || "Riot friend request action failed.");
+    return response.json();
+}
+
+export async function sendSocialFriendRequest(gameName: string, gameTag: string): Promise<{ status: "confirmed" | "pending"; confirmed: boolean }> {
+    const response = await fetchWithAuth(`${LOCAL_URL}/social/requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gameName, gameTag }),
+    }, { forceRemoteAuth: true });
+    if (!response.ok) throw new Error(await response.text() || "Riot friend request failed.");
+    return response.json();
+}
+
+export interface ChatCapabilities { history: boolean; directMessages: boolean; party: boolean }
+export interface ChatMessage {
+    id: string; clientId?: string; conversationKey: string; senderPuuid?: string; senderName?: string;
+	body: string; direction: "incoming" | "outgoing"; status: "pending" | "sent" | "failed"; timestamp: number; error?: string;
+}
+export interface ChatArchiveDiagnostic {
+    requestId: string; responseType: string; errorCode?: string; errorText?: string;
+    messageCount: number; messageShapes?: string[];
+}
+export interface ChatMessagesResponse { messages: ChatMessage[]; archiveDiagnostic?: ChatArchiveDiagnostic; snapshotState?: string }
+export interface ChatConversation {
+    key: string; type: "dm" | "party"; displayName: string; peerPuuid?: string; source: "local" | "remote" | "archive";
+    state: string; participants?: Array<{ puuid: string; displayName: string }>; latestMessage?: ChatMessage;
+    unreadCount: number; capabilities: ChatCapabilities;
+}
+
+export async function getChatConversations(): Promise<{ conversations: ChatConversation[]; source: string }> {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), PUBLIC_API_TIMEOUT_MS);
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + '/chat/conversations', { signal: controller.signal }, { forceRemoteAuth: true });
+        if (!response.ok) throw new Error(await response.text() || 'Chat is unavailable.');
+        return response.json();
+    } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw new Error('Chat request timed out. Saved messages are still available.');
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+export async function getChatSummary(): Promise<{ conversations: ChatConversation[]; unreadCount: number }> {
+    const response = await fetchWithAuth(LOCAL_URL + '/chat/summary', undefined, { forceRemoteAuth: true });
+    if (!response.ok) throw new Error(await response.text() || 'Chat summary is unavailable.');
+    return response.json();
+}
+
+function encodedChatKey(key: string) { return btoa(key).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', ''); }
+
+export async function getChatMessages(key: string, before?: number): Promise<ChatMessagesResponse> {
+    const query = before ? `?before=${before}&limit=50` : '?limit=50';
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), PUBLIC_API_TIMEOUT_MS);
+    try {
+        const response = await fetchWithAuth(`${LOCAL_URL}/chat/conversations/${encodedChatKey(key)}/messages${query}`, { signal: controller.signal }, { forceRemoteAuth: true });
+        if (!response.ok) throw new Error(await response.text() || 'Messages are unavailable.');
+        const data = (await response.json()) as Partial<ChatMessagesResponse>;
+        return { messages: data.messages || [], archiveDiagnostic: data.archiveDiagnostic, snapshotState: data.snapshotState };
+    } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw new Error('Message request timed out. Keeping saved messages.');
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+export async function requestChatSnapshot(key: string, retry = false): Promise<{ snapshotState: string }> {
+    const response = await fetchWithAuth(`${LOCAL_URL}/chat/conversations/${encodedChatKey(key)}/snapshot${retry ? '?retry=1' : ''}`, { method: 'POST' }, { forceRemoteAuth: true });
+    if (!response.ok) throw new Error(await response.text() || 'Could not start this conversation history request.');
+    return response.json();
+}
+
+export async function sendChatMessage(conversationKey: string, body: string, clientId: string): Promise<ChatMessage> {
+    const response = await fetchWithAuth(LOCAL_URL + '/chat/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversationKey, body, clientId }) }, { forceRemoteAuth: true });
+    const message = await response.json() as ChatMessage;
+	if (!response.ok) throw Object.assign(new Error(message.error || 'Message failed to send.'), { messageRecord: message });
+    return message;
+}
+
+export async function markChatRead(key: string): Promise<void> {
+    await fetchWithAuth(`${LOCAL_URL}/chat/conversations/${encodedChatKey(key)}/read`, { method: 'POST' }, { forceRemoteAuth: true });
+}
+
+export async function clearChatHistory(conversationKey?: string, accountPuuid?: string): Promise<void> {
+    const query = new URLSearchParams();
+    if (conversationKey) query.set('conversationKey', encodedChatKey(conversationKey));
+    if (accountPuuid) query.set('accountPuuid', accountPuuid);
+    const response = await fetchWithAuth(`${LOCAL_URL}/chat/history${query.size ? `?${query}` : ''}`, { method: 'DELETE' }, { forceRemoteAuth: true });
+    if (!response.ok) throw new Error(await response.text() || 'Could not clear chat history.');
+}
+
+export async function subscribeChatEvents(onChat: () => void, signal: AbortSignal): Promise<void> {
+    const response = await appFetch(LOCAL_URL + '/chat/events', { signal });
+    if (!response.ok || !response.body) throw new Error('Chat event stream unavailable.');
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+    while (!signal.aborted) {
+        const { value, done } = await reader.read(); if (done) return;
+        buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() || '';
+        for (const event of events) if (event.includes('event: chat')) onChat();
     }
 }

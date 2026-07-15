@@ -6,69 +6,286 @@ use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, RunEvent, State, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State,
 };
-use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-const LIVE_MATCH_OVERLAY_LABEL: &str = "live_match_overlay";
+const MAIN_WINDOW_LABEL: &str = "main";
+const OVERLAY_WIDTH: i32 = 1280;
+const OVERLAY_HEIGHT: i32 = 720;
+static MAIN_WINDOW_SHOWN_BY_HOTKEY: AtomicBool = AtomicBool::new(false);
+static LIVE_MATCH_OVERLAY_LOCAL_SESSION: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy)]
+struct WindowGeometry {
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    #[cfg(target_os = "windows")]
+    style: isize,
+}
+
+fn capture_main_window_geometry(
+    app_handle: &AppHandle,
+    window: &tauri::WebviewWindow,
+    #[cfg(target_os = "windows")] style: isize,
+) {
+    let state = app_handle.state::<AppState>();
+    if let Ok(mut saved) = state.main_window_geometry.lock() {
+        if saved.is_none() {
+            if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                *saved = Some(WindowGeometry {
+                    position,
+                    size,
+                    #[cfg(target_os = "windows")]
+                    style,
+                });
+            }
+        }
+    };
+}
+
+#[cfg(target_os = "windows")]
+fn restore_main_window_geometry(app_handle: &AppHandle, window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowLongPtrW, SetWindowPos, GWL_STYLE, HWND_NOTOPMOST, SWP_FRAMECHANGED,
+    };
+
+    let state = app_handle.state::<AppState>();
+    let saved = state
+        .main_window_geometry
+        .lock()
+        .ok()
+        .and_then(|mut geometry| geometry.take());
+    if let Some(geometry) = saved {
+        if let Ok(raw_hwnd) = window.hwnd() {
+            let hwnd = HWND(raw_hwnd.0);
+            unsafe {
+                let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, geometry.style);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND_NOTOPMOST,
+                    geometry.position.x,
+                    geometry.position.y,
+                    geometry.size.width as i32,
+                    geometry.size.height as i32,
+                    SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn show_main_window_without_activation(
+    app_handle: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, HWND_TOPMOST,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOWNOACTIVATE, WS_CAPTION,
+        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    };
+
+    let raw_hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    let hwnd = HWND(raw_hwnd.0);
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Could not determine the monitor for overlay mode".to_string())?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let x = monitor_position.x + (monitor_size.width as i32 - OVERLAY_WIDTH) / 2;
+    let y = monitor_position.y + (monitor_size.height as i32 - OVERLAY_HEIGHT) / 2;
+
+    unsafe {
+        let desktop_style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        capture_main_window_geometry(app_handle, window, desktop_style);
+        let hidden_frame =
+            (WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU).0;
+        let overlay_style = (desktop_style as u32 & !hidden_frame) as isize;
+        let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, overlay_style);
+
+        // SW_SHOWNOACTIVATE restores a hidden/minimized app without transferring
+        // keyboard focus away from VALORANT. Position, fixed size, border removal,
+        // and topmost Z-order are applied together with SWP_NOACTIVATE so no
+        // earlier resize/center operation can activate the app.
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            OVERLAY_WIDTH,
+            OVERLAY_HEIGHT,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_main_window_without_activation(
+    app_handle: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    capture_main_window_geometry(app_handle, window);
+    window
+        .set_decorations(false)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_resizable(false)
+        .map_err(|error| error.to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(
+            OVERLAY_WIDTH as f64,
+            OVERLAY_HEIGHT as f64,
+        ))
+        .map_err(|error| error.to_string())?;
+    window.center().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restore_main_window_geometry(app_handle: &AppHandle, window: &tauri::WebviewWindow) {
+    let state = app_handle.state::<AppState>();
+    let saved = state
+        .main_window_geometry
+        .lock()
+        .ok()
+        .and_then(|mut geometry| geometry.take());
+    let _ = window.set_decorations(true);
+    let _ = window.set_resizable(true);
+    if let Some(geometry) = saved {
+        let _ = window.set_size(geometry.size);
+        let _ = window.set_position(geometry.position);
+    }
+}
 
 #[tauri::command]
 async fn show_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
-    let window = ensure_live_match_overlay_window(&app_handle)?;
-    window
-        .set_always_on_top(true)
-        .map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    show_main_app_window(&app_handle)
+}
+
+#[cfg(target_os = "windows")]
+fn riot_lockfile_exists() -> bool {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| {
+            path.join("Riot Games")
+                .join("Riot Client")
+                .join("Config")
+                .join("lockfile")
+                .is_file()
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn is_valorant_process_running() -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return false;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = false;
+
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let name_length = entry
+                    .szExeFile
+                    .iter()
+                    .position(|character| *character == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let process_name =
+                    String::from_utf16_lossy(&entry.szExeFile[..name_length]).to_ascii_lowercase();
+                if process_name.contains("valorant") {
+                    found = true;
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn live_match_overlay_available() -> bool {
+    LIVE_MATCH_OVERLAY_LOCAL_SESSION.load(Ordering::SeqCst)
+        && riot_lockfile_exists()
+        && is_valorant_process_running()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn live_match_overlay_available() -> bool {
+    false
+}
+
+#[tauri::command]
+fn set_live_match_overlay_enabled(app_handle: AppHandle, enabled: bool) -> Result<bool, String> {
+    LIVE_MATCH_OVERLAY_LOCAL_SESSION.store(enabled, Ordering::SeqCst);
+    let available = live_match_overlay_available();
+    if !available && MAIN_WINDOW_SHOWN_BY_HOTKEY.load(Ordering::SeqCst) {
+        hide_main_app_window(&app_handle)?;
+    }
+    Ok(available)
+}
+
+fn show_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
+    if !live_match_overlay_available() {
+        return Err(
+            "Live Match Overlay requires the local VALORANT session and Riot lockfile".to_string(),
+        );
+    }
+    let window = app_handle
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "Main application window is unavailable".to_string())?;
+    show_main_window_without_activation(app_handle, &window)?;
+    MAIN_WINDOW_SHOWN_BY_HOTKEY.store(true, Ordering::SeqCst);
     Ok(())
 }
 
 #[tauri::command]
 async fn hide_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
-    if let Some(window) = app_handle.get_webview_window(LIVE_MATCH_OVERLAY_LABEL) {
+    hide_main_app_window(&app_handle)
+}
+
+fn hide_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
         window.hide().map_err(|error| error.to_string())?;
     }
+    MAIN_WINDOW_SHOWN_BY_HOTKEY.store(false, Ordering::SeqCst);
     Ok(())
 }
 
 #[tauri::command]
 async fn toggle_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
-    let window = ensure_live_match_overlay_window(&app_handle)?;
-    if window.is_visible().unwrap_or(false) {
-        window.hide().map_err(|error| error.to_string())?;
-    } else {
-        window
-            .set_always_on_top(true)
-            .map_err(|error| error.to_string())?;
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    toggle_main_app_window(&app_handle)
 }
 
-fn ensure_live_match_overlay_window(
-    app_handle: &AppHandle,
-) -> Result<tauri::WebviewWindow, String> {
-    if let Some(window) = app_handle.get_webview_window(LIVE_MATCH_OVERLAY_LABEL) {
-        return Ok(window);
+fn toggle_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
+    if MAIN_WINDOW_SHOWN_BY_HOTKEY.load(Ordering::SeqCst) {
+        hide_main_app_window(app_handle)
+    } else {
+        show_main_app_window(app_handle)
     }
-
-    tauri::webview::WebviewWindowBuilder::new(
-        app_handle,
-        LIVE_MATCH_OVERLAY_LABEL,
-        tauri::WebviewUrl::App("?overlay=live-match".into()),
-    )
-    .title("VantaVault Live Match")
-    .inner_size(1280.0, 720.0)
-    .min_inner_size(760.0, 420.0)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(true)
-    .visible(false)
-    .build()
-    .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -141,8 +358,10 @@ fn start_live_match_overlay_hotkey(app_handle: AppHandle) {
             let mut message = MSG::default();
             while GetMessageW(&mut message, global_hotkey_window, 0, 0).as_bool() {
                 if message.message == WM_HOTKEY && message.wParam.0 as i32 == HOTKEY_ID {
-                    if is_valorant_foreground_window() {
-                        let _ = app_handle.emit("vantavault-overlay-toggle", ());
+                    if live_match_overlay_available() && is_valorant_foreground_window() {
+                        if let Err(error) = toggle_main_app_window(&app_handle) {
+                            log::warn!("Could not toggle VantaVault with Alt+T: {error}");
+                        }
                     }
                 }
                 let _ = TranslateMessage(&message);
@@ -345,11 +564,253 @@ struct AppState {
     /// cookie loss that happens when two windows try to read the same
     /// SQLite file simultaneously.
     window_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Normal desktop geometry saved while Alt+T uses the main window as a
+    /// centered, fixed-size game overlay.
+    main_window_geometry: Mutex<Option<WindowGeometry>>,
 }
 
 #[tauri::command]
 fn get_backend_token(state: State<'_, AppState>) -> String {
     state.backend_token.clone()
+}
+
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RiotAccountSecrets {
+    access_token: Option<String>,
+    entitlements_token: Option<String>,
+    ssid: Option<String>,
+}
+
+fn valid_riot_account_id(puuid: &str) -> bool {
+    !puuid.is_empty()
+        && puuid.len() <= 64
+        && puuid
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+#[cfg(target_os = "windows")]
+fn credential_target(puuid: &str, kind: &str) -> Result<String, String> {
+    if !valid_riot_account_id(puuid) {
+        return Err("Invalid Riot account ID".to_string());
+    }
+    Ok(format!("VantaVault:RiotAccount:{puuid}:{kind}"))
+}
+
+#[cfg(target_os = "windows")]
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn credential_not_found(error: &windows::core::Error) -> bool {
+    use windows::core::HRESULT;
+    use windows::Win32::Foundation::ERROR_NOT_FOUND;
+    error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0)
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_credential(target: &str, username: &str, value: &str) -> Result<(), String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Security::Credentials::{
+        CredWriteW, CREDENTIALW, CRED_MAX_CREDENTIAL_BLOB_SIZE, CRED_PERSIST_LOCAL_MACHINE,
+        CRED_TYPE_GENERIC,
+    };
+
+    let mut target = wide(target);
+    let mut username = wide(username);
+    let mut blob = value.as_bytes().to_vec();
+    if blob.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
+        return Err("Riot credential is too large for Windows Credential Manager".to_string());
+    }
+    let credential = CREDENTIALW {
+        Type: CRED_TYPE_GENERIC,
+        TargetName: PWSTR(target.as_mut_ptr()),
+        CredentialBlobSize: blob.len() as u32,
+        CredentialBlob: blob.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        UserName: PWSTR(username.as_mut_ptr()),
+        ..Default::default()
+    };
+    unsafe { CredWriteW(&credential, 0) }
+        .map_err(|error| format!("Could not save Riot credentials: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_credential(target: &str) -> Result<Option<String>, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let target = wide(target);
+    let mut raw: *mut CREDENTIALW = std::ptr::null_mut();
+    if let Err(error) =
+        unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0, &mut raw) }
+    {
+        return if credential_not_found(&error) {
+            Ok(None)
+        } else {
+            Err(format!("Could not read Riot credentials: {error}"))
+        };
+    }
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let bytes = unsafe {
+        let credential = &*raw;
+        std::slice::from_raw_parts(
+            credential.CredentialBlob,
+            credential.CredentialBlobSize as usize,
+        )
+        .to_vec()
+    };
+    unsafe { CredFree(raw.cast()) };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "Windows Credential Manager returned invalid Riot credentials".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn delete_windows_credential(target: &str) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
+
+    let target = wide(target);
+    match unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0) } {
+        Ok(()) => Ok(()),
+        Err(error) if credential_not_found(&error) => Ok(()),
+        Err(error) => Err(format!("Could not delete Riot credentials: {error}")),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_secret(target: &str, username: &str, value: &str) -> Result<(), String> {
+    const CHUNK_BYTES: usize = 2400;
+    if read_windows_secret(target)?.as_deref() == Some(value) {
+        return Ok(());
+    }
+    let count_target = format!("{target}:count");
+    let old_count = read_windows_credential(&count_target)?
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let chunks = value.as_bytes().chunks(CHUNK_BYTES).collect::<Vec<_>>();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let chunk = std::str::from_utf8(chunk)
+            .map_err(|_| "Riot credentials were not valid UTF-8".to_string())?;
+        write_windows_credential(&format!("{target}:{index}"), username, chunk)?;
+    }
+    write_windows_credential(&count_target, username, &chunks.len().to_string())?;
+    for index in chunks.len()..old_count {
+        delete_windows_credential(&format!("{target}:{index}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_secret(target: &str) -> Result<Option<String>, String> {
+    let Some(count) = read_windows_credential(&format!("{target}:count"))? else {
+        return read_windows_credential(target);
+    };
+    let count = count.parse::<usize>().map_err(|_| {
+        "Windows Credential Manager returned invalid Riot credential metadata".to_string()
+    })?;
+    let mut value = String::new();
+    for index in 0..count {
+        let chunk = read_windows_credential(&format!("{target}:{index}"))?
+            .ok_or_else(|| "A saved Riot credential chunk is missing".to_string())?;
+        value.push_str(&chunk);
+    }
+    Ok(Some(value))
+}
+
+#[cfg(target_os = "windows")]
+fn delete_windows_secret(target: &str) -> Result<(), String> {
+    let count_target = format!("{target}:count");
+    let count = read_windows_credential(&count_target)?
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    for index in 0..count {
+        delete_windows_credential(&format!("{target}:{index}"))?;
+    }
+    delete_windows_credential(&count_target)?;
+    delete_windows_credential(target)
+}
+
+#[tauri::command]
+async fn save_riot_account_secrets(
+    puuid: String,
+    access_token: Option<String>,
+    entitlements_token: Option<String>,
+    ssid: Option<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            for (kind, value) in [
+                ("access", access_token),
+                ("entitlements", entitlements_token),
+                ("ssid", ssid),
+            ] {
+                if let Some(value) = value.filter(|value| !value.is_empty()) {
+                    write_windows_secret(&credential_target(&puuid, kind)?, &puuid, &value)?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("Could not run secure credential storage: {error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (puuid, access_token, entitlements_token, ssid);
+        Err("Secure Riot account storage is only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+async fn load_riot_account_secrets(puuid: String) -> Result<RiotAccountSecrets, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            Ok(RiotAccountSecrets {
+                access_token: read_windows_secret(&credential_target(&puuid, "access")?)?,
+                entitlements_token: read_windows_secret(&credential_target(
+                    &puuid,
+                    "entitlements",
+                )?)?,
+                ssid: read_windows_secret(&credential_target(&puuid, "ssid")?)?,
+            })
+        })
+        .await
+        .map_err(|error| format!("Could not load secure credential storage: {error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = puuid;
+        Err("Secure Riot account storage is only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+async fn delete_riot_account_secrets(puuid: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(move || {
+            for kind in ["access", "entitlements", "ssid"] {
+                delete_windows_secret(&credential_target(&puuid, kind)?)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|error| format!("Could not delete secure credential storage: {error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = puuid;
+        Err("Secure Riot account storage is only available on Windows".to_string())
+    }
 }
 
 #[tauri::command]
@@ -1252,9 +1713,32 @@ mod tests {
     use super::{
         build_riot_cookie_header, cleanup_stale_sessions, is_valid_account_session_id,
         prune_session_cache, recover_session_swap_artifacts, session_cache_size,
-        strip_chromium_host_key_hash,
+        strip_chromium_host_key_hash, valid_riot_account_id,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn accepts_only_safe_riot_account_ids_for_credential_targets() {
+        assert!(valid_riot_account_id(
+            "00000000-0000-0000-0000-000000000000"
+        ));
+        assert!(!valid_riot_account_id("../other-account"));
+        assert!(!valid_riot_account_id("account:other"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_credential_manager_round_trip() {
+        let target = format!("VantaVault:Test:{}", uuid::Uuid::new_v4());
+        let secret = "secret-value".repeat(600);
+        super::write_windows_secret(&target, "test", &secret).unwrap();
+        assert_eq!(
+            super::read_windows_secret(&target).unwrap().as_deref(),
+            Some(secret.as_str())
+        );
+        super::delete_windows_secret(&target).unwrap();
+        assert_eq!(super::read_windows_secret(&target).unwrap(), None);
+    }
 
     #[test]
     fn strips_chromium_cookie_host_key_hash_prefix() {
@@ -1452,6 +1936,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             discord_sender: Mutex::new(None),
             window_locks: Mutex::new(HashMap::new()),
+            main_window_geometry: Mutex::new(None),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
@@ -1466,11 +1951,15 @@ pub fn run() {
             delete_login_session,
             get_ssid_cookie,
             get_backend_token,
+            save_riot_account_secrets,
+            load_riot_account_secrets,
+            delete_riot_account_secrets,
             is_portable,
             portable_update_status,
             portable_start_update,
             portable_restart_to_update,
             set_discord_presence,
+            set_live_match_overlay_enabled,
             show_live_match_overlay,
             hide_live_match_overlay,
             toggle_live_match_overlay,
@@ -1507,9 +1996,25 @@ pub fn run() {
                 .sidecar("valovault-backend")
                 .unwrap()
                 .env("VANTAVAULT_API_KEY", &state.backend_token);
-            let (_rx, child) = sidecar_command
+            let (mut sidecar_events, child) = sidecar_command
                 .spawn()
                 .expect("Failed to spawn backend sidecar");
+            tauri::async_runtime::spawn(async move {
+                while let Some(event) = sidecar_events.recv().await {
+                    match event {
+                        CommandEvent::Error(_) => {
+                            eprintln!("backend sidecar command event failed");
+                        }
+                        CommandEvent::Terminated(status) => {
+                            eprintln!(
+                                "backend sidecar terminated: exit_code={:?} signal={:?}",
+                                status.code, status.signal
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            });
             #[cfg(target_os = "windows")]
             let backend_pid = child.pid();
             *state.child.lock().unwrap() = Some(child);
@@ -1539,6 +2044,9 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
+                            MAIN_WINDOW_SHOWN_BY_HOTKEY.store(false, Ordering::SeqCst);
+                            let _ = window.set_always_on_top(false);
+                            restore_main_window_geometry(app, &window);
                             let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
@@ -1558,18 +2066,6 @@ pub fn run() {
         if let RunEvent::ExitRequested { .. } = &event {
             let state: State<AppState> = app_handle.state();
             stop_backend_sidecar(&state);
-        }
-
-        if let RunEvent::WindowEvent {
-            event: WindowEvent::Resized(_),
-            ..
-        } = &event
-        {
-            if let Some(window) = app_handle.get_webview_window("main") {
-                if let Ok(true) = window.is_minimized() {
-                    let _ = window.hide();
-                }
-            }
         }
     });
 }

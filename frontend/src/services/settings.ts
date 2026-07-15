@@ -1,5 +1,6 @@
 import { LocalClientError } from "@/lib/errors";
 import { appFetch, LOCAL_URL } from "./api";
+import type { AppearanceSettings } from "@/context/ThemeContext";
 
 export type Settings = {
     autoSelectAgent: boolean;
@@ -10,6 +11,11 @@ export type Settings = {
     showLiveMatch: boolean;
     showPartyWidget: boolean;
     showUnownedCosmetics: boolean;
+	theme: 'light' | 'dark';
+	accentTheme: 'valorant' | 'aqua' | 'violet' | 'gold';
+	interfaceTheme: 'default' | 'protocol' | 'cinematic';
+	uiSettingsSaved: boolean;
+	appearance: AppearanceSettings;
 };
 
 export type StorageStatus = {

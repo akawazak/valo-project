@@ -215,11 +215,6 @@ export default function ArsenalView({
     const melee = getColumnWeapons("melee", sortWeapons(weapons.filter(w => w.category === 'EEquippableCategory::Melee' || MELEE_NAMES.includes(w.displayName.toLowerCase())), MELEE_NAMES));
     const snipers = getColumnWeapons("snipers", sortWeapons(weapons.filter(w => SNIPERS_NAMES.includes(w.displayName.toLowerCase())), SNIPERS_NAMES));
     const heavies = getColumnWeapons("heavies", sortWeapons(weapons.filter(w => HEAVIES_NAMES.includes(w.displayName.toLowerCase())), HEAVIES_NAMES));
-    const commandState = isEditing ? (isEditingDefault ? "LIVE DRAFT" : "UNSAVED") : (isViewingDefault ? "LIVE" : "PRESET");
-    const commandHint = isEditing
-        ? (isEditingDefault ? "Apply this weapon from its picker, or close it to keep the current game loadout." : "Save, apply, or fork this preset.")
-        : (isViewingDefault ? "Click any slot to edit the live loadout." : "Click any slot to edit this preset.");
-
     // Drag handlers
     const handleDragStart = (e: React.DragEvent, id: string, colKey: string) => {
         setDraggedId(id);
@@ -325,50 +320,32 @@ export default function ArsenalView({
 
     return (
         <div className="workspace-centered-wrapper">
-            {/* Header */}
-            <div className="workspace-header-row workspace-builder-header">
-                <div className="workspace-title-area">
-                    <div className="workspace-title-line">
-                        <h2>{activePreset?.name || "Current Loadout"}</h2>
+            {!isViewingDefault && (
+                <div className="workspace-header-row workspace-builder-header">
+                    <div className="workspace-title-area">
+                        <div className="workspace-title-line">
+                            <h2>{activePreset?.name || "Preset"}</h2>
+                        </div>
                     </div>
-                </div>
-                <div className="workspace-actions workspace-builder-actions">
-                    {/* Show "Switch to Current Loadout" only when viewing a saved preset */}
-                    {!isViewingDefault && (
+                    <div className="workspace-actions workspace-builder-actions">
                         <button
                             type="button"
                             className="btn-tactical btn-tactical-secondary"
                             onClick={() => onPresetSelect(defaultPreset)}
                         >
-                            ← Current Loadout
+                            ← Back to loadout
                         </button>
-                    )}
-                    <button type="button" className="btn-tactical btn-tactical-ghost" onClick={onImportPresetClick}>
-                        Import
-                    </button>
-                    <button
-                        type="button"
-                        className="btn-tactical btn-tactical-accent"
-                        onClick={onNewPreset}
-                    >
-                        + New Preset
-                    </button>
+                    </div>
                 </div>
-            </div>
+            )}
 
-            {/* Current Loadout Reference Card — only show on the current loadout */}
-            <div className={`workspace-command-strip workspace-command-strip--compact${isEditing ? " is-editing" : ""}`}>
-                <div className="workspace-command-copy">
-                    <span className="clr-reference-badge">{commandState}</span>
-                    <span className="clr-reference-hint">{commandHint}</span>
-                </div>
-                {isEditing && !isEditingDefault && (
+            {isEditing && !isEditingDefault && (
+                <div className="workspace-command-strip workspace-command-strip--compact is-editing">
+                    <span className="clr-reference-hint">Unsaved preset changes</span>
                     <div className="workspace-edit-actions">
-                        {!isEditingDefault && (
-                            <button type="button" className="btn-tactical btn-tactical-secondary" onClick={onSave}>
-                                Save
-                            </button>
-                        )}
+                        <button type="button" className="btn-tactical btn-tactical-secondary" onClick={onSave}>
+                            Save
+                        </button>
                         <button type="button" className="btn-tactical btn-tactical-ghost" onClick={onSaveAsNew}>
                             Save As New
                         </button>
@@ -379,8 +356,8 @@ export default function ArsenalView({
                             Cancel
                         </button>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
             <div className="workspace-grid-5 workspace-builder-board">
                 <div className="workspace-board-column workspace-board-column--sidearms">
@@ -434,10 +411,18 @@ export default function ArsenalView({
             {presets && presets.length > 0 && (
                 <div className="workspace-presets-row">
                     <div className="workspace-presets-header">
-                        <span className="workspace-presets-label">// SAVED PRESETS</span>
+                        <span className="workspace-presets-label">Saved presets</span>
                         <span className="workspace-presets-hint">
-                            Saved configurations · Live loadout stays unchanged until applied
+                            Saved configurations stay unchanged until applied
                         </span>
+                        <div className="workspace-presets-actions">
+                            <button type="button" className="btn-tactical btn-tactical-ghost" onClick={onImportPresetClick}>
+                                Import
+                            </button>
+                            <button type="button" className="btn-tactical btn-tactical-accent" onClick={onNewPreset}>
+                                + New preset
+                            </button>
+                        </div>
                     </div>
                     <div className="workspace-presets-scroll">
                         {presets.filter(p => p.uuid !== defaultPreset.uuid).map(preset => {

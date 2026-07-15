@@ -33,3 +33,20 @@ func TestWriteFileAtomicallyReplacesCompleteAccountSnapshot(t *testing.T) {
 		t.Fatalf("temporary account files were not cleaned up: %v", matches)
 	}
 }
+
+func TestStripSecretsPreservesAccountMetadata(t *testing.T) {
+	got, err := stripSecrets([]byte(`[{
+		"puuid":"player",
+		"accessToken":"access",
+		"entitlementsToken":"entitlements",
+		"ssid":"ssid=value",
+		"favorite":true
+	}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"favorite":true,"puuid":"player"}]`
+	if string(got) != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}

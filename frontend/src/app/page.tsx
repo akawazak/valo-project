@@ -12,6 +12,7 @@ import { getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } 
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
+import { getStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
 
 const DISCORD_QUEUE_LABELS: Record<string, string> = {
     competitive: "Competitive",
@@ -49,6 +50,30 @@ import LocalAccountChooser from '@/components/LocalAccountChooser';
 import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
+import ReleaseNotesModal, { type ReleaseNotes } from '@/components/ReleaseNotesModal';
+
+const CURRENT_RELEASE: ReleaseNotes = {
+    version: "0.5.25",
+    title: "What’s new",
+    summary: "A clearer match review, a stronger profile, and a more reliable social experience.",
+    added: [
+        "Interactive post-match fight maps with duel positions, weapons, abilities, zoom, and pan.",
+        "Profile progression views for account XP, missions, contracts, and Battle Pass progress.",
+        "Riot chat, conversation history, social requests, and skin video previews.",
+    ],
+    improved: [
+        "Match history now keeps your team on the left and makes parties, players, and round impact easier to read.",
+        "Map reviews highlight the areas you fought in and turn match data into direct, factual takeaways.",
+        "The Profile identity card now stays with you while you browse the full page.",
+    ],
+    fixed: [
+        "Restored party detection and post-match player names where Riot returns them.",
+        "Hardened portable updates with signed manifests and SHA-256 verification.",
+        "Fixed account, presence, match sync, and UI state issues found during the redesign.",
+    ],
+};
+
+const RELEASE_NOTES_STORAGE_KEY = "vantavault:last-seen-release:v2";
 
 type DiscordMatchPhase = {
     phase: string;
@@ -69,15 +94,6 @@ type PortableUpdateState = {
 };
 
 export default function Home() {
-    const [isLiveMatchOverlayWindow] = useState(() => (
-        typeof window !== "undefined"
-        && new URLSearchParams(window.location.search).get("overlay") === "live-match"
-    ));
-
-    if (isLiveMatchOverlayWindow) {
-        return <LiveMatchOverlay overlayWindow />;
-    }
-
     return <HomeApp />;
 }
 
@@ -90,6 +106,8 @@ function HomeApp() {
         loading: dataContextLoading,
         isClientHealthy,
         isBackendOnline,
+        isLocalClientActive,
+        localPuuid,
         accounts,
         activeAccount,
         handleSwitchAccount,
@@ -107,7 +125,7 @@ function HomeApp() {
         ownedChromaIDs,
     } = useData();
 
-    const { theme, accentTheme, interfaceTheme, toggleTheme, setAccentTheme, setInterfaceTheme } = useTheme();
+	const { theme, accentTheme, interfaceTheme, appearance, toggleTheme, setTheme, setAccentTheme, setInterfaceTheme, setAppearance } = useTheme();
 
     const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [], flexes: [], expressions: [] } });
     const [dataRevision, setDataRevision] = useState(0);
@@ -155,29 +173,30 @@ function HomeApp() {
     }, []);
 
     useEffect(() => {
-        let disposed = false;
-        let unlisten: (() => void) | undefined;
-
-        void Promise.all([
-            import("@tauri-apps/api/event"),
-            import("@tauri-apps/api/core"),
-        ]).then(async ([eventApi, coreApi]) => {
-            const cleanup = await eventApi.listen("vantavault-overlay-toggle", () => {
-                void coreApi.invoke("toggle_live_match_overlay").catch(() => {});
-            });
-            if (disposed) cleanup();
-            else unlisten = cleanup;
-        }).catch(() => {});
-
-        return () => {
-            disposed = true;
-            unlisten?.();
-        };
-    }, []);
+        const activeAccountIsLocal = Boolean(
+            activeAccount?.puuid &&
+            localPuuid &&
+            activeAccount.puuid.toLowerCase() === localPuuid.toLowerCase()
+        );
+        const enabled = Boolean(useLocalSso && isLocalClientActive && activeAccountIsLocal);
+        void import("@tauri-apps/api/core")
+            .then(({ invoke }) => invoke("set_live_match_overlay_enabled", { enabled }))
+            .catch(() => {});
+    }, [activeAccount?.puuid, isLocalClientActive, localPuuid, useLocalSso]);
 
     useEffect(() => {
         const phase = discordMatchPhase.phase;
-        if (phase !== "pregame") {
+        const activeAccountIsLocal = Boolean(
+            activeAccount?.puuid &&
+            localPuuid &&
+            activeAccount.puuid.toLowerCase() === localPuuid.toLowerCase()
+        );
+        if (
+            phase !== "pregame" ||
+            !useLocalSso ||
+            !isLocalClientActive ||
+            !activeAccountIsLocal
+        ) {
             autoOpenedOverlayKeyRef.current = "";
             return;
         }
@@ -202,7 +221,11 @@ function HomeApp() {
         discordMatchPhase.mapName,
         discordMatchPhase.phase,
         discordMatchPhase.queueId,
+        activeAccount?.puuid,
+        isLocalClientActive,
+        localPuuid,
         showLiveMatch,
+        useLocalSso,
     ]);
 
     useEffect(() => {
@@ -256,6 +279,7 @@ function HomeApp() {
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
     const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
+    const [showReleaseNotes, setShowReleaseNotes] = useState(false);
 
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
@@ -317,6 +341,22 @@ function HomeApp() {
             const enabled = await readLaunchAtStartupState();
             setLaunchAtStartupState(enabled);
         });
+    }, []);
+
+    useEffect(() => {
+        if (appVersion !== CURRENT_RELEASE.version) return;
+        try {
+            if (localStorage.getItem(RELEASE_NOTES_STORAGE_KEY) !== appVersion) setShowReleaseNotes(true);
+        } catch {
+            setShowReleaseNotes(true);
+        }
+    }, [appVersion]);
+
+    const dismissReleaseNotes = useCallback(() => {
+        try {
+            localStorage.setItem(RELEASE_NOTES_STORAGE_KEY, CURRENT_RELEASE.version);
+        } catch { /* The modal can still close when storage is unavailable. */ }
+        setShowReleaseNotes(false);
     }, []);
 
     useEffect(() => {
@@ -499,6 +539,24 @@ function HomeApp() {
             setShowLiveMatch(settings.showLiveMatch);
             setShowPartyWidget(settings.showPartyWidget);
             setShowUnownedCosmetics(settings.showUnownedCosmetics);
+			const useLegacyUI = !settings.uiSettingsSaved;
+			const backendAppearance = settings.appearance || {} as Settings["appearance"];
+			let effectiveAppearance = backendAppearance;
+			if (useLegacyUI) {
+				try {
+					const localAppearance = JSON.parse(localStorage.getItem("appearance_settings") || "{}") as Partial<Settings["appearance"]>;
+					effectiveAppearance = { ...backendAppearance, ...localAppearance };
+				} catch { /* Keep the validated backend appearance. */ }
+			}
+			const effectiveTheme = useLegacyUI && localStorage.getItem("theme") === "light" ? "light" : settings.theme;
+			const localAccent = localStorage.getItem("accent_theme");
+			const effectiveAccent = useLegacyUI && (localAccent === "aqua" || localAccent === "violet" || localAccent === "gold") ? localAccent : settings.accentTheme;
+			const localInterface = localStorage.getItem("interface_theme");
+			const effectiveInterface = useLegacyUI && (localInterface === "protocol" || localInterface === "cinematic") ? localInterface : settings.interfaceTheme;
+			setTheme(effectiveTheme);
+			setAccentTheme(effectiveAccent);
+			setInterfaceTheme(effectiveInterface);
+			setAppearance(effectiveAppearance);
             prevSettingsRef.current = settings;
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
@@ -513,7 +571,7 @@ function HomeApp() {
                 setIsLoading(false);
             }
         }
-    }, [setErrorMessage, setShowErrorModal]);
+	}, [setAccentTheme, setAppearance, setErrorMessage, setInterfaceTheme, setShowErrorModal, setTheme]);
 
     useEffect(() => {
         if (isClientHealthy) {
@@ -537,7 +595,7 @@ function HomeApp() {
             showPartyWidget === undefined ||
             showUnownedCosmetics === undefined
         ) return;
-        const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics };
+		const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, theme, accentTheme, interfaceTheme, uiSettingsSaved: true, appearance };
         if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
@@ -545,7 +603,7 @@ function HomeApp() {
             console.error("Failed to save settings:", error);
             reportAppError("Settings could not be saved. Please try again.");
         });
-    }, [autoSelectAgent, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, useLocalSso]);
+	}, [accentTheme, appearance, autoSelectAgent, autoSyncMatches, interfaceTheme, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, theme, useLocalSso]);
 
     useEffect(() => {
         let alive = true;
@@ -581,17 +639,14 @@ function HomeApp() {
     };
 
     const handleToggleFavorite = (puuid: string) => {
-        const stored = JSON.parse(localStorage.getItem("riot_accounts") || "[]");
+        const stored = getStoredAccounts();
         const updated = stored.map((acc: RiotAccount) => {
             if (acc.puuid === puuid) {
                 return { ...acc, favorite: !acc.favorite };
             }
             return acc;
         });
-        localStorage.setItem("riot_accounts", JSON.stringify(updated));
-        import('@/services/api').then(({ savePersistedAccounts }) => {
-            void savePersistedAccounts(updated);
-        });
+        void saveStoredAccounts(updated);
         refreshAccountsList();
     };
 
@@ -717,11 +772,12 @@ function HomeApp() {
                 }}
                 activeAccount={activeAccount}
                 useLocalSso={useLocalSso || false}
-                isLocalClientActive={isClientHealthy}
+                isLocalClientActive={isLocalClientActive}
                 isBackendOnline={isBackendOnline}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenAccounts={() => setIsAccountsOpen(true)}
                 playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
+                socialControl={(showPartyWidget ?? true) ? <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} /> : null}
             />
 
             <div className="app-content-wrapper">
@@ -824,6 +880,7 @@ function HomeApp() {
             />
             <ErrorModal show={showErrorModal} onClose={handleCloseErrorModal} message={errorMessage} />
             <Toast show={showToast} onClose={handleCloseToast} message={toastMessage} />
+            {showReleaseNotes && <ReleaseNotesModal notes={CURRENT_RELEASE} onClose={dismissReleaseNotes} />}
             <ConfirmationModal
                 show={showConfirmationModal}
                 onClose={handleCloseConfirmationModal}
@@ -876,7 +933,7 @@ function HomeApp() {
                 onToggleTheme={toggleTheme}
                 onAccentThemeChange={setAccentTheme}
                 onInterfaceThemeChange={setInterfaceTheme}
-                isLocalClientActive={isClientHealthy}
+                isLocalClientActive={isLocalClientActive}
                 activeAccount={activeAccount}
                 appVersion={appVersion}
                 isPortable={isPortable}
@@ -924,7 +981,6 @@ function HomeApp() {
             />
 
             {(showLiveMatch ?? true) && <LiveMatchOverlay />}
-            {(showPartyWidget ?? true) && <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} />}
         </div>
     );
 }

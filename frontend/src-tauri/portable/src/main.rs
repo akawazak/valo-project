@@ -5,6 +5,7 @@ use minisign_verify::{PublicKey, Signature};
 use reqwest::blocking::Client;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
@@ -43,7 +44,9 @@ struct UpdateState {
 struct UpdateManifest {
     version: String,
     url: String,
+    sha256: String,
     signature: String,
+    manifest_signature: String,
 }
 
 fn now_ms() -> u64 {
@@ -143,6 +146,21 @@ fn verify_update(bytes: &[u8], encoded_signature: &str) -> Result<(), String> {
     })
 }
 
+fn update_manifest_payload(manifest: &UpdateManifest) -> Vec<u8> {
+    format!(
+        "VantaVault portable update v1\nversion={}\nurl={}\nsha256={}\n",
+        manifest.version, manifest.url, manifest.sha256
+    )
+    .into_bytes()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn download_update() -> Result<(), String> {
     write_update_state(&UpdateState {
         status: "checking".to_string(),
@@ -158,6 +176,10 @@ fn download_update() -> Result<(), String> {
         .map_err(|error| format!("Could not check for a portable update: {error}"))?
         .json::<UpdateManifest>()
         .map_err(|error| format!("The portable update information was invalid: {error}"))?;
+    verify_update(
+        &update_manifest_payload(&manifest),
+        &manifest.manifest_signature,
+    )?;
 
     let current_version = parse_version(VERSION)?;
     let latest_version = parse_version(&manifest.version)?;
@@ -183,6 +205,11 @@ fn download_update() -> Result<(), String> {
         .map_err(|error| format!("Could not download VantaVault {latest_version}: {error}"))?
         .bytes()
         .map_err(|error| format!("Could not download VantaVault {latest_version}: {error}"))?;
+    if sha256_hex(&bytes) != manifest.sha256.to_ascii_lowercase() {
+        return Err(
+            "The downloaded portable update did not match the signed manifest.".to_string(),
+        );
+    }
     verify_update(&bytes, &manifest.signature)?;
 
     let update_dir = portable_root()?.join("updates");
@@ -336,5 +363,33 @@ fn main() {
 
     if let Err(error) = run_app() {
         show_error(&error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sha256_hex, update_manifest_payload, UpdateManifest};
+
+    fn manifest(version: &str) -> UpdateManifest {
+        UpdateManifest {
+            version: version.to_string(),
+            url: "https://example.invalid/VantaVault-portable.exe".to_string(),
+            sha256: sha256_hex(b"signed artifact"),
+            signature: "artifact-signature".to_string(),
+            manifest_signature: "manifest-signature".to_string(),
+        }
+    }
+
+    #[test]
+    fn signed_payload_binds_version_url_and_digest() {
+        let original = update_manifest_payload(&manifest("1.0.0"));
+        let mut changed = manifest("999.0.0");
+        assert_ne!(original, update_manifest_payload(&changed));
+        changed.version = "1.0.0".to_string();
+        changed.url = "https://attacker.invalid/old.exe".to_string();
+        assert_ne!(original, update_manifest_payload(&changed));
+        changed.url = "https://example.invalid/VantaVault-portable.exe".to_string();
+        changed.sha256 = sha256_hex(b"different artifact");
+        assert_ne!(original, update_manifest_payload(&changed));
     }
 }

@@ -88,7 +88,7 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
 
 type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
 
-export default function LiveMatchOverlay({ overlayWindow = false }: { overlayWindow?: boolean }) {
+export default function LiveMatchOverlay() {
     const { activeAccount, weapons, playerCards } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
@@ -115,14 +115,8 @@ export default function LiveMatchOverlay({ overlayWindow = false }: { overlayWin
         return partyGroupSizes(allPlayers).get(localPlayer.partyGroup) || 0;
     }, [match?.allyTeam, match?.enemyTeam]);
     const closeOverlay = useCallback(() => {
-        if (overlayWindow) {
-            void import("@tauri-apps/api/core")
-                .then(({ invoke }) => invoke("hide_live_match_overlay"))
-                .catch(() => {});
-            return;
-        }
         setDismissedMatchKey(liveMatchKey(match) || "dismissed");
-    }, [match, overlayWindow]);
+    }, [match]);
 
     useEffect(() => {
         setSelectedPlayer(null);

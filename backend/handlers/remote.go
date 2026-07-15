@@ -3,8 +3,10 @@ package handlers
 import (
 	"backend/riothttp"
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +25,17 @@ import (
 )
 
 const clientPlatform = "ew0KCSJwbGF0Zm9ybVR5cGUiOiAiUEMiLA0KCSJwbGF0Zm9ybU9TIjogIldpbmRvd3MiLA0KCSJwbGF0Zm9ybU9TVmVyc2lvbiI6ICIxMC4wLjE5MDQyLjEuMjU2LjY0Yml0IiwNCgkicGxhdGZvcm1DaGlwc2V0IjogIlVua25vd24iDQp9"
-const riotClientAuthURL = "https://auth.riotgames.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fredirect&client_id=riot-client&response_type=token%20id_token&nonce=1&scope=openid%20link%20ban%20lol_region%20account"
+const riotClientAuthURL = "https://auth.riotgames.com/authorize"
+const riotClientReauthURL = "https://auth.riotgames.com/api/v1/authorization"
+const riotClientReauthUserAgent = "RiotGamesApi/24.3.0.3124 rso-auth (Windows;10;;Home, x64) riot_client/0"
+const oauthAttemptLifetime = 10 * time.Minute
+
+var errRiotLoginRequired = errors.New("Riot login required")
+
+type oauthAttempt struct {
+	Nonce     string
+	ExpiresAt time.Time
+}
 
 // Current Riot client version (as of 2026-06-30). Hard-coded fallback in
 // case the valorant-api.com version endpoint is unreachable. Stale version
@@ -184,6 +197,10 @@ func getRemoteAuthHeaders(r *http.Request) (*remoteAuthHeaders, bool, error) {
 	}, true, nil
 }
 
+func selectedAccountPuuid(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.Header.Get("X-Riot-Selected-Puuid")))
+}
+
 func accessTokenSubject(token string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -290,6 +307,7 @@ type extractedTokens struct {
 	AccessToken  string
 	IDToken      string
 	RefreshToken string
+	State        string
 	ExpiresIn    int
 }
 
@@ -328,14 +346,88 @@ func extractAllTokens(redirectURL string) (*extractedTokens, error) {
 		AccessToken:  accessToken,
 		IDToken:      values.Get("id_token"),
 		RefreshToken: values.Get("refresh_token"),
+		State:        values.Get("state"),
 		ExpiresIn:    expiresIn,
 	}, nil
 }
 
+func randomOAuthValue() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func (h *Handler) newOAuthAttempt() (string, string, error) {
+	state, err := randomOAuthValue()
+	if err != nil {
+		return "", "", err
+	}
+	nonce, err := randomOAuthValue()
+	if err != nil {
+		return "", "", err
+	}
+	now := time.Now()
+	h.oauthMu.Lock()
+	if h.oauthAttempts == nil {
+		h.oauthAttempts = make(map[string]oauthAttempt)
+	}
+	for key, attempt := range h.oauthAttempts {
+		if !attempt.ExpiresAt.After(now) {
+			delete(h.oauthAttempts, key)
+		}
+	}
+	h.oauthAttempts[state] = oauthAttempt{Nonce: nonce, ExpiresAt: now.Add(oauthAttemptLifetime)}
+	h.oauthMu.Unlock()
+	return state, nonce, nil
+}
+
+func (h *Handler) consumeOAuthAttempt(state string) (oauthAttempt, bool) {
+	if state == "" {
+		return oauthAttempt{}, false
+	}
+	h.oauthMu.Lock()
+	defer h.oauthMu.Unlock()
+	attempt, ok := h.oauthAttempts[state]
+	delete(h.oauthAttempts, state)
+	return attempt, ok && attempt.ExpiresAt.After(time.Now())
+}
+
+func jwtStringClaim(token, claim string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims map[string]any
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	value, _ := claims[claim].(string)
+	return value
+}
+
 func (h *Handler) GetAuthUrl(w http.ResponseWriter, r *http.Request) {
+	state, nonce, err := h.newOAuthAttempt()
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	query := url.Values{
+		"redirect_uri":  {"http://localhost/redirect"},
+		"client_id":     {"riot-client"},
+		"response_type": {"token id_token"},
+		"nonce":         {nonce},
+		"state":         {state},
+		"scope":         {"openid link ban lol_region"},
+	}
 	// Standard implicit flow — works for all unofficial/community apps.
 	// offline_access is restricted to officially registered Riot partner apps only.
-	h.returnAny(w, map[string]string{"auth_url": riotClientAuthURL})
+	h.returnAny(w, map[string]string{"auth_url": riotClientAuthURL + "?" + query.Encode()})
 }
 
 func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +439,15 @@ func (h *Handler) PostAuthToken(w http.ResponseWriter, r *http.Request) {
 	tokens, err := extractAllTokens(body.URL)
 	if err != nil {
 		h.returnError(w, err)
+		return
+	}
+	attempt, ok := h.consumeOAuthAttempt(tokens.State)
+	if !ok {
+		h.returnError(w, fmt.Errorf("the Riot login response is missing, expired, or belongs to another login attempt"))
+		return
+	}
+	if nonce := jwtStringClaim(tokens.IDToken, "nonce"); nonce == "" || nonce != attempt.Nonce {
+		h.returnError(w, fmt.Errorf("the Riot login response nonce did not match the login attempt"))
 		return
 	}
 	var entitlements struct {
@@ -392,9 +493,103 @@ type SsidReauthRequest struct {
 	Cookies string `json:"cookies"` // full cookie string e.g. "ssid=xxx; sub=yyy; ..."
 }
 
-// PostSsidReauth silently refreshes tokens using the saved Riot auth cookies (ssid + all).
-// Based on https://valapidocs.techchrism.me/endpoint/cookie-reauth
-// GET auth.riotgames.com/authorize with Cookie header → 302 redirect → access_token in Location fragment
+type riotClientReauthPayload struct {
+	ACRValues           string `json:"acr_values"`
+	Claims              string `json:"claims"`
+	ClientID            string `json:"client_id"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	Nonce               string `json:"nonce"`
+	RedirectURI         string `json:"redirect_uri"`
+	ResponseType        string `json:"response_type"`
+	Scope               string `json:"scope"`
+}
+
+type riotClientReauthResponse struct {
+	Type     string `json:"type"`
+	Response struct {
+		Mode       string `json:"mode"`
+		Parameters struct {
+			URI string `json:"uri"`
+		} `json:"parameters"`
+	} `json:"response"`
+}
+
+func newRiotClientReauthRequest(cookies, nonce string) (*http.Request, error) {
+	payload, err := json.Marshal(riotClientReauthPayload{
+		ClientID:     "riot-client",
+		Nonce:        nonce,
+		RedirectURI:  "http://localhost/redirect",
+		ResponseType: "token id_token",
+		Scope:        "openid link ban lol_region lol summoner offline_access",
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, riotClientReauthURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", riotClientReauthUserAgent)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Cookie", cookies)
+	return req, nil
+}
+
+func parseRiotClientReauth(body []byte, expectedNonce string) (*extractedTokens, error) {
+	var result riotClientReauthResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("invalid Riot reauth response: %w", err)
+	}
+	if result.Type == "auth" {
+		return nil, errRiotLoginRequired
+	}
+	if result.Type != "response" || result.Response.Parameters.URI == "" {
+		return nil, fmt.Errorf("unexpected Riot reauth response type %q", result.Type)
+	}
+	tokens, err := extractAllTokens(result.Response.Parameters.URI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract Riot reauth tokens: %w", err)
+	}
+	if nonce := jwtStringClaim(tokens.IDToken, "nonce"); nonce == "" || nonce != expectedNonce {
+		return nil, fmt.Errorf("Riot reauth returned an unexpected nonce")
+	}
+	return tokens, nil
+}
+
+func requestRiotClientReauth(cookies string) (*extractedTokens, []*http.Cookie, error) {
+	nonce, err := randomOAuthValue()
+	if err != nil {
+		return nil, nil, err
+	}
+	req, err := newRiotClientReauthRequest(cookies, nonce)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Riot cookie reauth request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read Riot reauth response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("Riot cookie reauth returned HTTP %d", resp.StatusCode)
+	}
+	tokens, err := parseRiotClientReauth(responseBody, nonce)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tokens, resp.Cookies(), nil
+}
+
+// PostSsidReauth uses the request shape observed from the Riot Client. A
+// successful response rotates multiple auth cookies, which the caller must
+// persist before the next maintenance refresh.
 func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 	var body SsidReauthRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Cookies == "" {
@@ -404,52 +599,20 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 
 	// Keep the refreshed token on the Riot Client audience. The web-only
 	// audience can identify the player but is rejected by PVP endpoints.
-	req, err := http.NewRequest(http.MethodGet, riotClientAuthURL, nil)
+	tokens, newCookies, err := requestRiotClientReauth(body.Cookies)
+	if errors.Is(err, errRiotLoginRequired) {
+		http.Error(w, `{"error":"login_required","message":"Riot requires this account to sign in again"}`, http.StatusUnauthorized)
+		return
+	}
 	if err != nil {
 		h.returnError(w, err)
 		return
 	}
-	req.Header.Set("Cookie", body.Cookies)
-	req.Header.Set("User-Agent", "RiotClient/60.0.6.4871019.4749393 rso-auth (Windows;10;;Professional, x64)")
-
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // Stop at redirect — token is in Location header
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		h.returnError(w, fmt.Errorf("cookie reauth request failed: %w", err))
-		return
-	}
-	defer resp.Body.Close()
-
-	// Success: 301/302 redirect to playvalorant.com with token in fragment
-	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound {
-		http.Error(w, `{"error":"cookies_expired","message":"Cookies are no longer valid, please log in again"}`, http.StatusUnauthorized)
-		return
-	}
-
-	location := resp.Header.Get("Location")
-	// Failure redirect goes to authenticate.riotgames.com (login page)
-	if strings.Contains(location, "authenticate.riotgames.com") {
-		http.Error(w, `{"error":"cookies_expired","message":"Cookies are no longer valid, please log in again"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Extract access_token from the redirect URI fragment (after #)
-	accessToken, idToken, expiresIn, err := extractTokens(location)
-	if err != nil {
-		h.returnError(w, fmt.Errorf("failed to extract tokens from cookie reauth redirect: %w", err))
-		return
-	}
-
 	// Fetch entitlements with the fresh access_token
 	var entitlements struct {
 		EntitlementsToken string `json:"entitlements_token"`
 	}
-	if err := postJSON("https://entitlements.auth.riotgames.com/api/token/v1", accessToken, []byte("{}"), &entitlements); err != nil {
+	if err := postJSON("https://entitlements.auth.riotgames.com/api/token/v1", tokens.AccessToken, []byte("{}"), &entitlements); err != nil {
 		h.returnError(w, fmt.Errorf("failed to get entitlements: %w", err))
 		return
 	}
@@ -461,7 +624,7 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 			TagLine  string `json:"tag_line"`
 		} `json:"acct"`
 	}
-	if err := getJSON("https://auth.riotgames.com/userinfo", accessToken, &userInfo); err != nil {
+	if err := getJSON("https://auth.riotgames.com/userinfo", tokens.AccessToken, &userInfo); err != nil {
 		h.returnError(w, fmt.Errorf("failed to identify refreshed Riot account: %w", err))
 		return
 	}
@@ -470,19 +633,19 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 			Live string `json:"live"`
 		} `json:"affinities"`
 	}
-	payload, _ := json.Marshal(map[string]string{"id_token": idToken})
-	if err := putJSON("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", accessToken, payload, &geoResult); err != nil {
+	payload, _ := json.Marshal(map[string]string{"id_token": tokens.IDToken})
+	if err := putJSON("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", tokens.AccessToken, payload, &geoResult); err != nil {
 		h.returnError(w, fmt.Errorf("failed to resolve refreshed Riot region: %w", err))
 		return
 	}
 
 	// Merge newly received cookies with old cookies to rotate and maintain the session
-	rotatedCookies := mergeCookies(body.Cookies, resp.Cookies())
+	rotatedCookies := mergeCookies(body.Cookies, newCookies)
 
 	h.returnAny(w, &AuthTokenResponse{
-		AccessToken:       accessToken,
+		AccessToken:       tokens.AccessToken,
 		EntitlementsToken: entitlements.EntitlementsToken,
-		ExpiresIn:         expiresIn,
+		ExpiresIn:         tokens.ExpiresIn,
 		Puuid:             userInfo.Sub,
 		Region:            geoResult.Affinities.Live,
 		GameName:          userInfo.Acct.GameName,
@@ -511,22 +674,32 @@ func mergeCookies(oldCookiesStr string, newCookies []*http.Cookie) string {
 		}
 	}
 
+	now := time.Now()
 	for _, cookie := range newCookies {
-		if cookie.Value != "" {
-			cookieMap[cookie.Name] = cookie.Value
+		if cookie.Name == "" {
+			continue
 		}
+		if cookie.MaxAge < 0 || (!cookie.Expires.IsZero() && cookie.Expires.Before(now)) {
+			delete(cookieMap, cookie.Name)
+			continue
+		}
+		cookieMap[cookie.Name] = cookie.Value
 	}
 
+	names := make([]string, 0, len(cookieMap))
+	for name := range cookieMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	var sb strings.Builder
-	first := true
-	for name, val := range cookieMap {
-		if !first {
+	for index, name := range names {
+		if index > 0 {
 			sb.WriteString("; ")
 		}
 		sb.WriteString(name)
 		sb.WriteString("=")
-		sb.WriteString(val)
-		first = false
+		sb.WriteString(cookieMap[name])
 	}
 	return sb.String()
 }

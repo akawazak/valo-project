@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import { RiotAccount } from "@/lib/types";
 import { useData } from "@/context/DataContext";
@@ -16,6 +16,7 @@ interface AppTopbarProps {
     onOpenSettings: () => void;
     onOpenAccounts: () => void;
     playerCardId?: string;
+    socialControl?: ReactNode;
 }
 
 const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
@@ -34,6 +35,7 @@ export default function AppTopbar({
     onOpenSettings,
     onOpenAccounts,
     playerCardId,
+    socialControl,
 }: AppTopbarProps) {
     const { playerCards } = useData();
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
@@ -129,6 +131,8 @@ export default function AppTopbar({
                             <span className={`profile-status-indicator ${useLocalSso ? isLocalClientActive ? "online" : "waiting" : activeAccount ? "online" : "offline"}`} />
                         </div>
                     </button>
+
+                    {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
 
                     <button type="button" className="topbar-settings-btn" onClick={onOpenSettings} title="Open Settings">
                         <svg className="settings-gear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

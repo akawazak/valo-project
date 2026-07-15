@@ -197,6 +197,7 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 	releaseSecond := make(chan struct{})
 	nameResolutionStarted := make(chan struct{})
 	releaseNameResolution := make(chan struct{})
+	nameResolutionCalls := 0
 	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
 		switch {
 		case strings.Contains(apiURL, "/match-history/"):
@@ -218,8 +219,11 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 			fixture["matchInfo"].(map[string]any)["matchId"] = "progressive-2"
 			return json.Marshal(fixture)
 		case strings.Contains(apiURL, "/name-service/"):
-			close(nameResolutionStarted)
-			<-releaseNameResolution
+			nameResolutionCalls++
+			if nameResolutionCalls == 1 {
+				close(nameResolutionStarted)
+				<-releaseNameResolution
+			}
 			return json.Marshal([]any{})
 		case strings.Contains(apiURL, "/competitiveupdates"):
 			return json.Marshal(map[string]any{
@@ -272,6 +276,72 @@ func TestSyncManagerPublishesCompletedDetailBatchTogether(t *testing.T) {
 	close(releaseNameResolution)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSyncManagerRetriesIncompleteNameResolutionSameRun(t *testing.T) {
+	appDir := t.TempDir()
+	db, err := OpenTrackingDB(appDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const puuid = "retry-name-player"
+	nameRequests := 0
+	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
+		switch {
+		case strings.Contains(apiURL, "/match-history/"):
+			return json.Marshal(map[string]any{
+				"Total":   1,
+				"History": []map[string]any{{"MatchID": "retry-name-match"}},
+			})
+		case strings.Contains(apiURL, "/match-details/v1/matches/retry-name-match"):
+			fixture := matchFixture(puuid)
+			fixture["matchInfo"].(map[string]any)["matchId"] = "retry-name-match"
+			return json.Marshal(fixture)
+		case strings.Contains(apiURL, "/name-service/"):
+			nameRequests++
+			if nameRequests == 1 {
+				return nil, fmt.Errorf("temporary name-service failure")
+			}
+			return json.Marshal([]map[string]any{
+				{"Subject": puuid, "GameName": "Recovered", "TagLine": "ONE"},
+				{"Subject": "enemy", "GameName": "RecoveredEnemy", "TagLine": "TWO"},
+			})
+		case strings.Contains(apiURL, "/competitiveupdates"):
+			return json.Marshal(map[string]any{"Matches": []any{}})
+		default:
+			return nil, fmt.Errorf("unexpected request %s %s", method, apiURL)
+		}
+	}
+
+	manager := NewSyncManager(db, fetch, appDir)
+	if err := manager.runOnce(puuid, "eu", false); err != nil {
+		t.Fatal(err)
+	}
+	if nameRequests != 2 {
+		t.Fatalf("name-service requests = %d, want 2", nameRequests)
+	}
+
+	rows, err := db.Query(`SELECT gameName, tagLine FROM match_players WHERE matchID = ? ORDER BY subject`, "retry-name-match")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var gameName, tagLine string
+		if err := rows.Scan(&gameName, &tagLine); err != nil {
+			t.Fatal(err)
+		}
+		got[gameName] = tagLine
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got["Recovered"] != "ONE" || got["RecoveredEnemy"] != "TWO" {
+		t.Fatalf("resolved identities = %#v", got)
 	}
 }
 
@@ -364,6 +434,23 @@ func TestListCachedMatchesIncludesQueuedPartyMembers(t *testing.T) {
 	if got := matches[0].PartyMembers[0].GameName; got != "Duo" {
 		t.Fatalf("party member name = %q, want Duo", got)
 	}
+	detail, err := GetMatchFromCache(db, "party-match", puuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail == nil || len(detail.Players) != 3 {
+		t.Fatalf("cached detail = %+v, want 3 players", detail)
+	}
+	if len(detail.Rounds) != 1 || detail.Rounds[0].WinningTeam != "Blue" || detail.Rounds[0].PlantSite != "A" {
+		t.Fatalf("cached rounds = %+v, want persisted Blue A-site round", detail.Rounds)
+	}
+	partyIDs := map[string]string{}
+	for _, player := range detail.Players {
+		partyIDs[player.Subject] = player.PartyID
+	}
+	if partyIDs[puuid] != "party-123" || partyIDs["duo-player"] != "party-123" || partyIDs["solo-player"] != "party-999" {
+		t.Fatalf("cached detail party IDs = %#v", partyIDs)
+	}
 	selected, err := ListCachedMatchesFiltered(db, puuid, "swiftplay", "season-1", 0, 10)
 	if err != nil || len(selected) != 1 {
 		t.Fatalf("selected act matches = %d, err = %v; want 1", len(selected), err)
@@ -451,6 +538,15 @@ func matchFixture(puuid string) map[string]any {
 		},
 		"roundResults": []map[string]any{
 			{
+				"roundNum":        0,
+				"winningTeam":     "Blue",
+				"roundResult":     "Bomb defused",
+				"roundCeremony":   "CeremonyDefault",
+				"bombPlanter":     "enemy",
+				"bombDefuser":     puuid,
+				"plantRoundTime":  42000,
+				"plantSite":       "A",
+				"defuseRoundTime": 73000,
 				"playerStats": []map[string]any{
 					{
 						"subject": puuid,
@@ -532,6 +628,18 @@ func matchFixtureWithParty(puuid string) map[string]any {
 					"deaths":       3,
 					"assists":      1,
 				},
+			},
+		},
+		"roundResults": []map[string]any{
+			{
+				"roundNum":      0,
+				"winningTeam":   "Blue",
+				"roundResult":   "Bomb defused",
+				"roundCeremony": "CeremonyDefault",
+				"bombPlanter":   "solo-player",
+				"bombDefuser":   puuid,
+				"plantSite":     "A",
+				"playerStats":   []map[string]any{},
 			},
 		},
 	}

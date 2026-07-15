@@ -726,6 +726,8 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 			BlueWins:         cache.Match.BlueWins == 1,
 		},
 		Players:    make([]tracking.PlayerStats, 0, len(cache.Players)),
+		Kills:      cache.Kills,
+		Rounds:     cache.Rounds,
 		ServedFrom: "cache",
 	}
 	for _, p := range cache.Players {
@@ -772,6 +774,83 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 	return out
 }
 
+// resolveMatchPlayerNames preserves names already cached for the match and fills
+// any remaining gaps through Riot's name service. Match analytics refreshes used
+// to reinsert player rows with nil resolved names, which could erase identities
+// that a previous profile sync had already resolved.
+func resolveMatchPlayerNames(cache *tracking.MatchCache, client *valclient.ValClient, raw []byte) map[string]struct{ Name, Tag string } {
+	resolved := make(map[string]struct{ Name, Tag string })
+	if cache != nil {
+		for _, player := range cache.Players {
+			if strings.TrimSpace(player.GameName) == "" || strings.TrimSpace(player.Subject) == "" {
+				continue
+			}
+			resolved[strings.ToLower(player.Subject)] = struct{ Name, Tag string }{
+				Name: player.GameName,
+				Tag:  player.TagLine,
+			}
+		}
+	}
+
+	var matchPayload struct {
+		Players []struct {
+			Subject        string `json:"subject"`
+			GameName       string `json:"gameName"`
+			PlayerIdentity struct {
+				GameName string `json:"gameName"`
+			} `json:"playerIdentity"`
+		} `json:"players"`
+	}
+	if err := json.Unmarshal(raw, &matchPayload); err != nil {
+		slog.Warn("profile: could not inspect match player identities", "err", err)
+		return resolved
+	}
+
+	missing := make([]string, 0, len(matchPayload.Players))
+	seen := make(map[string]bool)
+	for _, player := range matchPayload.Players {
+		subject := strings.TrimSpace(player.Subject)
+		key := strings.ToLower(subject)
+		if subject == "" || seen[key] || strings.TrimSpace(player.GameName) != "" || strings.TrimSpace(player.PlayerIdentity.GameName) != "" {
+			continue
+		}
+		if cached, ok := resolved[key]; ok && strings.TrimSpace(cached.Name) != "" {
+			continue
+		}
+		seen[key] = true
+		missing = append(missing, subject)
+	}
+	if len(missing) == 0 {
+		return resolved
+	}
+
+	nameURL := fmt.Sprintf("https://pd.%s.a.pvp.net/name-service/v2/players", client.Shard)
+	body, err := runRiotRaw(http.MethodPut, nameURL, client.Header, missing)
+	if err != nil {
+		slog.Warn("profile: match player name resolution failed", "err", err)
+		return resolved
+	}
+	var response []struct {
+		Subject  string `json:"Subject"`
+		GameName string `json:"GameName"`
+		TagLine  string `json:"TagLine"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		slog.Warn("profile: could not parse match player names", "err", err)
+		return resolved
+	}
+	for _, player := range response {
+		if strings.TrimSpace(player.Subject) == "" || strings.TrimSpace(player.GameName) == "" {
+			continue
+		}
+		resolved[strings.ToLower(player.Subject)] = struct{ Name, Tag string }{
+			Name: player.GameName,
+			Tag:  player.TagLine,
+		}
+	}
+	return resolved
+}
+
 // GetProfileMatchDetails — `GET /v1/profile/match-details/:matchID`
 // (design doc §2.6). Returns full match details (from cache, or
 // one-shot live fetch + cache).
@@ -807,6 +886,39 @@ func (h *Handler) GetProfileMatchDetails(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		h.returnError(w, err)
 		return
+	}
+	analyticsRequested := strings.EqualFold(r.URL.Query().Get("analytics"), "true")
+	missingPlayerNames := false
+	if cache != nil {
+		for _, player := range cache.Players {
+			if strings.TrimSpace(player.GameName) == "" {
+				missingPlayerNames = true
+				break
+			}
+		}
+	}
+	if (analyticsRequested && (cache == nil || cache.Match.AnalyticsVersion < 2)) || missingPlayerNames {
+		client, clientErr := h.getClient(r)
+		if clientErr != nil {
+			h.returnError(w, clientErr)
+			return
+		}
+		apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/match-details/v1/matches/%s", client.Shard, url.PathEscape(matchID))
+		raw, fetchErr := runRiotRaw(http.MethodGet, apiURL, client.Header, nil)
+		if fetchErr != nil {
+			h.returnError(w, fmt.Errorf("fetch match analytics: %w", fetchErr))
+			return
+		}
+		resolvedNames := resolveMatchPlayerNames(cache, client, raw)
+		if insertErr := tracking.InsertMatchDetails(db, h.trackingAppDir, matchID, puuid, raw, resolvedNames); insertErr != nil {
+			h.returnError(w, insertErr)
+			return
+		}
+		cache, err = tracking.GetMatchFromCache(db, matchID, puuid)
+		if err != nil {
+			h.returnError(w, err)
+			return
+		}
 	}
 	if cache == nil {
 		// Cache miss: surface a clean 404 JSON instead of an empty

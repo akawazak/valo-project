@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import { useData } from "@/context/DataContext";
+import type { Weapon } from "@/lib/types";
 import {
     getAgentStats,
     getMapStats,
@@ -25,6 +26,7 @@ import {
     type ProfileSyncStatus,
 } from "@/services/api";
 import RRHistoryChart from "./RRHistoryChart";
+import ProfileExtras, { type CareerView } from "./ProfileExtras";
 import s from "./ProfilePanel.module.css";
 
 interface Props {
@@ -41,16 +43,59 @@ interface AgentMeta {
     full?: string;
     role: string;
     roleIcon: string;
+    abilities?: Record<string, { name: string; icon: string }>;
 }
 
-interface PublicAgent { uuid?: string; displayName: string; displayIcon?: string; killfeedPortrait?: string; fullPortrait?: string; role?: { displayName?: string; displayIcon?: string } }
-interface PublicMap { uuid?: string; displayName: string; splash?: string; assetPath?: string; mapUrl?: string }
+interface PublicAgent {
+    uuid?: string;
+    displayName: string;
+    displayIcon?: string;
+    killfeedPortrait?: string;
+    fullPortrait?: string;
+    role?: { displayName?: string; displayIcon?: string };
+    abilities?: Array<{ slot?: string; displayName?: string; displayIcon?: string }>;
+}
+interface PublicMap {
+    uuid?: string;
+    displayName: string;
+    splash?: string;
+    displayIcon?: string;
+    assetPath?: string;
+    mapUrl?: string;
+    xMultiplier?: number;
+    yMultiplier?: number;
+    xScalarToAdd?: number;
+    yScalarToAdd?: number;
+    callouts?: Array<{ regionName?: string; superRegionName?: string; location?: { x?: number; y?: number } }>;
+}
 interface PublicTierSet { tiers?: Array<{ tier?: number; smallIcon?: string }> }
 interface PublicSeason { uuid?: string; displayName?: string; parentUuid?: string; startTime?: string; assetPath?: string }
 interface MapMeta {
     name: string;
     splash: string;
+    displayIcon: string;
     mode: "standard" | "teamdeathmatch" | "other";
+    xMultiplier?: number;
+    yMultiplier?: number;
+    xScalarToAdd?: number;
+    yScalarToAdd?: number;
+    callouts: Array<{ name: string; superRegion: string; x: number; y: number }>;
+}
+
+function mapCalloutLabel(callout: MapMeta["callouts"][number]): string {
+    const region = callout.superRegion.trim();
+    const name = callout.name.trim();
+    if (!region || name.toLowerCase().startsWith(region.toLowerCase())) return name || region || "Map area";
+    return `${region} ${name}`;
+}
+
+function mapZoneLabel(callout: MapMeta["callouts"][number]): string {
+    const region = callout.superRegion.trim().toLowerCase();
+    if (region === "a" || region.startsWith("a ")) return "A Site";
+    if (region === "b" || region.startsWith("b ")) return "B Site";
+    if (region === "c" || region.startsWith("c ")) return "C Site";
+    if (region.includes("mid")) return "Mid";
+    return "Other";
 }
 interface SeasonMeta {
     uuid: string;
@@ -99,7 +144,17 @@ let tierAssetCache: Map<number, { smallIcon: string }> | null = null;
 let agentPromise: Promise<Record<string, AgentMeta>> | null = null;
 let mapPromise: Promise<Record<string, MapMeta>> | null = null;
 let tierPromise: Promise<Map<number, { smallIcon: string }>> | null = null;
-
+interface CachedProfileSnapshot {
+    overview: ProfileOverview;
+    seasonSummary: ProfileSeasonSummary | null;
+    history: ProfileMatchSummary[];
+    total: number;
+    agentStats: ProfileAgentStatsResponse | null;
+    mapStats: ProfileMapStatsResponse | null;
+    syncStatus: ProfileSyncStatus | null;
+    identity: { playerCardId: string; playerTitleId: string } | null;
+}
+const profileSnapshotCache = new Map<string, CachedProfileSnapshot>();
 function tierLabel(tier: number, fallback?: string): string {
     if (!tier || tier <= 0) return "Unranked";
     if (tier >= 27) return "Radiant";
@@ -157,6 +212,10 @@ function fmtPct(n: number | undefined): string {
 function fmtRatio(n: number | undefined): string {
     if (!Number.isFinite(n ?? NaN)) return "--";
     return (n ?? 0).toFixed(2);
+}
+
+function statCount(value: number, singular: string): string {
+    return `${value} ${value === 1 ? singular : `${singular}s`}`;
 }
 
 function fmtAgo(ms: number): string {
@@ -242,6 +301,10 @@ async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
                     full: a.fullPortrait || "",
                     role: a.role?.displayName || "Unknown",
                     roleIcon: a.role?.displayIcon || "",
+                    abilities: Object.fromEntries((a.abilities || []).flatMap((ability) => {
+                        const slot = ability.slot?.trim().toLowerCase();
+                        return slot ? [[slot, { name: ability.displayName || ability.slot || "Ability", icon: ability.displayIcon || "" }]] : [];
+                    })),
                 };
             }
             agentCache = m;
@@ -272,7 +335,23 @@ async function loadMaps(): Promise<Record<string, MapMeta>> {
                     : /\/Maps\/(?:Duel|NPEV2|Poveglia(?:V2)?)\//i.test(assetPath)
                       ? "other"
                       : "standard";
-                const meta = { name: mp.displayName, splash: mp.splash || "", mode };
+                const meta: MapMeta = {
+                    name: mp.displayName,
+                    splash: mp.splash || "",
+                    displayIcon: mp.displayIcon || "",
+                    mode,
+                    xMultiplier: mp.xMultiplier,
+                    yMultiplier: mp.yMultiplier,
+                    xScalarToAdd: mp.xScalarToAdd,
+                    yScalarToAdd: mp.yScalarToAdd,
+                    callouts: (mp.callouts || []).flatMap((callout) => {
+                        const x = callout.location?.x;
+                        const y = callout.location?.y;
+                        return typeof x === "number" && typeof y === "number"
+                            ? [{ name: callout.regionName || "Unknown", superRegion: callout.superRegionName || "", x, y }]
+                            : [];
+                    }),
+                };
                 m[mp.uuid.toLowerCase()] = meta;
                 if (mp.mapUrl) m[mp.mapUrl.toLowerCase()] = meta;
             }
@@ -317,7 +396,7 @@ async function loadTierAssets(): Promise<Map<number, { smallIcon: string }>> {
 }
 
 export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, requestedProfile, onRequestedProfileChange, autoSyncMatches }: Props) {
-    const { activeAccount, playerCards: playerCardAssets, playerTitles: playerTitleAssets } = useData();
+    const { activeAccount, playerCards: playerCardAssets, playerTitles: playerTitleAssets, weapons, allBuddies, sprays, flexes, allAgents: agentAssets, ownedAgentIDs, ownedLevelIDs, ownedBuddyIDs, ownedSprayIDs, ownedCardIDs, ownedTitleIDs } = useData();
     const ownPuuid = activeAccount?.puuid ?? "";
     const viewedProfile = requestedProfile?.puuid && requestedProfile.puuid !== ownPuuid ? requestedProfile : null;
     const puuid = viewedProfile?.puuid || ownPuuid;
@@ -334,6 +413,7 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [agentStats, setAgentStats] = useState<ProfileAgentStatsResponse | null>(null);
     const [mapStats, setMapStats] = useState<ProfileMapStatsResponse | null>(null);
     const [performanceView, setPerformanceView] = useState<"agents" | "maps">("agents");
+    const [careerView, setCareerView] = useState<CareerView | null>(null);
     const [agentRole, setAgentRole] = useState("Duelist");
     const [mapMode, setMapMode] = useState("Standard maps");
     const [syncStatus, setSyncStatus] = useState<ProfileSyncStatus | null>(null);
@@ -346,19 +426,39 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [seasons, setSeasons] = useState<Record<string, SeasonMeta>>({});
     const [loading, setLoading] = useState(false);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyLoaded, setHistoryLoaded] = useState(false);
+    const [overviewLoadedFor, setOverviewLoadedFor] = useState("");
+    const [historyLoadedFor, setHistoryLoadedFor] = useState("");
+    const [committedProfilePuuid, setCommittedProfilePuuid] = useState("");
     const [syncing, setSyncing] = useState(false);
-    const [profileFacadeVisible, setProfileFacadeVisible] = useState(Boolean(puuid));
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
     const [rateLimitUntil, setRateLimitUntil] = useState(0);
     const [rateLimitNow, setRateLimitNow] = useState(0);
     const [identity, setIdentity] = useState<{ playerCardId: string; playerTitleId: string } | null>(null);
-    const [profileHasCachedData, setProfileHasCachedData] = useState(false);
     const playerCards = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), {
         wide: card.wideArt || "",
         icon: card.displayIcon || "",
         name: card.displayName || "",
     }])), [playerCardAssets]);
+    const playerCardImages = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), card.wideArt || card.displayIcon || ""])), [playerCardAssets]);
+    const rewardAssets = useMemo(() => {
+        const assets: Record<string, { name: string; image: string; type: string; owned: boolean }> = {};
+        const ownedLevels = new Set(ownedLevelIDs.map((id) => id.toLowerCase()));
+        const ownedBuddies = new Set(ownedBuddyIDs.map((item) => item.levelId.toLowerCase()));
+        const ownedSprays = new Set(ownedSprayIDs.map((id) => id.toLowerCase()));
+        const ownedCards = new Set(ownedCardIDs.map((id) => id.toLowerCase()));
+        const ownedTitles = new Set(ownedTitleIDs.map((id) => id.toLowerCase()));
+        const ownedAgents = new Set(ownedAgentIDs.map((id) => id.toLowerCase()));
+        playerCardAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon || item.smallArt, type: "Player Card", owned: ownedCards.has(item.uuid.toLowerCase()) }; });
+        playerTitleAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.titleText || item.displayName, image: "", type: "Title", owned: ownedTitles.has(item.uuid.toLowerCase()) }; });
+        sprays.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.fullTransparentIcon || item.fullIcon || item.displayIcon, type: "Spray", owned: ownedSprays.has(item.uuid.toLowerCase()) }; });
+        flexes.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon, type: "Flex", owned: false }; });
+        agentAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon, type: "Agent", owned: ownedAgents.has(item.uuid.toLowerCase()) || item.isBaseContent }; });
+        allBuddies.forEach((buddy) => { const owned = buddy.levels.some((level) => ownedBuddies.has(level.uuid.toLowerCase())); assets[buddy.uuid.toLowerCase()] = { name: buddy.displayName, image: buddy.levels[0]?.displayIcon || "", type: "Gun Buddy", owned }; buddy.levels.forEach((level) => { assets[level.uuid.toLowerCase()] = { name: buddy.displayName, image: level.displayIcon, type: "Gun Buddy", owned: ownedBuddies.has(level.uuid.toLowerCase()) }; }); });
+        weapons.forEach((weapon) => weapon.skins.forEach((skin) => { const owned = skin.levels.some((level) => ownedLevels.has(level.uuid.toLowerCase())); assets[skin.uuid.toLowerCase()] = { name: skin.displayName, image: skin.displayIcon, type: "Weapon Skin", owned }; skin.levels.forEach((level) => { assets[level.uuid.toLowerCase()] = { name: skin.displayName, image: level.displayIcon || skin.displayIcon, type: "Weapon Skin", owned: ownedLevels.has(level.uuid.toLowerCase()) }; }); }));
+        return assets;
+    }, [agentAssets, allBuddies, flexes, ownedAgentIDs, ownedBuddyIDs, ownedCardIDs, ownedLevelIDs, ownedSprayIDs, ownedTitleIDs, playerCardAssets, playerTitleAssets, sprays, weapons]);
     const playerTitles = useMemo(() => Object.fromEntries(playerTitleAssets.map((title) => [
         title.uuid.toLowerCase(),
         title.titleText || title.displayName || "",
@@ -368,8 +468,6 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const autoSyncPuuidRef = useRef("");
     const historyRequestRef = useRef(0);
     const refreshRequestRef = useRef(0);
-    const hasCachedProfileRef = useRef(false);
-    const profileFacadeStartedAtRef = useRef(Date.now());
     const currentPuuidRef = useRef(puuid);
     currentPuuidRef.current = puuid;
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
@@ -439,17 +537,13 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, []);
 
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
-    const markCachedProfile = useCallback((cached: boolean) => {
-        if (!cached) return;
-        hasCachedProfileRef.current = true;
-        setProfileHasCachedData(true);
-    }, []);
     const loadHistory = useCallback(async () => {
         const request = ++historyRequestRef.current;
         const targetPuuid = puuid;
         if (!puuid) {
             setHistory([]);
             setTotal(0);
+            setHistoryLoaded(false);
             return;
         }
         setHistoryLoading(true);
@@ -458,15 +552,14 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             if (request !== historyRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setHistory(matches.matches || []);
             setTotal(matches.total || 0);
-            markCachedProfile(Boolean(matches.total || matches.matches?.length));
-            setDetails({});
-            setExpanded(new Set());
+            setHistoryLoaded(true);
+            setHistoryLoadedFor(targetPuuid);
         } catch (err) {
             if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setError(cleanError(err));
         } finally {
             if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setHistoryLoading(false);
         }
-    }, [markCachedProfile, opts, pageSize, puuid, queue]);
+    }, [opts, pageSize, puuid, queue]);
 
     const refresh = useCallback(async () => {
         const request = ++refreshRequestRef.current;
@@ -499,21 +592,12 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             ]);
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setOverview(ov);
-            markCachedProfile(
-                Boolean(
-                    ov.currentRank?.competitiveTier ||
-                    ov.peakRank?.competitiveTier ||
-                    ov.playerCardId ||
-                    ov.playerTitleId ||
-                    ov.lastDeltas?.length ||
-                    ov.rankActs?.length ||
-                    ov.seasonSummary?.matches,
-                ),
-            );
             setSeasonSummary(ov.seasonSummary);
             setAgentStats(ag);
             setMapStats(mp);
-            setIdentity(ov ? { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" } : null);
+            const nextIdentity = { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" };
+            setIdentity(nextIdentity);
+            setOverviewLoadedFor(targetPuuid);
             if (st?.lastError && st.errorKind !== "rate_limited" && !viewedProfile) setError(cleanError(st.lastError));
         } catch (err) {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
@@ -526,30 +610,31 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 setLoading(false);
             }
         }
-    }, [markCachedProfile, opts, puuid, queue, viewedProfile]);
+    }, [opts, puuid, queue, viewedProfile]);
 
     useEffect(() => {
-        setOverview(null);
-        setSeasonSummary(null);
+        const cached = puuid ? profileSnapshotCache.get(puuid.toLowerCase()) : undefined;
+        setOverview(cached?.overview ?? null);
+        setSeasonSummary(cached?.seasonSummary ?? null);
         setRRHistory(null);
-        setHistory([]);
-        setTotal(0);
-        setAgentStats(null);
-        setMapStats(null);
-        setSyncStatus(null);
-        setIdentity(null);
+        setHistory(cached?.history ?? []);
+        setTotal(cached?.total ?? 0);
+        setHistoryLoaded(Boolean(cached));
+        setAgentStats(cached?.agentStats ?? null);
+        setMapStats(cached?.mapStats ?? null);
+        setSyncStatus(cached?.syncStatus ?? null);
+        setIdentity(cached?.identity ?? null);
+        setOverviewLoadedFor(cached && puuid ? puuid : "");
+        setHistoryLoadedFor(cached && puuid ? puuid : "");
+        setCommittedProfilePuuid(cached && puuid ? puuid : "");
         setDetails({});
         setExpanded(new Set());
         setLoadingDetails(new Set());
         setSyncing(false);
         setError("");
         setRateLimitUntil(0);
-        setProfileHasCachedData(false);
         setLoading(Boolean(puuid));
         setHistoryLoading(Boolean(puuid));
-        profileFacadeStartedAtRef.current = Date.now();
-        setProfileFacadeVisible(Boolean(puuid));
-        hasCachedProfileRef.current = false;
     }, [puuid, viewedProfile]);
 
     useEffect(() => {
@@ -653,7 +738,9 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     if (manual || viewedProfile) setError(cleanError(err));
                 }
             } finally {
-                if (currentPuuidRef.current === targetPuuid) setSyncing(false);
+                if (currentPuuidRef.current === targetPuuid) {
+                    setSyncing(false);
+                }
             }
         },
         [loadHistory, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
@@ -678,9 +765,12 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     // a sync that is already running, and this ref prevents render-driven
     // repeats while the same profile remains open.
     useEffect(() => {
-        if (!autoSyncMatches || !puuid || loading || syncing || !syncStatus) return;
-        if (viewedProfile && profileHasCachedData && syncStatus.errorKind === "rate_limited") {
-            autoSyncPuuidRef.current = puuid;
+        if (!autoSyncMatches || !puuid || loading || syncing) return;
+        if (!syncStatus) {
+            if (autoSyncPuuidRef.current !== puuid) {
+                autoSyncPuuidRef.current = puuid;
+                void runSync(false);
+            }
             return;
         }
         if (syncStatus.inFlight) {
@@ -692,33 +782,33 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             autoSyncPuuidRef.current = puuid;
             void runSync(false);
         }
-    }, [autoSyncMatches, loading, profileHasCachedData, puuid, runSync, syncStatus, syncing, viewedProfile]);
+    }, [autoSyncMatches, loading, puuid, runSync, syncStatus, syncing]);
+
+    const knownShortHistory = historyLoaded
+        && !syncStatus?.inFlight
+        && (syncStatus?.totalMatches ?? total) < 3;
+    const requiredProfileMatches = knownShortHistory ? Math.min(3, total) : 3;
+    const profileSnapshotCandidate = Boolean(puuid)
+        && overviewLoadedFor === puuid
+        && historyLoadedFor === puuid
+        && Boolean(overview)
+        && historyLoaded
+        && history.length >= requiredProfileMatches;
 
     useEffect(() => {
-        const ready =
-            Boolean(overview) ||
-            history.length > 0 ||
-            (!autoSyncMatches && !loading && !historyLoading) ||
-            (
-            autoSyncPuuidRef.current === puuid &&
-            !loading &&
-            !historyLoading &&
-            !syncing &&
-            !syncStatus?.inFlight
-            );
-        if (!ready) return;
-
-        const minimumVisibleMs = 650;
-        const remaining = Math.max(0, minimumVisibleMs - (Date.now() - profileFacadeStartedAtRef.current));
-        const timeout = setTimeout(() => setProfileFacadeVisible(false), remaining);
-        return () => clearTimeout(timeout);
-    }, [autoSyncMatches, history.length, historyLoading, loading, overview, puuid, syncing, syncStatus]);
-
-    useEffect(() => {
-        if (!profileFacadeVisible) return;
-        const timeout = setTimeout(() => setProfileFacadeVisible(false), 8000);
-        return () => clearTimeout(timeout);
-    }, [profileFacadeVisible, puuid]);
+        if (!puuid || !profileSnapshotCandidate || !overview) return;
+        setCommittedProfilePuuid(puuid);
+        profileSnapshotCache.set(puuid.toLowerCase(), {
+            overview,
+            seasonSummary,
+            history,
+            total,
+            agentStats,
+            mapStats,
+            syncStatus,
+            identity,
+        });
+    }, [agentStats, history, identity, mapStats, overview, profileSnapshotCandidate, puuid, seasonSummary, syncStatus, total]);
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
@@ -793,12 +883,18 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         () => groupMapStats(mapStats?.maps ?? [], mapLookup),
         [mapStats, mapLookup],
     );
+    const agentNames = useMemo(() => Object.fromEntries(Object.entries(agents).map(([id, meta]) => [id, meta.name])), [agents]);
+    const mapNames = useMemo(() => Object.fromEntries(Object.entries(maps).map(([id, meta]) => [id, meta.name])), [maps]);
+    const agentVisuals = useMemo(() => Object.fromEntries(Object.entries(agents).map(([id, meta]) => [id, meta.full || meta.icon])), [agents]);
+    const mapVisuals = useMemo(() => Object.fromEntries(Object.entries(maps).map(([id, meta]) => [id, meta.splash])), [maps]);
     const selectedAgentGroup = agentPerformanceGroups.find((group) => group.label === agentRole) || agentPerformanceGroups[0];
     const selectedMapGroup = mapPerformanceGroups.find((group) => group.label === mapMode) || mapPerformanceGroups[0];
 
     const playerCardId = identity?.playerCardId || (!viewedProfile ? ownPlayerCardId : "");
     const cardData = playerCardId ? playerCards[playerCardId.toLowerCase()] : null;
     const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
+    const profileSnapshotFailed = Boolean(error) && !loading && !historyLoading;
+    const showProfileFacade = Boolean(puuid) && committedProfilePuuid !== puuid;
 
     if (!activeAccount) {
         return (
@@ -817,7 +913,9 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         );
     }
 
-    if (profileFacadeVisible) {
+    if (showProfileFacade) {
+        const overviewReady = overviewLoadedFor === puuid;
+        const matchesReady = historyLoadedFor === puuid && historyLoaded && history.length >= requiredProfileMatches;
         return (
             <div className={s.profileFacade} role="status" aria-live="polite">
                 {viewedProfile && (
@@ -826,9 +924,31 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     </button>
                 )}
                 <div className={s.profileFacadeContent}>
-                    <span className={s.profileFacadeSpinner} aria-hidden="true" />
-                    <strong>Loading {viewedProfile?.gameName || activeAccount.gameName || "player"}…</strong>
-                    <small>Fetching recent matches, rank, and RR details.</small>
+                    {profileSnapshotFailed ? (
+                        <>
+                            <span className={s.profileLoadKicker}>PROFILE UNAVAILABLE</span>
+                            <strong>Couldn&apos;t load this profile</strong>
+                            <small>{error}</small>
+                            <button type="button" className={s.profileLoadRetry} onClick={() => { void refresh(); void loadHistory(); }}>
+                                Try again
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <div className={s.profileLoadMark} aria-hidden="true"><i /><i /><i /></div>
+                            <span className={s.profileLoadKicker}>PROFILE SYNC</span>
+                            <strong>{viewedProfile?.gameName || activeAccount.gameName || "Player"}</strong>
+                            <small>Preparing one complete snapshot</small>
+                            <div className={s.profileLoadTrack} aria-hidden="true">
+                                <span className={overviewReady ? s.profileLoadTrackComplete : ""} />
+                                <span className={matchesReady ? s.profileLoadTrackComplete : ""} />
+                            </div>
+                            <div className={s.profileLoadSteps}>
+                                <span className={overviewReady ? s.profileLoadStepComplete : ""}>Rank &amp; identity</span>
+                                <span className={matchesReady ? s.profileLoadStepComplete : ""}>Recent matches</span>
+                            </div>
+                        </>
+                    )}
                 </div>
             </div>
         );
@@ -855,7 +975,6 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 <div className={s.rateLimitPopup} role="alert" aria-live="assertive">
                     <strong>Riot rate limit reached</strong>
                     <span>
-                        {viewedProfile && profileHasCachedData ? "Showing cached live data. " : ""}
                         Profile sync will retry automatically in {Math.max(1, Math.ceil((rateLimitUntil - rateLimitNow) / 1000))}s.
                     </span>
                 </div>
@@ -953,6 +1072,9 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                     {isBusy ? "…" : "Sync"}
                                 </button>
                             </div>
+                            <button className={s.railProgressButton} type="button" onClick={() => setCareerView("progression")}>
+                                <span aria-hidden="true">◇</span> Open XP Center
+                            </button>
                         </div>
                     </div>
                 </aside>
@@ -967,17 +1089,24 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                         title="Season Averages"
                                         subtitle={episodeActLabel || "Current act"}
                                         headerRight={
-                                            <div className={s.seasonQueueTabs} role="group" aria-label="Season average mode">
-                                                {SEASON_QUEUES.map((option) => (
-                                                    <button
-                                                        type="button"
-                                                        key={option.value}
-                                                        className={seasonQueue === option.value ? s.seasonQueueTabActive : ""}
-                                                        onClick={() => setSeasonQueue(option.value)}
-                                                    >
-                                                        {option.label}
-                                                    </button>
-                                                ))}
+                                            <div className={s.seasonHeaderActions}>
+                                                <div className={s.seasonQueueTabs} role="group" aria-label="Season average mode">
+                                                    {SEASON_QUEUES.map((option) => (
+                                                        <button
+                                                            type="button"
+                                                            key={option.value}
+                                                            className={seasonQueue === option.value ? s.seasonQueueTabActive : ""}
+                                                            onClick={() => setSeasonQueue(option.value)}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                <div className={s.profileTools}>
+                                                    <button type="button" onClick={() => setCareerView("analytics")}><span aria-hidden="true">↗</span> Insights</button>
+                                                    <button type="button" onClick={() => setCareerView("progression")}><span aria-hidden="true">◇</span> Battle Pass</button>
+                                                    <button type="button" onClick={() => setCareerView("leaderboard")}><span aria-hidden="true">#</span> Leaderboard</button>
+                                                </div>
                                             </div>
                                         }
                                     >
@@ -1193,7 +1322,10 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                                     loading={loadingDetails.has(match.matchId)}
                                                     agents={agents}
                                                     maps={maps}
+                                                    weapons={weapons}
                                                     tierAssets={tierAssets}
+                                                    profilePuuid={puuid}
+                                                    region={region}
                                                     onToggle={() => toggleDetails(match.matchId)}
                                                     onViewProfile={viewProfile}
                                                 />
@@ -1205,6 +1337,23 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     </div>
                 </main>
             </div>
+            <ProfileExtras
+                view={careerView}
+                onClose={() => setCareerView(null)}
+                puuid={puuid}
+                region={region}
+                seasonId={overview?.currentSeasonId}
+                isOwnProfile={!viewedProfile}
+                matches={history}
+                rr={rrHistory?.snapshots ?? []}
+                agentNames={agentNames}
+                mapNames={mapNames}
+                agentVisuals={agentVisuals}
+                mapVisuals={mapVisuals}
+                playerCardImages={playerCardImages}
+                rewardAssets={rewardAssets}
+                onViewProfile={viewProfile}
+            />
         </div>
     );
 }
@@ -1310,6 +1459,79 @@ function groupMapStats(
     ].filter((group) => group.items.length > 0);
 }
 
+type MatchKillEvent = NonNullable<ProfileMatchDetails["kills"]>[number];
+type MatchDetailPlayer = ProfileMatchDetails["players"][number];
+
+interface DuelFocus {
+    id: string;
+    label: string;
+    events: MatchKillEvent[];
+    index: number;
+}
+
+interface DuelFinisher {
+    name: string;
+    icon: string;
+}
+
+function fightEventKey(event: MatchKillEvent): string {
+    return `${event.roundNum}:${event.gameTime}:${event.killer.toLowerCase()}:${event.victim.toLowerCase()}`;
+}
+
+function MapDuelMarker({
+    point,
+    player,
+    agent,
+    dead,
+    local,
+    finisher,
+    avoidPoint,
+}: {
+    point: { left: number; top: number };
+    player?: MatchDetailPlayer;
+    agent?: AgentMeta;
+    dead: boolean;
+    local: boolean;
+    finisher?: DuelFinisher;
+    avoidPoint?: { left: number; top: number };
+}) {
+    const playerName = local ? "You" : player?.gameName || agent?.name || "Player";
+    const weaponOffset = useMemo(() => {
+        if (!avoidPoint) return { x: 0, y: -27 };
+        const dx = point.left - avoidPoint.left;
+        const dy = point.top - avoidPoint.top;
+        const distance = Math.hypot(dx, dy) || 1;
+        return { x: (dx / distance) * 29, y: (dy / distance) * 29 };
+    }, [avoidPoint, point.left, point.top]);
+    return (
+        <span
+            className={`${s.mapDuelMarker} ${dead ? s.mapDuelMarkerDead : s.mapDuelMarkerKiller} ${local ? s.mapDuelMarkerLocal : ""}`}
+            style={{ left: `${point.left * 100}%`, top: `${point.top * 100}%` }}
+            title={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
+            aria-label={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
+        >
+            {!dead && finisher?.icon ? (
+                <span
+                    className={s.mapDuelWeapon}
+                    title={finisher.name}
+                    style={{ "--weapon-x": `${weaponOffset.x}px`, "--weapon-y": `${weaponOffset.y}px` } as CSSProperties}
+                >
+                    <Image src={finisher.icon} alt={finisher.name} width={48} height={18} unoptimized />
+                </span>
+            ) : null}
+            <span className={s.mapDuelPortrait}>
+                {agent?.icon ? (
+                    <Image src={agent.icon} alt={agent.name} width={42} height={42} unoptimized />
+                ) : (
+                    <b>{(agent?.name || playerName).slice(0, 1)}</b>
+                )}
+                {dead ? <i aria-hidden="true" /> : null}
+            </span>
+            <small>{playerName}</small>
+        </span>
+    );
+}
+
 /* ── Match row with expandable scoreboard ── */
 
 function MatchRow({
@@ -1319,7 +1541,10 @@ function MatchRow({
     loading,
     agents,
     maps,
+    weapons,
     tierAssets,
+    profilePuuid,
+    region,
     onToggle,
     onViewProfile,
 }: {
@@ -1329,10 +1554,17 @@ function MatchRow({
     loading: boolean;
     agents: Record<string, AgentMeta>;
     maps: Record<string, MapMeta>;
+    weapons: Weapon[];
     tierAssets: Map<number, { smallIcon: string }>;
+    profilePuuid: string;
+    region: string;
     onToggle: () => void;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
+    const [activeMatchTab, setActiveMatchTab] = useState<"scoreboard" | "map">("scoreboard");
+    const [loadedAnalytics, setLoadedAnalytics] = useState<ProfileMatchDetails | null>(null);
+    const [analyticsLoading, setAnalyticsLoading] = useState(false);
+    const [analyticsError, setAnalyticsError] = useState("");
     const agentMeta = agents[match.localPlayer.characterId?.toLowerCase?.() || ""];
     const mapMeta = maps[match.mapID?.toLowerCase?.() || ""];
     const agentName = agentMeta?.name || match.localPlayer.characterId?.slice(0, 8) || "Agent";
@@ -1349,12 +1581,41 @@ function MatchRow({
     const ownRounds = blueSide ? match.blueRoundsWon : match.redRoundsWon;
     const enemyRounds = blueSide ? match.redRoundsWon : match.blueRoundsWon;
 
+    const openMapTab = useCallback(async () => {
+        setActiveMatchTab("map");
+        if ((detail?.rounds?.length || 0) > 0 || loadedAnalytics !== null || analyticsLoading) return;
+        setAnalyticsLoading(true);
+        setAnalyticsError("");
+        try {
+            const refreshed = await getProfileMatchDetails(match.matchId, { puuid: profilePuuid, region, analytics: true });
+            setLoadedAnalytics(refreshed);
+        } catch (error) {
+            setAnalyticsError(error instanceof Error ? error.message : "Could not load map events for this match.");
+        } finally {
+            setAnalyticsLoading(false);
+        }
+    }, [analyticsLoading, detail?.rounds?.length, loadedAnalytics, match.matchId, profilePuuid, region]);
+
     const kda = match.localPlayer.kda;
     const hsPct = match.localPlayer.hsPct;
     const adr = Math.round(match.localPlayer.adr || 0);
     const acs = Math.round(match.localPlayer.acs || 0);
     const kdaText = `${match.localPlayer.kills}/${match.localPlayer.deaths}/${match.localPlayer.assists}`;
-    const partyMembers = (match.partyMembers || []).filter((member) => member.subject !== match.localPlayer.subject);
+    const detailedLocalPlayer = detail?.players.find((player) => player.isLocal);
+    const detailedPartyMembers = detailedLocalPlayer?.partyId
+        ? (detail?.players || [])
+            .filter((player) => !player.isLocal && player.partyId === detailedLocalPlayer.partyId)
+            .map((player) => ({
+                subject: player.subject,
+                gameName: player.gameName,
+                tagLine: player.tagLine,
+                characterId: player.characterId,
+                playerCardId: player.playerCardId,
+                playerTitleId: player.playerTitleId,
+            }))
+        : [];
+    const partyMembers = ((match.partyMembers || []).length > 0 ? match.partyMembers || [] : detailedPartyMembers)
+        .filter((member) => member.subject !== match.localPlayer.subject);
     const partyPreview = partyMembers.slice(0, 3);
     const partyLabel = ["SOLO", "DUO", "TRIO", "4-STACK", "5-STACK"][Math.min(4, partyMembers.length)];
     const partyNames = partyMembers
@@ -1367,7 +1628,10 @@ function MatchRow({
 
     return (
         <div className={`${s.matchWrap} ${expanded ? s.matchWrapExpanded : ""}`}>
-            <button type="button" className={`${s.matchRow} ${match.win ? s.matchRowWin : s.matchRowLoss}`} onClick={onToggle} aria-expanded={expanded}>
+            <button type="button" className={`${s.matchRow} ${match.win ? s.matchRowWin : s.matchRowLoss}`} onClick={() => {
+                if (!expanded) setActiveMatchTab("scoreboard");
+                onToggle();
+            }} aria-expanded={expanded}>
                 <div className={s.matchResultBlock}>
                     <div className={s.matchResultTop}>
                         <span className={`${s.matchResultText} ${resultClass}`}>{match.win ? "WIN" : "LOSS"}</span>
@@ -1491,7 +1755,7 @@ function MatchRow({
             {expanded && createPortal(
                 <div className={s.matchModalBackdrop} role="presentation" onMouseDown={onToggle}>
                     <section
-                        className={s.matchModal}
+                        className={`${s.matchModal} ${match.win ? s.matchModalWin : s.matchModalLoss}`}
                         role="dialog"
                         aria-modal="true"
                         aria-label={`${mapName} match details`}
@@ -1509,16 +1773,50 @@ function MatchRow({
                             </div>
                             <div className={s.matchModalScore}>
                                 <strong className={match.win ? s.winText : s.lossText}>{ownRounds}</strong>
-                                <span>:</span>
+                                <span>-</span>
                                 <strong>{enemyRounds}</strong>
                             </div>
                             <button type="button" className={s.matchModalClose} onClick={onToggle} aria-label="Close match details">×</button>
                         </header>
+                        <nav className={s.matchDetailTabs} aria-label="Match detail views">
+                            <button
+                                type="button"
+                                className={activeMatchTab === "scoreboard" ? s.matchDetailTabActive : ""}
+                                onClick={() => setActiveMatchTab("scoreboard")}
+                            >
+                                Scoreboard
+                            </button>
+                            <button
+                                type="button"
+                                className={activeMatchTab === "map" ? s.matchDetailTabActive : ""}
+                                onClick={openMapTab}
+                            >
+                                Map
+                            </button>
+                        </nav>
                         <div className={s.matchModalBody}>
                             {loading ? (
                                 <div className={s.placeholder}>Loading scoreboard…</div>
                             ) : detail ? (
-                                <Scoreboard detail={detail} agents={agents} tierAssets={tierAssets} onViewProfile={onViewProfile} />
+                                activeMatchTab === "scoreboard" ? (
+                                    <Scoreboard
+                                        detail={detail}
+                                        partyMembers={partyMembers}
+                                        agents={agents}
+                                        tierAssets={tierAssets}
+                                        onViewProfile={onViewProfile}
+                                    />
+                                ) : (
+                                    <MatchMapAnalytics
+                                        detail={loadedAnalytics ?? detail}
+                                        kills={loadedAnalytics?.kills ?? detail.kills ?? []}
+                                        map={mapMeta}
+                                        agents={agents}
+                                        weapons={weapons}
+                                        loading={analyticsLoading}
+                                        error={analyticsError}
+                                    />
+                                )
                             ) : (
                                 <div className={s.placeholder}>No details cached for this match.</div>
                             )}
@@ -1531,22 +1829,729 @@ function MatchRow({
     );
 }
 
+function MatchMapAnalytics({
+    detail,
+    kills,
+    map,
+    agents,
+    weapons,
+    loading,
+    error,
+}: {
+    detail: ProfileMatchDetails;
+    kills: MatchKillEvent[];
+    map?: MapMeta;
+    agents: Record<string, AgentMeta>;
+    weapons: Weapon[];
+    loading: boolean;
+    error: string;
+}) {
+    const [filter, setFilter] = useState<"all" | "kill" | "death">("all");
+    const [focusedArea, setFocusedArea] = useState<string | null>(null);
+    const [focusedZone, setFocusedZone] = useState<string | null>(null);
+    const [hoveredZone, setHoveredZone] = useState<string | null>(null);
+    const [duelFocus, setDuelFocus] = useState<DuelFocus | null>(null);
+    const analysis = useMemo(() => {
+        const localPlayer = detail.players.find((player) => player.isLocal);
+        const localSubject = localPlayer?.subject.toLowerCase() || "";
+        const localTeam = localPlayer?.teamId.toLowerCase() || "";
+        const playerTeamBySubject = new Map(
+            detail.players.map((player) => [player.subject.toLowerCase(), player.teamId.toLowerCase()]),
+        );
+        const roundWinnerByNumber = new Map(
+            (detail.rounds || [])
+                .filter((round) => round.winningTeam)
+                .map((round) => [round.roundNum, round.winningTeam.toLowerCase()]),
+        );
+        const localWonRound = (roundNum: number) => {
+            const winner = roundWinnerByNumber.get(roundNum);
+            return winner ? winner === localTeam : null;
+        };
+        const points: Array<{ type: "kill" | "death"; x: number; y: number; round: number; gameTime: number; event: MatchKillEvent }> = [];
+        for (const event of kills) {
+            if (event.killer.toLowerCase() === localSubject) {
+                points.push({ type: "kill", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, event });
+            }
+            if (event.victim.toLowerCase() === localSubject) {
+                points.push({ type: "death", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, event });
+            }
+        }
+
+        const firstByRound = new Map<number, MatchKillEvent>();
+        for (const event of kills) {
+            const current = firstByRound.get(event.roundNum);
+            if (!current || event.gameTime < current.gameTime) firstByRound.set(event.roundNum, event);
+        }
+        let openingWins = 0;
+        let openingLosses = 0;
+        for (const event of firstByRound.values()) {
+            if (event.killer.toLowerCase() === localSubject) openingWins += 1;
+            if (event.victim.toLowerCase() === localSubject) openingLosses += 1;
+        }
+
+        const nearestCallout = (x: number, y: number) => {
+            let nearest: MapMeta["callouts"][number] | undefined;
+            let nearestDistance = Number.POSITIVE_INFINITY;
+            for (const callout of map?.callouts || []) {
+                const distance = (callout.x - x) ** 2 + (callout.y - y) ** 2;
+                if (distance < nearestDistance) {
+                    nearest = callout;
+                    nearestDistance = distance;
+                }
+            }
+            return nearest
+                ? { area: mapCalloutLabel(nearest), zone: mapZoneLabel(nearest) }
+                : { area: "Map area", zone: "Other" };
+        };
+
+        const openingEvents = [...firstByRound.values()]
+            .filter((event) => event.killer.toLowerCase() === localSubject || event.victim.toLowerCase() === localSubject)
+            .map((event) => ({
+                result: event.killer.toLowerCase() === localSubject ? "win" as const : "loss" as const,
+                roundNum: event.roundNum,
+                round: event.roundNum + 1,
+                teamWon: localWonRound(event.roundNum),
+                x: event.victimX,
+                y: event.victimY,
+                event,
+                ...nearestCallout(event.victimX, event.victimY),
+            }))
+            .sort((a, b) => a.round - b.round);
+
+        const localDeaths = kills
+            .filter((event) => event.victim.toLowerCase() === localSubject)
+            .sort((a, b) => a.gameTime - b.gameTime);
+        const tradedDeaths = localDeaths.filter((death) => kills.some((event) => (
+            event.roundNum === death.roundNum
+            && event.roundTime >= death.roundTime
+            && event.roundTime - death.roundTime <= 5_000
+            && event.victim.toLowerCase() === death.killer.toLowerCase()
+            && playerTeamBySubject.get(event.killer.toLowerCase()) === localTeam
+        ))).length;
+        const tradePoint = localDeaths[0]
+            ? { x: localDeaths[0].victimX, y: localDeaths[0].victimY, ...nearestCallout(localDeaths[0].victimX, localDeaths[0].victimY) }
+            : null;
+
+        const locatedPoints = points.map((point) => ({ ...point, ...nearestCallout(point.x, point.y) }));
+        const hotspotMap = new Map<string, { name: string; kills: number; deaths: number; killRounds: number[]; deathRounds: number[]; killXTotal: number; killYTotal: number; deathXTotal: number; deathYTotal: number }>();
+        const zoneMap = new Map<string, { name: string; focusZone: string; focusArea: string; kills: number; deaths: number; xTotal: number; yTotal: number; count: number; rounds: Set<number> }>();
+        for (const point of locatedPoints) {
+            const name = point.area;
+            const hotspot = hotspotMap.get(name) || { name, kills: 0, deaths: 0, killRounds: [], deathRounds: [], killXTotal: 0, killYTotal: 0, deathXTotal: 0, deathYTotal: 0 };
+            hotspot[point.type === "kill" ? "kills" : "deaths"] += 1;
+            hotspot[point.type === "kill" ? "killRounds" : "deathRounds"].push(point.round + 1);
+            hotspot[point.type === "kill" ? "killXTotal" : "deathXTotal"] += point.x;
+            hotspot[point.type === "kill" ? "killYTotal" : "deathYTotal"] += point.y;
+            hotspotMap.set(name, hotspot);
+
+            const zoneName = point.zone === "Other" ? point.area : point.zone;
+            const zone = zoneMap.get(zoneName) || {
+                name: zoneName,
+                focusZone: point.zone === "Other" ? "" : point.zone,
+                focusArea: point.zone === "Other" ? point.area : "",
+                kills: 0,
+                deaths: 0,
+                xTotal: 0,
+                yTotal: 0,
+                count: 0,
+                rounds: new Set<number>(),
+            };
+            zone[point.type === "kill" ? "kills" : "deaths"] += 1;
+            zone.xTotal += point.x;
+            zone.yTotal += point.y;
+            zone.count += 1;
+            zone.rounds.add(point.round);
+            zoneMap.set(zoneName, zone);
+        }
+
+        const hotspots = [...hotspotMap.values()]
+            .sort((a, b) => (b.kills + b.deaths) - (a.kills + a.deaths));
+        const killSpots = hotspots.filter((area) => area.kills > 0).sort((a, b) => b.kills - a.kills || a.killRounds[0] - b.killRounds[0]);
+        const deathSpots = hotspots.filter((area) => area.deaths > 0).sort((a, b) => b.deaths - a.deaths || a.deathRounds[0] - b.deathRounds[0]);
+        const zoneOrder = new Map([["A Site", 0], ["B Site", 1], ["C Site", 2], ["Mid", 3], ["Other", 4]]);
+        const zones = [...zoneMap.values()]
+            .filter((zone) => zone.kills + zone.deaths > 0)
+            .map((zone) => {
+                const decidedRounds = [...zone.rounds].filter((roundNum) => localWonRound(roundNum) !== null);
+                return {
+                    ...zone,
+                    decidedRounds: decidedRounds.length,
+                    roundWins: decidedRounds.filter((roundNum) => localWonRound(roundNum) === true).length,
+                };
+            })
+            .sort((a, b) => (zoneOrder.get(a.name) ?? 9) - (zoneOrder.get(b.name) ?? 9));
+
+        return {
+            points: locatedPoints,
+            kills: locatedPoints.filter((point) => point.type === "kill").length,
+            deaths: locatedPoints.filter((point) => point.type === "death").length,
+            openingWins,
+            openingLosses,
+            openingEvents,
+            localSubject,
+            localTeam,
+            localDeaths,
+            tradedDeaths,
+            tradePoint,
+            zones,
+            killSpot: killSpots.find((spot) => spot.kills >= 2) || null,
+            deathSpot: deathSpots.find((spot) => spot.deaths >= 2) || null,
+        };
+    }, [detail.players, detail.rounds, kills, map?.callouts]);
+
+    const canPlot = Boolean(
+        map?.displayIcon
+        && typeof map.xMultiplier === "number"
+        && typeof map.yMultiplier === "number"
+        && typeof map.xScalarToAdd === "number"
+        && typeof map.yScalarToAdd === "number",
+    );
+    const visiblePoints = analysis.points.filter((point) => {
+        if (filter !== "all" && point.type !== filter) return false;
+        if (focusedZone && point.zone !== focusedZone) return false;
+        if (focusedArea && point.area !== focusedArea) return false;
+        return true;
+    });
+    const playerBySubject = useMemo(
+        () => new Map(detail.players.map((player) => [player.subject.toLowerCase(), player])),
+        [detail.players],
+    );
+    const weaponById = useMemo(
+        () => new Map(weapons.map((weapon) => [weapon.uuid.toLowerCase(), weapon])),
+        [weapons],
+    );
+    const selectDuelGroup = useCallback((id: string, label: string, events: MatchKillEvent[]) => {
+        const uniqueEvents = [...new Map(events.map((event) => [fightEventKey(event), event])).values()]
+            .sort((a, b) => a.roundNum - b.roundNum || a.gameTime - b.gameTime);
+        if (!uniqueEvents.length) return;
+        setFilter("all");
+        setFocusedArea(null);
+        setFocusedZone(null);
+        setDuelFocus((current) => current?.id === id ? null : { id, label, events: uniqueEvents, index: 0 });
+    }, []);
+    const selectedFight = duelFocus?.events[duelFocus.index] || null;
+    const duelData = useMemo(() => {
+        if (!selectedFight || !canPlot || !map) return null;
+        const toPlotPoint = (x: number, y: number) => ({
+            left: Math.max(0, Math.min(1, y * map.xMultiplier! + map.xScalarToAdd!)),
+            top: Math.max(0, Math.min(1, x * map.yMultiplier! + map.yScalarToAdd!)),
+        });
+        const killerSubject = selectedFight.killer.toLowerCase();
+        const victimSubject = selectedFight.victim.toLowerCase();
+        const killerLocation = selectedFight.playerLocations?.find((location) => location.subject?.toLowerCase() === killerSubject);
+        const killerPlayer = playerBySubject.get(killerSubject);
+        const victimPlayer = playerBySubject.get(victimSubject);
+        const damageItemKey = selectedFight.damageItem?.trim().toLowerCase() || "";
+        const weapon = damageItemKey ? weaponById.get(damageItemKey) : undefined;
+        const killerAgent = agents[killerPlayer?.characterId?.toLowerCase() || ""];
+        const isAbility = selectedFight.damageType?.toLowerCase().includes("ability");
+        const ability = isAbility ? killerAgent?.abilities?.[damageItemKey] : undefined;
+        const finisher: DuelFinisher | undefined = isAbility
+            ? ability?.icon ? { name: ability.name, icon: ability.icon } : undefined
+            : damageItemKey ? {
+                name: weapon?.displayName || "Weapon",
+                icon: weapon?.displayIcon || `https://media.valorant-api.com/weapons/${damageItemKey}/displayicon.png`,
+            } : undefined;
+        const localDeath = victimSubject === analysis.localSubject;
+        const roundWinner = (detail.rounds || []).find((round) => round.roundNum === selectedFight.roundNum)?.winningTeam.toLowerCase();
+        const roundWon = roundWinner ? roundWinner === analysis.localTeam : null;
+        const locatedFight = analysis.points.find((point) => fightEventKey(point.event) === fightEventKey(selectedFight));
+        return {
+            killerPlayer,
+            victimPlayer,
+            killerAgent,
+            victimAgent: agents[victimPlayer?.characterId?.toLowerCase() || ""],
+            killerPoint: killerLocation ? toPlotPoint(killerLocation.x, killerLocation.y) : null,
+            victimPoint: toPlotPoint(selectedFight.victimX, selectedFight.victimY),
+            finisher,
+            localDeath,
+            roundWon,
+            area: locatedFight?.area || "Map area",
+        };
+    }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, map, playerBySubject, selectedFight, weaponById]);
+
+    const zoneRegions = useMemo(() => {
+        if (!canPlot || !map) return [];
+        const groups = new Map<string, Array<{ left: number; top: number }>>();
+        for (const callout of map.callouts) {
+            const zone = mapZoneLabel(callout);
+            if (zone === "Other") continue;
+            const left = Math.max(0, Math.min(1, callout.y * map.xMultiplier! + map.xScalarToAdd!));
+            const top = Math.max(0, Math.min(1, callout.x * map.yMultiplier! + map.yScalarToAdd!));
+            const points = groups.get(zone) || [];
+            points.push({ left, top });
+            groups.set(zone, points);
+        }
+        return [...groups.entries()].map(([name, points]) => {
+            let left = Math.min(...points.map((point) => point.left)) - 0.035;
+            let right = Math.max(...points.map((point) => point.left)) + 0.035;
+            let top = Math.min(...points.map((point) => point.top)) - 0.035;
+            let bottom = Math.max(...points.map((point) => point.top)) + 0.035;
+            const minSize = 0.15;
+            if (right - left < minSize) {
+                const center = (left + right) / 2;
+                left = center - minSize / 2;
+                right = center + minSize / 2;
+            }
+            if (bottom - top < minSize) {
+                const center = (top + bottom) / 2;
+                top = center - minSize / 2;
+                bottom = center + minSize / 2;
+            }
+            left = Math.max(0, left);
+            right = Math.min(1, right);
+            top = Math.max(0, top);
+            bottom = Math.min(1, bottom);
+            return { name, left, top, width: right - left, height: bottom - top };
+        });
+    }, [canPlot, map]);
+    const strongestZone = analysis.zones.filter((zone) => zone.kills + zone.deaths > 0).sort((a, b) => {
+        const aRate = a.kills / Math.max(1, a.deaths);
+        const bRate = b.kills / Math.max(1, b.deaths);
+        return bRate - aRate || (b.kills + b.deaths) - (a.kills + a.deaths);
+    })[0];
+    const weakestZone = analysis.zones
+        .filter((zone) => zone.deaths > zone.kills)
+        .sort((a, b) => (b.deaths - b.kills) - (a.deaths - a.kills) || b.deaths - a.deaths)[0];
+    const reviewNotes: Array<{ id: string; tone: "good" | "danger" | "neutral"; kicker: string; label: string; copy: string; x: number; y: number; events: MatchKillEvent[] }> = [];
+    const openingKillsWithOutcome = analysis.openingEvents.filter((event) => event.result === "win" && event.teamWon !== null);
+    if (openingKillsWithOutcome.length) {
+        const converted = openingKillsWithOutcome.filter((event) => event.teamWon).length;
+        const conversion = Math.round((converted / openingKillsWithOutcome.length) * 100);
+        const representative = openingKillsWithOutcome[0];
+        reviewNotes.push({
+            id: "opening-advantage",
+            tone: conversion >= 60 ? "good" : conversion < 50 ? "danger" : "neutral",
+            kicker: "Opening advantage",
+            label: `${conversion}% round conversion`,
+            copy: `Your team won ${converted} of ${openingKillsWithOutcome.length} rounds after you got the first kill.`,
+            x: representative.x,
+            y: representative.y,
+            events: openingKillsWithOutcome.map((event) => event.event),
+        });
+    }
+    const openingDeathsWithOutcome = analysis.openingEvents.filter((event) => event.result === "loss" && event.teamWon !== null);
+    if (openingDeathsWithOutcome.length) {
+        const recovered = openingDeathsWithOutcome.filter((event) => event.teamWon).length;
+        const recovery = Math.round((recovered / openingDeathsWithOutcome.length) * 100);
+        const representative = openingDeathsWithOutcome[0];
+        reviewNotes.push({
+            id: "opening-death",
+            tone: recovery >= 50 ? "good" : "danger",
+            kicker: "After first death",
+            label: `${recovery}% round recovery`,
+            copy: `Your team recovered ${recovered} of ${openingDeathsWithOutcome.length} rounds after you died first.`,
+            x: representative.x,
+            y: representative.y,
+            events: openingDeathsWithOutcome.map((event) => event.event),
+        });
+    }
+    if (analysis.deathSpot) {
+        const spot = analysis.deathSpot;
+        const rounds = [...new Set(spot.deathRounds)];
+        const localTeam = detail.players.find((player) => player.isLocal)?.teamId.toLowerCase() || "";
+        const winners = new Map((detail.rounds || []).map((round) => [round.roundNum + 1, round.winningTeam.toLowerCase()]));
+        const decidedRounds = rounds.filter((round) => winners.get(round));
+        const lostRounds = decidedRounds.filter((round) => winners.get(round) !== localTeam).length;
+        reviewNotes.push({
+            id: `repeat-death-${spot.name}`,
+            tone: "danger",
+            kicker: "Repeat location",
+            label: decidedRounds.length ? `${lostRounds} of ${decidedRounds.length} rounds lost` : `${spot.deaths} deaths at ${spot.name}`,
+            copy: decidedRounds.length
+                ? `You died at ${spot.name} ${spot.deaths} times. Your team lost ${lostRounds} of the affected rounds.`
+                : `${statCount(spot.deaths, "death")} in ${rounds.length === 1 ? `Round ${rounds[0]}` : `Rounds ${rounds.join(", ")}`}.`,
+            x: spot.deathXTotal / Math.max(1, spot.deaths),
+            y: spot.deathYTotal / Math.max(1, spot.deaths),
+            events: analysis.points.filter((point) => point.type === "death" && point.area === spot.name).map((point) => point.event),
+        });
+    }
+    if (analysis.tradePoint && analysis.deaths > 0) {
+        const tradeRate = analysis.tradedDeaths / analysis.deaths;
+        reviewNotes.push({
+            id: "trade-timing",
+            tone: tradeRate >= 0.6 ? "good" : tradeRate < 0.35 ? "danger" : "neutral",
+            kicker: "Trade timing",
+            label: `${analysis.tradedDeaths} of ${analysis.deaths} deaths traded`,
+            copy: `A teammate eliminated your killer within 5 seconds after ${analysis.tradedDeaths} of your deaths.`,
+            x: analysis.tradePoint.x,
+            y: analysis.tradePoint.y,
+            events: analysis.localDeaths,
+        });
+    } else if (weakestZone && weakestZone.name !== strongestZone?.name) {
+        reviewNotes.push({
+            id: `area-result-${weakestZone.name}`,
+            tone: "danger",
+            kicker: "Area result",
+            label: `${weakestZone.name}: ${weakestZone.kills}-${weakestZone.deaths}`,
+            copy: weakestZone.decidedRounds
+                ? `Your team won ${weakestZone.roundWins} of ${weakestZone.decidedRounds} rounds with one of your fights here.`
+                : `${statCount(weakestZone.kills, "kill")} and ${statCount(weakestZone.deaths, "death")} were recorded here.`,
+            x: weakestZone.xTotal / Math.max(1, weakestZone.count),
+            y: weakestZone.yTotal / Math.max(1, weakestZone.count),
+            events: analysis.points.filter((point) => (point.zone === "Other" ? point.area : point.zone) === weakestZone.name).map((point) => point.event),
+        });
+    }
+    if (strongestZone) {
+        reviewNotes.push({
+            id: `strongest-area-${strongestZone.name}`,
+            tone: "good",
+            kicker: "Strongest area",
+            label: `${strongestZone.name}: ${strongestZone.kills}-${strongestZone.deaths}`,
+            copy: strongestZone.decidedRounds
+                ? `Your team won ${strongestZone.roundWins} of ${strongestZone.decidedRounds} rounds with one of your fights here.`
+                : `${statCount(strongestZone.kills, "kill")} and ${statCount(strongestZone.deaths, "death")} were recorded here.`,
+            x: strongestZone.xTotal / Math.max(1, strongestZone.count),
+            y: strongestZone.yTotal / Math.max(1, strongestZone.count),
+            events: analysis.points.filter((point) => (point.zone === "Other" ? point.area : point.zone) === strongestZone.name).map((point) => point.event),
+        });
+    }
+
+    if (loading) {
+        return <div className={s.mapAnalyticsEmpty}>Loading this match&apos;s map events...</div>;
+    }
+    if (error) {
+        return <div className={s.mapAnalyticsEmpty}>{error}</div>;
+    }
+    if (!kills.length) {
+        return <div className={s.mapAnalyticsEmpty}>No positional events were returned for this match.</div>;
+    }
+    if (!analysis.points.length) {
+        return <div className={s.mapAnalyticsEmpty}>This match has no mapped fights involving you.</div>;
+    }
+
+    return (
+        <section className={s.mapAnalytics}>
+            <div className={s.mapAnalyticsLayout}>
+                <div className={s.mapPlotPanel}>
+                    <div className={s.mapPlotToolbar}>
+                        <strong>
+                            {duelFocus && selectedFight && duelData
+                                ? `Fight detail · R${selectedFight.roundNum + 1} · ${duelData.area}`
+                                : map?.name || "Map"}
+                        </strong>
+                        {duelFocus ? (
+                            <div className={s.mapDuelControls} aria-label="Selected duel controls">
+                                <span>{duelFocus.label}</span>
+                            </div>
+                        ) : (
+                            <div className={s.mapPlotFilters} aria-label="Map event filter">
+                                {(["all", "kill", "death"] as const).map((value) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        className={filter === value ? s.mapPlotFilterActive : ""}
+                                        onClick={() => {
+                                            setDuelFocus(null);
+                                            setFilter(value);
+                                            setFocusedArea(null);
+                                            setFocusedZone(null);
+                                        }}
+                                    >
+                                        {value === "all" ? "All" : value === "kill" ? "Kills" : "Deaths"}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    {canPlot ? (
+                        <div className={s.mapPlot}>
+                            <Image src={map!.displayIcon} alt={`${map!.name} minimap`} width={640} height={640} unoptimized className={s.mapPlotImage} draggable={false} />
+                            {!selectedFight && zoneRegions.map((region) => {
+                                const fights = analysis.zones.find((zone) => zone.name === region.name);
+                                const count = (fights?.kills || 0) + (fights?.deaths || 0);
+                                const isActive = focusedZone === region.name || hoveredZone === region.name;
+                                return (
+                                    <span
+                                        key={region.name}
+                                        className={`${s.mapZoneRegion} ${isActive ? s.mapZoneRegionActive : ""}`}
+                                        data-zone={region.name.startsWith("A") ? "A" : region.name.startsWith("B") ? "B" : region.name.startsWith("C") ? "C" : "M"}
+                                        style={{
+                                            left: `${region.left * 100}%`,
+                                            top: `${region.top * 100}%`,
+                                            width: `${region.width * 100}%`,
+                                            height: `${region.height * 100}%`,
+                                        }}
+                                        aria-hidden="true"
+                                    >
+                                        <strong>{region.name}</strong>
+                                        <small>{count} {count === 1 ? "fight" : "fights"}</small>
+                                    </span>
+                                );
+                            })}
+                            {map!.callouts.map((callout, index) => {
+                                const left = Math.max(0, Math.min(1, callout.y * map!.xMultiplier! + map!.xScalarToAdd!));
+                                const top = Math.max(0, Math.min(1, callout.x * map!.yMultiplier! + map!.yScalarToAdd!));
+                                return (
+                                    <span
+                                        key={`${callout.superRegion}-${callout.name}-${index}`}
+                                        className={`${s.mapCallout} ${(focusedArea === mapCalloutLabel(callout) || focusedZone === mapZoneLabel(callout) || hoveredZone === mapZoneLabel(callout)) ? s.mapCalloutFocused : ""}`}
+                                        style={{ left: `${left * 100}%`, top: `${top * 100}%` }}
+                                    >
+                                        {mapCalloutLabel(callout)}
+                                    </span>
+                                );
+                            })}
+                            {!selectedFight && visiblePoints.map((point, index) => {
+                                const left = Math.max(0, Math.min(1, point.y * map!.xMultiplier! + map!.xScalarToAdd!));
+                                const top = Math.max(0, Math.min(1, point.x * map!.yMultiplier! + map!.yScalarToAdd!));
+                                return (
+                                    <span
+                                        key={`${point.round}-${point.gameTime}-${point.type}-${index}`}
+                                        className={`${s.mapEvent} ${point.type === "kill" ? s.mapEventKill : s.mapEventDeath}`}
+                                        style={{ left: `${left * 100}%`, top: `${top * 100}%` }}
+                                        title={`${point.type === "kill" ? "Kill" : "Death"}, round ${point.round + 1}`}
+                                    >
+                                        <i className={s.mapHeat} aria-hidden="true" />
+                                        <b className={s.mapPoint} aria-hidden="true" />
+                                    </span>
+                                );
+                            })}
+                            {selectedFight && duelData ? (
+                                <>
+                                    {duelData.killerPoint ? (
+                                        <svg className={`${s.mapDuelLine} ${duelData.localDeath ? s.mapDuelLineDeath : s.mapDuelLineKill}`} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                                            <line
+                                                x1={duelData.killerPoint.left * 100}
+                                                y1={duelData.killerPoint.top * 100}
+                                                x2={duelData.victimPoint.left * 100}
+                                                y2={duelData.victimPoint.top * 100}
+                                            />
+                                            <line
+                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15}
+                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15}
+                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15}
+                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15}
+                                            />
+                                            <line
+                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15}
+                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15}
+                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15}
+                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15}
+                                            />
+                                        </svg>
+                                    ) : null}
+                                    {duelData.killerPoint ? (
+                                        <MapDuelMarker
+                                            point={duelData.killerPoint}
+                                            player={duelData.killerPlayer}
+                                            agent={duelData.killerAgent}
+                                            dead={false}
+                                            local={selectedFight.killer.toLowerCase() === analysis.localSubject}
+                                            finisher={duelData.finisher}
+                                            avoidPoint={duelData.victimPoint}
+                                        />
+                                    ) : null}
+                                    <MapDuelMarker
+                                        point={duelData.victimPoint}
+                                        player={duelData.victimPlayer}
+                                        agent={duelData.victimAgent}
+                                        dead
+                                        local={selectedFight.victim.toLowerCase() === analysis.localSubject}
+                                    />
+                                </>
+                            ) : null}
+                        </div>
+                    ) : (
+                        <div className={s.mapAnalyticsEmpty}>This map does not provide minimap coordinate metadata.</div>
+                    )}
+                    {duelFocus ? (
+                        <div className={s.mapDuelNavigator} aria-label="Choose a fight to display">
+                            <span>Fight <b>{String(duelFocus.index + 1).padStart(2, "0")}</b><i>/ {String(duelFocus.events.length).padStart(2, "0")}</i></span>
+                            <div className={s.mapDuelRounds}>
+                                {duelFocus.events.map((event, index) => (
+                                    <button
+                                        key={fightEventKey(event)}
+                                        type="button"
+                                        className={index === duelFocus.index ? s.mapDuelRoundActive : ""}
+                                        onClick={() => setDuelFocus((current) => current ? { ...current, index } : current)}
+                                        aria-label={`Show fight ${index + 1} from round ${event.roundNum + 1}`}
+                                        aria-pressed={index === duelFocus.index}
+                                    >
+                                        Round {event.roundNum + 1}
+                                    </button>
+                                ))}
+                            </div>
+                            <button type="button" className={s.mapDuelClear} onClick={() => setDuelFocus(null)}>Exit detail</button>
+                        </div>
+                    ) : null}
+                    {!selectedFight ? (
+                        <div className={s.mapLegend}>
+                            <>
+                                <span><i className={s.mapLegendKill} /> Kill location</span>
+                                <span><i className={s.mapLegendDeath} /> Death location</span>
+                            </>
+                        </div>
+                    ) : null}
+                </div>
+                <section className={s.mapInsights} aria-label="Map performance breakdown">
+                    <header className={s.mapInsightsHeader}>
+                        <div>
+                            <span>Fight report</span>
+                            <strong>Where you fought</strong>
+                        </div>
+                        <small>{analysis.kills + analysis.deaths} fights · Select a zone</small>
+                    </header>
+                    <div className={s.mapZoneList}>
+                        {analysis.zones.map((zone) => {
+                            const total = zone.kills + zone.deaths;
+                            const share = total / Math.max(1, analysis.kills + analysis.deaths);
+                            const zoneKey = zone.name === "A Site" ? "A" : zone.name === "B Site" ? "B" : zone.name === "C Site" ? "C" : zone.name === "Mid" ? "M" : "-";
+                            const zoneAverageX = zone.xTotal / Math.max(1, zone.count);
+                            const zoneAverageY = zone.yTotal / Math.max(1, zone.count);
+                            const zoneMarkerLeft = canPlot
+                                ? Math.max(0, Math.min(1, zoneAverageY * map!.xMultiplier! + map!.xScalarToAdd!))
+                                : 0.5;
+                            const zoneMarkerTop = canPlot
+                                ? Math.max(0, Math.min(1, zoneAverageX * map!.yMultiplier! + map!.yScalarToAdd!))
+                                : 0.5;
+                            const zoneSummary = zone.kills > zone.deaths
+                                    ? "Won more fights here"
+                                    : zone.deaths > zone.kills
+                                        ? "Lost more fights here"
+                                        : "Even fights";
+                            const zoneDetail = zone.kills > 0 && zone.deaths === 0
+                                    ? "No deaths"
+                                    : `${fmtRatio(zone.kills / zone.deaths)} K/D`;
+                            const isFocused = zone.focusArea
+                                ? focusedArea === zone.focusArea
+                                : focusedZone === zone.focusZone;
+                            return (
+                                <button
+                                    key={zone.name}
+                                    type="button"
+                                    data-zone={zoneKey}
+                                    className={`${s.mapZoneCard} ${isFocused ? s.mapZoneCardActive : ""}`}
+                                    onClick={() => {
+                                        setDuelFocus(null);
+                                        setFilter("all");
+                                        if (zone.focusArea) {
+                                            setFocusedZone(null);
+                                            setFocusedArea((current) => current === zone.focusArea ? null : zone.focusArea);
+                                        } else {
+                                            setFocusedArea(null);
+                                            setFocusedZone((current) => current === zone.focusZone ? null : zone.focusZone);
+                                        }
+                                    }}
+                                    onMouseEnter={() => setHoveredZone(zone.focusZone || null)}
+                                    onMouseLeave={() => setHoveredZone(null)}
+                                    onFocus={() => setHoveredZone(zone.focusZone || null)}
+                                    onBlur={() => setHoveredZone(null)}
+                                    aria-pressed={isFocused}
+                                >
+                                    <span className={s.mapZoneThumb} aria-hidden="true">
+                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="58px" unoptimized /> : null}
+                                        <i style={{ left: `${zoneMarkerLeft * 100}%`, top: `${zoneMarkerTop * 100}%` }} />
+                                    </span>
+                                    <span className={s.mapZoneIdentity}>
+                                        <strong>{zone.name}</strong>
+                                        <small>{zoneSummary} <b>{zoneDetail}</b></small>
+                                    </span>
+                                    <span className={s.mapZoneStats}>
+                                        <span><small>Kills</small><b className={s.mapKillText}>{zone.kills}</b></span>
+                                        <span><small>Deaths</small><b className={s.mapDeathText}>{zone.deaths}</b></span>
+                                        <span><small>Fights</small><b>{total}</b></span>
+                                    </span>
+                                    <i className={s.mapZoneShare} aria-hidden="true"><b style={{ width: `${share * 100}%` }} /></i>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {(analysis.killSpot || analysis.deathSpot) && <div className={s.mapHotspotSummary}>
+                        <div className={s.mapInsightSectionHeading}>
+                            <span>Repeat positions</span>
+                            <small>Select to isolate</small>
+                        </div>
+                        {([{ type: "kill", spot: analysis.killSpot }, { type: "death", spot: analysis.deathSpot }] as const).map(({ type, spot }) => {
+                            if (!spot) return null;
+                            const count = type === "kill" ? spot.kills : spot.deaths;
+                            const rounds = type === "kill" ? spot.killRounds : spot.deathRounds;
+                            const uniqueRounds = [...new Set(rounds)];
+                            const averageX = (type === "kill" ? spot.killXTotal : spot.deathXTotal) / Math.max(1, count);
+                            const averageY = (type === "kill" ? spot.killYTotal : spot.deathYTotal) / Math.max(1, count);
+                            const markerLeft = canPlot ? Math.max(0, Math.min(1, averageY * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
+                            const markerTop = canPlot ? Math.max(0, Math.min(1, averageX * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
+                            const hotspotEvents = analysis.points
+                                .filter((point) => point.type === type && point.area === spot.name)
+                                .map((point) => point.event);
+                            const duelId = `hotspot-${type}-${spot.name}`;
+                            const isDuelFocused = duelFocus?.id === duelId;
+                            return (
+                                <button
+                                    key={type}
+                                    type="button"
+                                    className={`${s.mapHotspotItem} ${type === "kill" ? s.mapHotspotKill : s.mapHotspotDeath} ${isDuelFocused ? s.mapHotspotItemActive : ""}`}
+                                    aria-label={`${type === "kill" ? `Got ${count} kills` : `Died ${count} times`} at ${spot.name}; select to isolate on the map`}
+                                    aria-pressed={isDuelFocused}
+                                    onClick={() => selectDuelGroup(duelId, `${type === "kill" ? "Kills" : "Deaths"} at ${spot.name}`, hotspotEvents)}
+                                >
+                                    <span className={s.mapHotspotThumb} aria-hidden="true">
+                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="58px" unoptimized /> : null}
+                                        <i style={{ left: `${markerLeft * 100}%`, top: `${markerTop * 100}%` }} />
+                                    </span>
+                                    <span>
+                                        <strong>{type === "kill" ? `Got ${count} kills here` : `Died here ${count} times`}</strong>
+                                        <small>{spot.name} · {type === "kill" ? "Kill hotspot" : "Death hotspot"}</small>
+                                    </span>
+                                    <span><small>{uniqueRounds.length === 1 ? `Round ${uniqueRounds[0]}` : `Rounds ${uniqueRounds.join(", ")}`}</small></span>
+                                </button>
+                            );
+                        })}
+                    </div>}
+                    <div className={s.mapMatchInsight}>
+                        <span>Round impact</span>
+                        <div className={s.mapReviewList}>
+                            {reviewNotes.slice(0, 4).map((note, index) => {
+                                const markerLeft = canPlot ? Math.max(0, Math.min(1, note.y * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
+                                const markerTop = canPlot ? Math.max(0, Math.min(1, note.x * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
+                                const isDuelFocused = duelFocus?.id === note.id;
+                                return (
+                                <button
+                                    key={`${note.label}-${note.copy}`}
+                                    type="button"
+                                    className={`${s.mapReviewCard} ${isDuelFocused ? s.mapReviewCardActive : ""}`}
+                                    data-tone={note.tone}
+                                    aria-pressed={isDuelFocused}
+                                    onClick={() => selectDuelGroup(note.id, note.kicker, note.events)}
+                                >
+                                    <span className={s.mapReviewThumb} aria-hidden="true">
+                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="52px" unoptimized /> : <b>{index + 1}</b>}
+                                        <i style={{ left: `${markerLeft * 100}%`, top: `${markerTop * 100}%` }} />
+                                    </span>
+                                    <p><small>{note.kicker}</small><strong>{note.label}</strong><span>{note.copy}</span></p>
+                                </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </section>
+    );
+}
+
 function Scoreboard({
     detail,
+    partyMembers,
     agents,
     tierAssets,
     onViewProfile,
 }: {
     detail: ProfileMatchDetails;
+    partyMembers: NonNullable<ProfileMatchSummary["partyMembers"]>;
     agents: Record<string, AgentMeta>;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
-    const blue = detail.players.filter((p) => p.teamId === "Blue");
-    const red = detail.players.filter((p) => p.teamId === "Red");
+    const localPlayer = detail.players.find((p) => p.isLocal);
+    const localTeamId = localPlayer?.teamId || "Blue";
+    const localIsBlue = localTeamId.toLowerCase() === "blue";
+    const yourTeam = detail.players.filter((p) => p.teamId.toLowerCase() === localTeamId.toLowerCase());
+    const enemyTeam = detail.players.filter((p) => p.teamId.toLowerCase() !== localTeamId.toLowerCase());
+    const partyMemberSubjects = new Set(partyMembers.map((member) => member.subject.toLowerCase()));
+    const partyGroups = buildScorePartyGroups(detail.players, partyMemberSubjects);
     const sortPlayers = (rows: typeof detail.players) =>
-        [...rows].sort((a, b) => Number(b.isLocal) - Number(a.isLocal) || b.score - a.score || b.kills - a.kills);
-    const partyGroups = buildPartyGroups(detail.players);
+        [...rows].sort((a, b) => (b.acs || 0) - (a.acs || 0) || b.score - a.score || b.kills - a.kills);
 
     const mvpPlayer = useMemo(() => {
         if (!detail.players.length) return null;
@@ -1557,67 +2562,75 @@ function Scoreboard({
     }, [detail.players]);
 
     return (
-        <div className={s.scoreGrid}>
-            <ScoreTeam
-                title="Blue"
-                won={detail.matchInfo.blueWins}
-                score={detail.matchInfo.blueRoundsWon}
-                players={sortPlayers(blue)}
-                agents={agents}
-                mvpPlayer={mvpPlayer}
-                tierAssets={tierAssets}
-                onViewProfile={onViewProfile}
-                partyGroups={partyGroups}
-            />
-            <ScoreTeam
-                title="Red"
-                won={!detail.matchInfo.blueWins}
-                score={detail.matchInfo.redRoundsWon}
-                players={sortPlayers(red)}
-                agents={agents}
-                mvpPlayer={mvpPlayer}
-                tierAssets={tierAssets}
-                onViewProfile={onViewProfile}
-                partyGroups={partyGroups}
-            />
+        <div className={s.scoreboardStage}>
+            <div className={s.scoreGrid}>
+                <ScoreTeam
+                    title="Your"
+                    side="blue"
+                    won={localIsBlue ? detail.matchInfo.blueWins : !detail.matchInfo.blueWins}
+                    score={localIsBlue ? detail.matchInfo.blueRoundsWon : detail.matchInfo.redRoundsWon}
+                    players={sortPlayers(yourTeam)}
+                    agents={agents}
+                    mvpPlayer={mvpPlayer}
+                    partyGroups={partyGroups}
+                    tierAssets={tierAssets}
+                    onViewProfile={onViewProfile}
+                />
+                <ScoreTeam
+                    title="Enemy"
+                    side="red"
+                    won={localIsBlue ? !detail.matchInfo.blueWins : detail.matchInfo.blueWins}
+                    score={localIsBlue ? detail.matchInfo.redRoundsWon : detail.matchInfo.blueRoundsWon}
+                    players={sortPlayers(enemyTeam)}
+                    agents={agents}
+                    mvpPlayer={mvpPlayer}
+                    partyGroups={partyGroups}
+                    tierAssets={tierAssets}
+                    onViewProfile={onViewProfile}
+                />
+            </div>
         </div>
     );
 }
 
 function ScoreTeam({
     title,
+    side,
     won,
     score,
     players,
     agents,
     mvpPlayer,
+    partyGroups,
     tierAssets,
     onViewProfile,
-    partyGroups,
 }: {
     title: string;
+    side: "blue" | "red";
     won: boolean;
     score: number;
     players: ProfileMatchDetails["players"];
     agents: Record<string, AgentMeta>;
     mvpPlayer: ProfileMatchDetails["players"][number] | null;
+    partyGroups: Map<string, ScorePartyGroup>;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
-    partyGroups: Map<string, { label: string; size: number; color: string }>;
 }) {
     return (
-        <div className={s.scoreTeam}>
+        <div className={`${s.scoreTeam} ${side === "blue" ? s.scoreTeamBlue : s.scoreTeamRed}`}>
             <div className={s.scoreTeamHeader}>
                 <span>{title} Team</span>
-                <strong className={won ? s.winText : s.lossText}>{score}</strong>
+                <small>{won ? "Victory" : "Defeat"}</small>
+                <strong>{score}</strong>
             </div>
             <table className={s.scoreTable}>
                 <thead>
                     <tr>
-                        <th>Player</th>
-                        <th>K/D/A</th>
-                        <th>ACS</th>
-                        <th>HS%</th>
+                        <th scope="col">Player</th>
+                        <th scope="col">K / D / A</th>
+                        <th scope="col">ACS</th>
+                        <th scope="col">ADR</th>
+                        <th scope="col">HS%</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1627,16 +2640,21 @@ function ScoreTeam({
                             ? `${p.gameName}${p.tagLine ? `#${p.tagLine}` : ""}`
                             : p.isLocal
                                 ? "You"
-                                : meta?.name || "Player";
-                        const isMvp = mvpPlayer && mvpPlayer.characterId === p.characterId && mvpPlayer.teamId === p.teamId;
+                                : "Player";
+                        const isMvp = Boolean(mvpPlayer && mvpPlayer.subject === p.subject);
+                        const party = partyGroups.get(p.subject.toLowerCase());
                         const rankIcon = p.competitiveTier > 0 ? rankIconUrl(p.competitiveTier, tierAssets) : null;
-                        const party = p.partyId ? partyGroups.get(p.partyId) : undefined;
+                        const rowStyle = {
+                            "--agent-art": meta?.full ? `url(${meta.full})` : "none",
+                            ...(party ? { "--party-color": party.color } : {}),
+                        } as CSSProperties;
                         return (
                             <tr
-                                key={`${p.characterId}-${idx}`}
-                                className={`${p.isLocal ? s.scoreLocal : ""} ${party ? s.scoreParty : ""}`}
-                                style={party ? { "--party-color": party.color } as CSSProperties : undefined}
-                                title={party ? `${party.label} · ${party.size} queued together` : undefined}
+                                data-slot="score-player-row"
+                                key={p.subject || `${p.characterId}-${idx}`}
+                                className={`${p.isLocal ? s.scoreLocal : ""} ${party ? s.scorePartyRow : ""}`}
+                                style={rowStyle}
+                                title={party?.title}
                             >
                                 <td>
                                     <span className={s.scorePlayer}>
@@ -1650,17 +2668,22 @@ function ScoreTeam({
                                                 {rankIcon && (
                                                     <Image src={rankIcon} alt="" width={16} height={16} unoptimized className={s.scoreRankIcon} />
                                                 )}
-                                                {p.subject && !p.isLocal ? (
+                                                {p.subject && p.gameName && !p.isLocal ? (
                                                     <button
                                                         type="button"
                                                         className={s.scoreProfileBtn}
-                                                        onClick={() => onViewProfile({ puuid: p.subject, gameName: p.gameName || meta?.name || "Player", tagLine: p.tagLine || "" })}
+                                                        onClick={() => onViewProfile({ puuid: p.subject, gameName: p.gameName, tagLine: p.tagLine || "" })}
                                                         title={`View ${name}'s profile`}
                                                     >
                                                         {name}
                                                     </button>
                                                 ) : name}
-                                                {p.isLocal && <span className={s.viewingBadge}>VIEWING</span>}
+                                                {p.isLocal && <span className={s.youBadge}>You</span>}
+                                                {party && (
+                                                    <span className={s.partyBadge}>
+                                                        {party.includesLocal && !p.isLocal ? "With you" : party.label}
+                                                    </span>
+                                                )}
                                                 {isMvp && <span className={s.mvpBadge}>MVP</span>}
                                             </span>
                                             <small>{meta?.name || "Agent"}</small>
@@ -1673,8 +2696,8 @@ function ScoreTeam({
                                 </td>
                                 <td>
                                     <div className={acsColor(p.acs)}>{Math.round(p.acs || 0)}</div>
-                                    <div className={`${s.scoreSub} ${adrColor(p.adr)}`}>{Math.round(p.adr || 0)} ADR</div>
                                 </td>
+                                <td className={adrColor(p.adr)}>{Math.round(p.adr || 0)}</td>
                                 <td className={hsColor(p.hsPct)}>{fmtPct(p.hsPct)}</td>
                             </tr>
                         );
@@ -1685,23 +2708,60 @@ function ScoreTeam({
     );
 }
 
-function buildPartyGroups(players: ProfileMatchDetails["players"]) {
-    const colors = ["#31d8b2", "#55a9ff", "#b47cff", "#ff6f91", "#7d8cff"];
-    const counts = new Map<string, number>();
-    for (const player of players) {
-        if (player.partyId) counts.set(player.partyId, (counts.get(player.partyId) || 0) + 1);
-    }
-    const groups = new Map<string, { label: string; size: number; color: string }>();
-    let index = 0;
-    for (const [partyId, size] of counts) {
-        if (size < 2) continue;
-        groups.set(partyId, {
-            label: `PARTY ${String.fromCharCode(65 + index)}`,
-            size,
-            color: colors[index % colors.length],
-        });
-        index++;
-    }
-    return groups;
+interface ScorePartyGroup {
+    label: string;
+    size: number;
+    color: string;
+    includesLocal: boolean;
+    title: string;
 }
 
+function buildScorePartyGroups(
+    players: ProfileMatchDetails["players"],
+    knownLocalPartySubjects: Set<string>,
+): Map<string, ScorePartyGroup> {
+    const localSubject = players.find((player) => player.isLocal)?.subject.toLowerCase() || "";
+    const localPartySubjects = new Set(knownLocalPartySubjects);
+    if (localPartySubjects.size > 0 && localSubject) localPartySubjects.add(localSubject);
+
+    const membersByParty = new Map<string, ProfileMatchDetails["players"]>();
+    for (const player of players) {
+        const subject = player.subject.toLowerCase();
+        const partyId = localPartySubjects.has(subject)
+            ? "__viewing_party__"
+            : (player.partyId || "").trim();
+        if (!partyId) continue;
+        const members = membersByParty.get(partyId) || [];
+        members.push(player);
+        membersByParty.set(partyId, members);
+    }
+
+    const groups = [...membersByParty.entries()]
+        .filter(([, members]) => members.length >= 2)
+        .sort(([, a], [, b]) => {
+            const aLocal = a.some((player) => player.isLocal);
+            const bLocal = b.some((player) => player.isLocal);
+            return Number(bLocal) - Number(aLocal) || b.length - a.length;
+        });
+    const palette = ["#5ca9ff", "#b47cff", "#ff7a98", "#f2c14f", "#43d9c1"];
+    const bySubject = new Map<string, ScorePartyGroup>();
+
+    groups.forEach(([, members], index) => {
+        const size = members.length;
+        const includesLocal = members.some((player) => player.isLocal);
+        const label = size === 2 ? "Duo" : size === 3 ? "Trio" : `${Math.min(size, 5)}-stack`;
+        const names = members
+            .map((player) => player.gameName || "Hidden player")
+            .join(", ");
+        const group: ScorePartyGroup = {
+            label,
+            size,
+            color: palette[index % palette.length],
+            includesLocal,
+            title: `${label} queued together: ${names}`,
+        };
+        for (const player of members) bySubject.set(player.subject.toLowerCase(), group);
+    });
+
+    return bySubject;
+}

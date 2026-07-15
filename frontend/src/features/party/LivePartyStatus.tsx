@@ -1,19 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
     getPartyStatus,
     fetchCachedPublicJson,
     getSocialStatus,
+    actOnSocialRequest,
+    sendSocialFriendRequest,
     PartyMember,
     PartyStatusResponse,
     SocialPresence,
     SocialStatusResponse,
+	ChatConversation,
+	getChatSummary,
+	subscribeChatEvents,
+	subscribeSocialEvents,
 } from "@/services/api";
 import { useData } from "@/context/DataContext";
-import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
 import ProfilePanel from "@/features/profile/ProfilePanel";
+import ChatModal from "./ChatModal";
+import { presenceActivity, presenceState, queueName } from "./presence";
+import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
 import "./LivePartyStatus.css";
 
 const POLL_MS = 5000;
@@ -26,21 +34,6 @@ function phaseLabel(phase: PartyStatusResponse["phase"], queueId?: string) {
     if (phase === "pregame") return queue ? `Agent select - ${queue}` : "Agent select";
     if (phase === "coregame") return queue ? `In match - ${queue}` : "In match";
     return queue ? `Party - ${queue}` : "Party";
-}
-
-function queueName(id: string) {
-    const key = id.toLowerCase();
-    const labels: Record<string, string> = {
-        competitive: "Competitive",
-        unrated: "Unrated",
-        swiftplay: "Swiftplay",
-        spikerush: "Spike Rush",
-        deathmatch: "Deathmatch",
-        teamdeathmatch: "Team Deathmatch",
-        hurm: "Team Deathmatch",
-        custom: "Custom",
-    };
-    return labels[key] || id;
 }
 
 function phaseShort(phase: PartyStatusResponse["phase"]) {
@@ -57,7 +50,12 @@ type PartyProfileTarget = {
     gameName: string;
     tagLine: string;
 };
-type PartyContextMenu = { x: number; y: number; profile: PartyProfileTarget };
+type PartyOverlay =
+    | { kind: "context"; x: number; y: number; profile: PartyProfileTarget }
+    | { kind: "profile"; profile: PartyProfileTarget }
+    | { kind: "chat"; peer: string | null }
+    | null;
+type ChatNotice = { peer: string; name: string; body: string; timestamp: number };
 
 function SafePartyImage({ sources, className, fallback, fallbackClassName, eager = false }: { sources: string[]; className?: string; fallback: string; fallbackClassName?: string; eager?: boolean }) {
     const [sourceIndex, setSourceIndex] = useState(0);
@@ -80,28 +78,61 @@ function profileFromIdentity(puuid: string, displayName: string): PartyProfileTa
 }
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
-    const { activeAccount, isBackendOnline } = useData();
+    const { activeAccount, isBackendOnline, isLocalClientActive } = useData();
     const [party, setParty] = useState<PartyStatusResponse | null>(null);
     const [social, setSocial] = useState<SocialStatusResponse | null>(null);
     const [stale, setStale] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [expanded, setExpanded] = useState(false);
-    const [profileTarget, setProfileTarget] = useState<PartyProfileTarget | null>(null);
-    const [contextMenu, setContextMenu] = useState<PartyContextMenu | null>(null);
-    const compactPartyDrag = useFloatingWidgetDrag("party-compact");
-    const expandedPartyDrag = useFloatingWidgetDrag("party-expanded");
-    const [expandedPlacement, setExpandedPlacement] = useState<React.CSSProperties | undefined>(undefined);
+	const [overlay, setOverlay] = useState<PartyOverlay>(null);
+	const [chatUnread, setChatUnread] = useState(0);
+	const [chatUnreadByPeer, setChatUnreadByPeer] = useState<Record<string, number>>({});
+	const [partyConversation, setPartyConversation] = useState<ChatConversation | undefined>();
+	const [chatNotice, setChatNotice] = useState<ChatNotice | null>(null);
     const partyWidgetRef = useRef<HTMLElement>(null);
     const profileModalRef = useRef<HTMLElement>(null);
     const latestPartyRef = useRef<PartyStatusResponse | null>(null);
     const lastPartyIdRef = useRef<string | null>(null);
+	const previousUnreadRef = useRef<Record<string, number> | null>(null);
+	const chatOpenRef = useRef(false);
+	const chatNoticeTimerRef = useRef<number | null>(null);
+	const contextMenu = overlay?.kind === "context" ? overlay : null;
+	const profileTarget = overlay?.kind === "profile" ? overlay.profile : null;
+	const chatOpen = overlay?.kind === "chat";
+	const chatPeer = overlay?.kind === "chat" ? overlay.peer : null;
+	chatOpenRef.current = chatOpen;
+	const floatingSocial = useFloatingWidgetDrag(`social-${activeAccount?.puuid || "default"}`);
+
+	const applyChatSummary = useCallback((chatData: Awaited<ReturnType<typeof getChatSummary>> | null) => {
+		if (!chatData) return;
+		const nextUnread = Object.fromEntries(chatData.conversations.filter((item) => item.type === "dm" && item.peerPuuid && item.unreadCount > 0).map((item) => [item.peerPuuid!.toLowerCase(), item.unreadCount]));
+		const previousUnread = previousUnreadRef.current;
+		if (previousUnread && !chatOpenRef.current) {
+			const newest = chatData.conversations
+				.filter((item) => item.type === "dm" && item.peerPuuid && item.latestMessage?.direction === "incoming" && item.unreadCount > (previousUnread[item.peerPuuid.toLowerCase()] || 0))
+				.sort((a, b) => (b.latestMessage?.timestamp || 0) - (a.latestMessage?.timestamp || 0))[0];
+			if (newest?.peerPuuid && newest.latestMessage) {
+				setChatNotice({ peer: newest.peerPuuid, name: newest.displayName, body: newest.latestMessage.body, timestamp: newest.latestMessage.timestamp });
+				if (chatNoticeTimerRef.current) window.clearTimeout(chatNoticeTimerRef.current);
+				chatNoticeTimerRef.current = window.setTimeout(() => setChatNotice(null), 6000);
+			}
+		}
+		previousUnreadRef.current = nextUnread;
+		setChatUnread(chatData.unreadCount);
+		setChatUnreadByPeer(nextUnread);
+		setPartyConversation(chatData.conversations.find((item) => item.type === "party" && item.source === "local"));
+	}, []);
+
+	useEffect(() => () => {
+		if (chatNoticeTimerRef.current) window.clearTimeout(chatNoticeTimerRef.current);
+	}, []);
 
     const [cardCache, setCardCache] = useState<Record<string, CardMeta>>({});
     const [tierCache, setTierCache] = useState<Record<number, TierMeta>>({});
 
     useEffect(() => {
         if (!contextMenu) return;
-        const close = () => setContextMenu(null);
+        const close = () => setOverlay(null);
         window.addEventListener("pointerdown", close);
         window.addEventListener("blur", close);
         return () => {
@@ -116,45 +147,41 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             // The profile is rendered through a portal, outside this widget's
             // DOM subtree. Its controls must not count as an outside click.
             if (profileModalRef.current?.contains(event.target as Node)) return;
+			if ((event.target as Element | null)?.closest?.("[data-party-portal]")) return;
+            if ((event.target as Element | null)?.closest?.('[data-slot="social-status-trigger"]')) return;
             if (!partyWidgetRef.current?.contains(event.target as Node)) setExpanded(false);
         };
         window.addEventListener("pointerdown", close);
         return () => window.removeEventListener("pointerdown", close);
     }, [expanded]);
 
-    const openPartyPanel = (anchor: DOMRect) => {
-        const edge = 12;
-        const gap = 8;
-        const roomAbove = Math.max(0, anchor.top - edge - gap);
-        const roomBelow = Math.max(0, window.innerHeight - anchor.bottom - edge - gap);
-        const openBelow = roomBelow >= roomAbove;
-        const availableHeight = openBelow ? roomBelow : roomAbove;
-        const dockRight = anchor.left + anchor.width / 2 >= window.innerWidth / 2;
-
-        // Re-evaluate from the compact launcher every time. This prevents a
-        // panel drag from leaving the next opening clipped at the viewport edge.
-        expandedPartyDrag.resetPosition();
-        setProfileTarget(null);
-        setExpandedPlacement({
-            left: dockRight ? "auto" : edge,
-            right: dockRight ? edge : "auto",
-            top: openBelow ? Math.max(edge, anchor.bottom + gap) : "auto",
-            bottom: openBelow ? "auto" : Math.max(edge, window.innerHeight - anchor.top + gap),
-            maxHeight: `${Math.max(180, Math.min(680, availableHeight))}px`,
-        });
-        setExpanded(true);
+    const togglePartyPanel = () => {
+		setOverlay(null);
+        setExpanded((current) => !current);
     };
 
     const openProfile = (profile: PartyProfileTarget) => {
-        setContextMenu(null);
-        setProfileTarget(profile);
+		setOverlay({ kind: "profile", profile });
     };
 
     const openContextMenu = (event: React.MouseEvent, profile: PartyProfileTarget) => {
         event.preventDefault();
         event.stopPropagation();
-        setContextMenu({ x: event.clientX, y: event.clientY, profile });
+		const inset = 8;
+		const menuWidth = 162;
+		const menuHeight = 52;
+		setOverlay({
+			kind: "context",
+			x: Math.max(inset, Math.min(event.clientX, window.innerWidth - menuWidth - inset)),
+			y: Math.max(inset, Math.min(event.clientY, window.innerHeight - menuHeight - inset)),
+			profile,
+		});
     };
+
+	const openChat = (peer?: string | null) => {
+		setChatNotice(null);
+		setOverlay({ kind: "chat", peer: peer || null });
+	};
 
     useEffect(() => {
         if (!activeAccount || !isBackendOnline) {
@@ -162,18 +189,15 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             setParty(null);
             setSocial(null);
             setStale(false);
+			setOverlay(null);
             setExpanded(false);
             return;
         }
 
         let active = true;
         const poll = async () => {
-            const [data, socialData] = await Promise.all([
-                getPartyStatus().catch((err) => ({ phase: "error" as const, error: err instanceof Error ? err.message : String(err || "") })),
-                getSocialStatus().catch(() => null),
-            ]);
+            const data = await getPartyStatus().catch((err) => ({ phase: "error" as const, error: err instanceof Error ? err.message : String(err || "") }));
             if (!active) return;
-            setSocial(socialData);
 
             if (data.phase === "none") {
                 latestPartyRef.current = null;
@@ -199,6 +223,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             // so it doesn't burst onto the screen at full size.
             const newId = data.partyId || (data.members?.[0]?.puuid ?? null);
             if (newId && lastPartyIdRef.current && newId !== lastPartyIdRef.current) {
+				setOverlay(null);
                 setExpanded(false);
             }
             lastPartyIdRef.current = newId;
@@ -221,7 +246,39 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             active = false;
             window.clearTimeout(timer);
         };
-    }, [activeAccount, isBackendOnline]);
+    }, [activeAccount, applyChatSummary, isBackendOnline]);
+
+	useEffect(() => {
+		if (!activeAccount || !isBackendOnline) return;
+		let active = true;
+		const refreshSocial = () => {
+			void getSocialStatus().then((data) => { if (active) setSocial(data); }).catch(() => undefined);
+		};
+		const refreshChat = () => {
+			void getChatSummary().then((data) => { if (active) applyChatSummary(data); }).catch(() => undefined);
+		};
+		refreshSocial();
+		refreshChat();
+		const socialController = new AbortController();
+		const chatController = new AbortController();
+		let socialTimer = 0;
+		let chatTimer = 0;
+		void subscribeSocialEvents(() => {
+			clearTimeout(socialTimer);
+			socialTimer = window.setTimeout(refreshSocial, 150);
+		}, socialController.signal).catch(() => undefined);
+		void subscribeChatEvents(() => {
+			clearTimeout(chatTimer);
+			chatTimer = window.setTimeout(refreshChat, 150);
+		}, chatController.signal).catch(() => undefined);
+		return () => {
+			active = false;
+			clearTimeout(socialTimer);
+			clearTimeout(chatTimer);
+			socialController.abort();
+			chatController.abort();
+		};
+	}, [activeAccount, applyChatSummary, isBackendOnline]);
 
     // Load Valorant-API metadata (player cards + competitive tier icons).
     // Same public endpoint pattern as LiveMatchOverlay - no key required.
@@ -262,61 +319,110 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
         };
     }, []);
 
-    const presences = sortedPresences(social);
-    const onlineCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
+    const presences = useMemo(() => sortedPresences(social), [social]);
+	const chatContacts = useMemo(() => presences.map((presence) => ({
+		...presence,
+		puuid: presence.puuid,
+		name: presence.name,
+		avatar: presence.cardId ? cardCache[presence.cardId.toLowerCase()]?.images[0] : undefined,
+	})), [presences, cardCache]);
+    const onlineCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
+	const floatingSocialPortal = isLocalClientActive && typeof document !== "undefined" ? createPortal(
+		<div
+			ref={floatingSocial.setElement}
+			className="live-party-floating-social"
+			style={floatingSocial.style}
+			onPointerDown={(event) => floatingSocial.onPointerDown(event)}
+			onClickCapture={(event) => {
+				if (!floatingSocial.consumeClick()) return;
+				event.preventDefault();
+				event.stopPropagation();
+			}}
+		>
+			{hasParty ? (
+				<PartyPill
+					local={local}
+					party={party!}
+					friendCount={onlineCount}
+					card={cardCache[local.cardId?.toLowerCase()]}
+					tier={tierCache[local.competitiveTier]}
+					onOpen={togglePartyPanel}
+				/>
+			) : (
+				<FriendsPill social={social} presences={presences} onOpen={togglePartyPanel} />
+			)}
+		</div>,
+		document.body,
+	) : null;
+	const chatNoticePortal = chatNotice && typeof document !== "undefined" ? createPortal(
+		<button type="button" className="live-party-chat-notice" data-slot="chat-notice" data-party-portal aria-live="polite" onClick={() => openChat(chatNotice.peer)}>
+			<span className="live-party-chat-notice-icon" data-slot="chat-notice-avatar" aria-hidden="true">{chatNotice.name.slice(0, 1).toUpperCase()}</span>
+			<span data-slot="chat-notice-content"><strong>{chatNotice.name || "New Riot message"}</strong><small>{chatNotice.body}</small></span>
+			<time dateTime={new Date(chatNotice.timestamp).toISOString()}>{formatSocialTime(chatNotice.timestamp)}</time>
+		</button>,
+		document.body,
+	) : null;
 
     // Compact pill — small, bottom-left, click to expand into the detailed view.
     if (!expanded) {
         if (!hasParty) {
             return (
+				<>
                 <FriendsPill
                     social={social}
                     presences={presences}
-                    onOpen={(anchor) => {
-                        if (!compactPartyDrag.consumeClick()) openPartyPanel(anchor);
-                    }}
-                    dragStyle={compactPartyDrag.style}
-                    setElement={compactPartyDrag.setElement}
-                    onPointerDown={compactPartyDrag.onPointerDown}
-                />
+                    onOpen={togglePartyPanel}
+				/>
+				{floatingSocialPortal}
+				{chatNoticePortal}
+				</>
             );
         }
         return (
+			<>
             <PartyPill
                 local={local}
                 party={party!}
                 friendCount={onlineCount}
                 card={cardCache[local.cardId?.toLowerCase()]}
                 tier={tierCache[local.competitiveTier]}
-                onOpen={(anchor) => {
-                    if (!compactPartyDrag.consumeClick()) openPartyPanel(anchor);
-                }}
-                dragStyle={compactPartyDrag.style}
-                setElement={compactPartyDrag.setElement}
-                onPointerDown={compactPartyDrag.onPointerDown}
-            />
+                onOpen={togglePartyPanel}
+			/>
+			{floatingSocialPortal}
+			{chatNoticePortal}
+			</>
         );
     }
 
-    return (
+    return <>
+        {hasParty ? (
+            <PartyPill
+                local={local}
+                party={party!}
+                friendCount={onlineCount}
+                card={cardCache[local.cardId?.toLowerCase()]}
+                tier={tierCache[local.competitiveTier]}
+                onOpen={togglePartyPanel}
+            />
+        ) : (
+            <FriendsPill social={social} presences={presences} onOpen={togglePartyPanel} />
+        )}
+		{floatingSocialPortal}
+        {typeof document !== "undefined" ? createPortal(
         <aside
-            ref={(element) => {
-                partyWidgetRef.current = element;
-                expandedPartyDrag.setElement(element);
-            }}
+            ref={partyWidgetRef}
             className={`live-party-widget${stale ? " is-stale" : ""}`}
-            style={expandedPartyDrag.style || expandedPlacement}
             aria-live="polite"
         >
             <div key={refreshKey} className="live-party-refresh" />
-            <div className="live-party-header live-party-drag-handle" onPointerDown={(event) => expandedPartyDrag.onPointerDown(event, true)}>
+            <div className="live-party-header">
                 <div>
-                    <div className="live-party-kicker">{hasParty ? "Live Party" : "Party & Friends"}</div>
+                    <div className="live-party-kicker">Party & Friends</div>
                     <div className="live-party-title">
                         {hasParty ? phaseLabel(party!.phase, party!.queueId) : socialTitle(social, presences)}
                     </div>
@@ -332,7 +438,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                         type="button"
                         className="live-party-minimize"
                         onClick={() => {
-                            setProfileTarget(null);
+							setOverlay(null);
                             setExpanded(false);
                         }}
                         aria-label="Minimize party panel"
@@ -348,18 +454,25 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 <PresenceStat label="Online" value={String(onlineCount + chatCount)} />
             </div>
             {hasParty && (
-                <div className="live-party-members">
-                    {members.map((member) => (
-                        <PartyMemberRow
-                            key={member.puuid}
-                            member={member}
-                            card={cardCache[member.cardId?.toLowerCase()]}
-                            tier={tierCache[member.competitiveTier]}
-                            onOpenProfile={() => openProfile(profileFromIdentity(member.puuid, member.name))}
-                            onContextMenu={(event) => openContextMenu(event, profileFromIdentity(member.puuid, member.name))}
-                        />
-                    ))}
-                </div>
+                <>
+                    <div className="live-party-section-heading live-party-members-heading">
+                        <div className="live-party-section-title">Live party</div>
+                        <div className="live-party-section-counts"><span>{members.length}/5 members</span></div>
+                    </div>
+                    <div className="live-party-members">
+                        {members.map((member) => (
+                            <PartyMemberRow
+                                key={member.puuid}
+                                member={member}
+                                card={cardCache[member.cardId?.toLowerCase()]}
+                                tier={tierCache[member.competitiveTier]}
+                                onOpenProfile={() => openProfile(profileFromIdentity(member.puuid, member.name))}
+                                onContextMenu={(event) => openContextMenu(event, profileFromIdentity(member.puuid, member.name))}
+                            />
+                        ))}
+                    </div>
+					{partyConversation && <button type="button" className="live-party-open-chat" onClick={() => openChat(partyConversation.key)}>Open Party Chat{partyConversation.unreadCount ? ` (${partyConversation.unreadCount})` : ""}</button>}
+                </>
             )}
             {!hasParty && <PartyEmptyState party={party} />}
             <FriendPresenceList
@@ -368,30 +481,27 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 cardCache={cardCache}
                 showOfflineByDefault={showOfflineByDefault}
                 onOpenProfile={openProfile}
+				onOpenChat={(presence) => openChat(presence.puuid)}
+				onOpenInbox={() => openChat(null)}
+				unreadCount={chatUnread}
+				unreadByPeer={chatUnreadByPeer}
                 onContextMenu={openContextMenu}
             />
-            {contextMenu && (
-                <div
-                    className="live-party-context-menu"
-                    style={{ left: contextMenu.x, top: contextMenu.y }}
-                    role="menu"
-                    onPointerDown={(event) => event.stopPropagation()}
-                >
-                    <button type="button" role="menuitem" onClick={() => {
-                        setProfileTarget(contextMenu.profile);
-                        setContextMenu(null);
-                    }}>Open Profile</button>
-                </div>
+            {contextMenu && typeof document !== "undefined" && createPortal(
+                <div className="live-party-context-menu" data-party-portal style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+                    <button type="button" role="menuitem" onClick={() => setOverlay({ kind: "profile", profile: contextMenu.profile })}>Open Profile</button>
+                </div>,
+                document.body,
             )}
             {profileTarget && typeof document !== "undefined" && createPortal(
-                <div className="live-party-profile-backdrop" role="presentation" onMouseDown={() => setProfileTarget(null)}>
+				<div className="live-party-profile-backdrop" data-party-portal role="presentation" onMouseDown={() => setOverlay(null)}>
                     <section ref={profileModalRef} className="live-party-profile-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-                        <button type="button" className="live-party-profile-close" onClick={() => setProfileTarget(null)} aria-label="Close profile">×</button>
+                        <button type="button" className="live-party-profile-close" onClick={() => setOverlay(null)} aria-label="Close profile">×</button>
                         <div className="live-party-profile-content">
                             <ProfilePanel
                                 key={profileTarget.puuid}
                                 requestedProfile={profileTarget}
-                                onRequestedProfileChange={setProfileTarget}
+                                onRequestedProfileChange={(profile) => setOverlay(profile ? { kind: "profile", profile } : null)}
                                 autoSyncMatches={true}
                             />
                         </div>
@@ -399,8 +509,11 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 </div>,
                 document.body,
             )}
+			{typeof document !== "undefined" && createPortal(<ChatModal key={`${activeAccount?.puuid || "no-account"}:${chatPeer || "inbox"}:${chatOpen ? "open" : "closed"}`} open={chatOpen} accountPuuid={activeAccount?.puuid} initialPeer={chatPeer} contacts={chatContacts} onClose={() => setOverlay(null)} onUnreadChange={(count, partyChat) => { setChatUnread(count); setPartyConversation(partyChat); }} />, document.body)}
+			{chatNoticePortal}
         </aside>
-    );
+    , document.body) : null}
+    </>;
 }
 
 function PresenceStat({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
@@ -419,29 +532,21 @@ function PartyPill({
     card,
     tier,
     onOpen,
-    dragStyle,
-    setElement,
-    onPointerDown,
 }: {
     local: PartyMember;
     party: PartyStatusResponse;
     friendCount: number;
     card?: CardMeta;
     tier?: TierMeta;
-    onOpen: (anchor: DOMRect) => void;
-    dragStyle?: React.CSSProperties;
-    setElement: (element: HTMLButtonElement | null) => void;
-    onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+    onOpen: () => void;
 }) {
     const phaseClass = "is-" + (party.phase || "party");
     return (
         <button
-            ref={setElement}
             type="button"
             className={`live-party-pill is-clickable ${phaseClass}`}
-            onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
-            onPointerDown={onPointerDown}
-            style={dragStyle}
+            data-slot="social-status-trigger"
+            onClick={onOpen}
             aria-label="Open live party panel"
             title="Open party"
         >
@@ -465,40 +570,33 @@ function FriendsPill({
     social,
     presences,
     onOpen,
-    dragStyle,
-    setElement,
-    onPointerDown,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
-    onOpen: (anchor: DOMRect) => void;
-    dragStyle?: React.CSSProperties;
-    setElement: (element: HTMLButtonElement | null) => void;
-    onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+    onOpen: () => void;
 }) {
-    const onlineCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
+    const onlineCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
+    const totalCount = social?.friendCount || presences.length;
     return (
         <button
-            ref={setElement}
             type="button"
             className="live-party-pill is-clickable is-friends"
-            onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
-            onPointerDown={onPointerDown}
-            style={dragStyle}
+            data-slot="social-status-trigger"
+            onClick={onOpen}
             aria-label="Open friend presence panel"
-            title="Open friends"
+            title={`${onlineCount} online · ${totalCount} friends`}
         >
             <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
                 <FriendsGlyph />
                 <strong className="live-party-friends-count">{onlineCount}</strong>
             </span>
             <span className="live-party-pill-body">
-                <span className="live-party-pill-kicker">Party & Friends</span>
-                <span className="live-party-pill-title">{socialTitle(social, presences)}</span>
+                <span className="live-party-pill-kicker">Social</span>
+                <span className="live-party-pill-title">{onlineCount} online</span>
                 <span className="live-party-pill-sub">
-                    {inGameCount} in match - {chatCount} Riot Client - {social?.friendCount || presences.length} total
+                    {inGameCount} in match{chatCount > 0 ? ` · ${chatCount} in client` : ""}
                 </span>
             </span>
             <span className="live-party-pill-arrow" aria-hidden="true">&gt;</span>
@@ -512,6 +610,10 @@ function FriendPresenceList({
     cardCache,
     showOfflineByDefault,
     onOpenProfile,
+	onOpenChat,
+	onOpenInbox,
+	unreadCount,
+	unreadByPeer,
     onContextMenu,
 }: {
     social: SocialStatusResponse | null;
@@ -519,11 +621,16 @@ function FriendPresenceList({
     cardCache: Record<string, CardMeta>;
     showOfflineByDefault: boolean;
     onOpenProfile: (profile: PartyProfileTarget) => void;
+	onOpenChat: (presence: SocialPresence) => void;
+	onOpenInbox: () => void;
+	unreadCount: number;
+	unreadByPeer: Record<string, number>;
     onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
 }) {
     const [showOffline, setShowOffline] = useState(() => showOfflineByDefault || (typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:offline-open") === "true"));
     const [friendSearch, setFriendSearch] = useState("");
     const [valorantOnly, setValorantOnly] = useState(false);
+    const [socialView, setSocialView] = useState<"friends" | "requests" | "activity">("friends");
     const [compactRows, setCompactRows] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:compact") === "true");
     useEffect(() => { if (showOfflineByDefault) setShowOffline(true); }, [showOfflineByDefault]);
     useEffect(() => { window.localStorage.setItem("vantavault:friends:offline-open", String(showOffline)); }, [showOffline]);
@@ -531,32 +638,31 @@ function FriendPresenceList({
     const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
     const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
     const matchesFilters = (presence: SocialPresence) => {
-        if (valorantOnly && !["game", "online"].includes(presenceState(presence))) return false;
+        if (valorantOnly && !["game", "online", "away", "dnd"].includes(presenceState(presence))) return false;
         return (presence.name || "").toLowerCase().includes(friendSearch.trim().toLowerCase());
     };
     const visibleActivePresences = activePresences.filter(matchesFilters);
     const visibleOfflinePresences = offlinePresences.filter(matchesFilters);
     const valorantCount = activePresences.filter((presence) => presenceState(presence) !== "chat").length;
     const chatCount = activePresences.length - valorantCount;
-
-    if (!presences.length) {
-        return (
-            <div className="live-party-friends">
-                <div className="live-party-section-title">Friends</div>
-                <div className="live-party-friend-empty">{socialEmptyLabel(social)}</div>
-            </div>
-        );
-    }
+    const requests = social?.requests || [];
+    const activity = social?.activity || [];
 
     return (
         <div className="live-party-friends">
             <div className="live-party-section-heading">
-                <div className="live-party-section-title">Friends</div>
-                <div className="live-party-section-counts">
+				<div className="live-party-social-tabs" role="tablist" aria-label="Social view">
+					<button type="button" role="tab" aria-selected={socialView === "friends"} className={socialView === "friends" ? "active" : ""} onClick={() => setSocialView("friends")}>Friends</button>
+					<button type="button" role="tab" aria-selected={socialView === "requests"} className={socialView === "requests" ? "active" : ""} onClick={() => setSocialView("requests")}>Requests{requests.length > 0 && <span>{requests.length}</span>}</button>
+					<button type="button" role="tab" aria-selected={socialView === "activity"} className={socialView === "activity" ? "active" : ""} onClick={() => setSocialView("activity")}>Activity</button>
+				</div>
+				<button type="button" className="live-party-inbox" onClick={onOpenInbox} aria-label="Open Riot chat inbox" title="Messages">✉{unreadCount > 0 && <span>{unreadCount}</span>}</button>
+				<div className="live-party-section-counts">
                     <span>{valorantCount} VALORANT</span>
                     <span>{chatCount} Riot Client</span>
                 </div>
             </div>
+            {socialView === "friends" && <>
             <div className="live-party-friend-tools">
                 <input value={friendSearch} onChange={(event) => setFriendSearch(event.target.value)} placeholder="Search friends" aria-label="Search friends" />
                 <button type="button" className={valorantOnly ? "active" : ""} onClick={() => setValorantOnly((current) => !current)}>VALORANT</button>
@@ -564,17 +670,19 @@ function FriendPresenceList({
             </div>
             <div className={`live-party-friend-scroll${compactRows ? " is-compact" : ""}`}>
                 <div className="live-party-friend-list">
-                    {visibleActivePresences.map((presence, index) => (
+                    {visibleActivePresences.map((presence) => (
                         <FriendPresenceRow
-                            key={presence.puuid || `${presence.name}-${index}`}
+                            key={presence.puuid}
                             presence={presence}
                             cardCache={cardCache}
                             onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+							onOpenChat={() => onOpenChat(presence)}
+							unreadCount={unreadByPeer[(presence.puuid || "").toLowerCase()] || 0}
                             onContextMenu={onContextMenu}
                         />
                     ))}
                     {visibleActivePresences.length === 0 && (
-                        <div className="live-party-friend-empty">No friends match these filters.</div>
+                        <div className="live-party-friend-empty">{presences.length ? "No friends match these filters." : socialEmptyLabel(social)}</div>
                     )}
                 </div>
                 {offlinePresences.length > 0 && (
@@ -593,12 +701,14 @@ function FriendPresenceList({
                         </button>
                         {showOffline && (
                             <div className="live-party-friend-list is-offline-list">
-                                {visibleOfflinePresences.map((presence, index) => (
+                                {visibleOfflinePresences.map((presence) => (
                                     <FriendPresenceRow
-                                        key={presence.puuid || `${presence.name}-offline-${index}`}
+                                        key={presence.puuid}
                                         presence={presence}
                                         cardCache={cardCache}
                                         onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+								onOpenChat={() => onOpenChat(presence)}
+									unreadCount={unreadByPeer[(presence.puuid || "").toLowerCase()] || 0}
                                         onContextMenu={onContextMenu}
                                     />
                                 ))}
@@ -608,19 +718,142 @@ function FriendPresenceList({
                     </div>
                 )}
             </div>
+            </>}
+			{socialView === "requests" && <SocialRequests requests={requests} events={activity} />}
+			{socialView === "activity" && <SocialActivity events={activity} />}
         </div>
     );
+}
+
+function SocialRequests({ requests, events }: { requests: NonNullable<SocialStatusResponse["requests"]>; events: NonNullable<SocialStatusResponse["activity"]> }) {
+	const incoming = requests.filter((request) => request.direction === "incoming");
+	const outgoing = requests.filter((request) => request.direction === "outgoing");
+	const reconnect = Array.from(new Map(events.filter((event) => event.type === "friendship_ended").map((event) => [event.peerPuuid, event])).values());
+	const [requestStates, setRequestStates] = useState<Record<string, { state: "working" | "pending" | "error"; message?: string }>>({});
+	const [riotID, setRiotID] = useState("");
+	const [sendState, setSendState] = useState<{ state: "idle" | "working" | "done" | "error"; message?: string }>({ state: "idle" });
+	useEffect(() => {
+		const visible = new Set(requests.map((request) => request.puuid));
+		setRequestStates((current) => Object.fromEntries(Object.entries(current).filter(([peer]) => visible.has(peer))));
+	}, [requests]);
+	const send = async (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		const separator = riotID.lastIndexOf("#");
+		const gameName = riotID.slice(0, separator).trim();
+		const gameTag = riotID.slice(separator + 1).trim();
+		if (separator <= 0 || !gameName || !gameTag) {
+			setSendState({ state: "error", message: "Enter a Riot ID as Name#Tag." });
+			return;
+		}
+		setSendState({ state: "working" });
+		try {
+			const result = await sendSocialFriendRequest(gameName, gameTag);
+			setSendState({ state: "done", message: result.confirmed ? "Request sent to Riot." : "Request submitted to Riot." });
+			setRiotID("");
+		} catch (error) {
+			setSendState({ state: "error", message: error instanceof Error ? error.message : "Request failed" });
+		}
+	};
+	const act = async (puuid: string, action: "accept" | "deny" | "cancel" | "send") => {
+		setRequestStates((current) => ({ ...current, [puuid]: { state: "working" } }));
+		try {
+			const result = await actOnSocialRequest(puuid, action);
+			setRequestStates((current) => ({ ...current, [puuid]: result.confirmed
+				? { state: "pending", message: "Confirmed by Riot" }
+				: { state: "pending", message: "Sent to Riot · waiting for the roster update" } }));
+		} catch (error) {
+			setRequestStates((current) => ({ ...current, [puuid]: { state: "error", message: error instanceof Error ? error.message : "Request action failed" } }));
+		}
+	};
+	return <div className="live-party-social-scroll">
+		<form className="live-party-friend-request-form" onSubmit={send}>
+			<label htmlFor="live-party-riot-id">Send friend request</label>
+			<div><input id="live-party-riot-id" value={riotID} onChange={(event) => setRiotID(event.target.value)} placeholder="Name#Tag" autoComplete="off" spellCheck={false} /><button type="submit" disabled={sendState.state === "working"}>{sendState.state === "working" ? "Sending…" : "Send"}</button></div>
+			{sendState.message ? <small aria-live="polite" className={sendState.state === "error" ? "is-error" : ""}>{sendState.message}</small> : <small>Use the player&apos;s full Riot ID.</small>}
+		</form>
+		{!requests.length && !reconnect.length && <div className="live-party-social-empty"><strong>No pending requests</strong><span>Incoming and sent requests will appear here.</span></div>}
+		{incoming.length > 0 && <SocialRequestGroup title="Incoming" requests={incoming} states={requestStates} onAction={act} />}
+		{outgoing.length > 0 && <SocialRequestGroup title="Sent" requests={outgoing} states={requestStates} onAction={act} />}
+		{reconnect.length > 0 && <section className="live-party-request-group">
+			<header><strong>Reconnect</strong><span>{reconnect.length}</span></header>
+			{reconnect.map((event) => { const actionState = requestStates[event.peerPuuid]; return <div className="live-party-request-row" key={event.peerPuuid}>
+				<i aria-hidden="true">{(event.name || "?").slice(0, 1).toUpperCase()}</i>
+				<span><strong>{event.name || "Unknown Riot account"}</strong><small>{actionState?.message || "Previously observed in your Riot friends list"}</small></span>
+				<div className="live-party-request-actions"><button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => act(event.peerPuuid, "send")}>{actionState?.state === "working" ? "Sendingâ€¦" : "Send request"}</button></div>
+			</div>})}
+		</section>}
+	</div>;
+}
+
+function SocialRequestGroup({ title, requests, states, onAction }: {
+	title: string;
+	requests: NonNullable<SocialStatusResponse["requests"]>;
+	states: Record<string, { state: "working" | "pending" | "error"; message?: string }>;
+	onAction: (puuid: string, action: "accept" | "deny" | "cancel") => void;
+}) {
+	return <section className="live-party-request-group">
+		<header><strong>{title}</strong><span>{requests.length}</span></header>
+		{requests.map((request) => {
+			const actionState = states[request.puuid];
+			return <div className="live-party-request-row" key={`${request.direction}:${request.puuid}`}>
+			<i aria-hidden="true">{(request.name || "?").slice(0, 1).toUpperCase()}</i>
+			<span><strong>{request.name || "Unknown Riot account"}</strong><small>{actionState?.message || (request.firstSeenAt ? `Observed ${formatSocialTime(request.firstSeenAt)}` : "Observed now")}</small></span>
+			<div className="live-party-request-actions">
+				{request.direction === "incoming" ? <>
+					<button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => onAction(request.puuid, "accept")}>Accept</button>
+					<button type="button" className="is-quiet" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => onAction(request.puuid, "deny")}>Deny</button>
+				</> : <button type="button" className="is-quiet" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => onAction(request.puuid, "cancel")}>Cancel</button>}
+			</div>
+		</div>})}
+	</section>;
+}
+
+function SocialActivity({ events }: { events: NonNullable<SocialStatusResponse["activity"]> }) {
+	const usefulEvents = events.filter((event) => event.type !== "friend_first_observed");
+	if (!usefulEvents.length) return <div className="live-party-social-empty"><strong>No friend activity yet</strong><span>Sent, received, accepted, cancelled, and removed friend activity will appear here.</span></div>;
+	return <div className="live-party-social-scroll live-party-activity-list">
+		{usefulEvents.map((event) => <div className={`live-party-activity-row is-${event.type}`} key={event.id}>
+			<i aria-hidden="true" />
+			<span><strong>{event.name || "Unknown Riot account"}</strong><small>{socialEventLabel(event.type)}</small></span>
+			<time dateTime={new Date(event.occurredAt).toISOString()}>{formatSocialTime(event.occurredAt)}</time>
+		</div>)}
+	</div>;
+}
+
+function socialEventLabel(type: NonNullable<SocialStatusResponse["activity"]>[number]["type"]) {
+	switch (type) {
+		case "friend_first_observed": return "First observed in your friends list";
+		case "friend_readded": return "Friends again";
+		case "friendship_ended": return "No longer in your friends list · who removed whom is unknown";
+		case "request_received": return "Friend request received";
+		case "request_sent": return "Friend request sent";
+		case "request_cancelled": return "Friend request cancelled";
+		case "request_accepted_by_you": return "You accepted their friend request";
+		case "request_accepted_by_them": return "Accepted your friend request";
+		case "request_closed_unknown": return "Request closed · outcome unknown";
+	}
+}
+
+function formatSocialTime(timestamp: number) {
+	const date = new Date(timestamp);
+	const today = new Date();
+	if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	return date.toLocaleDateString([], { day: "2-digit", month: "short", year: date.getFullYear() === today.getFullYear() ? undefined : "numeric" });
 }
 
 function FriendPresenceRow({
     presence,
     cardCache,
     onOpenProfile,
+	onOpenChat,
+	unreadCount,
     onContextMenu,
 }: {
     presence: SocialPresence;
     cardCache: Record<string, CardMeta>;
     onOpenProfile: () => void;
+	onOpenChat: () => void;
+	unreadCount: number;
     onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
 }) {
     const state = presenceState(presence);
@@ -631,8 +864,8 @@ function FriendPresenceRow({
             className={`live-party-friend-row is-${state}`}
             role="button"
             tabIndex={0}
-            onClick={onOpenProfile}
-            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenProfile(); }}
+			onClick={onOpenChat}
+			onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenChat(); }}
             onContextMenu={(event) => onContextMenu(event, profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
         >
             <span className="live-party-friend-avatar" aria-hidden="true">
@@ -641,11 +874,13 @@ function FriendPresenceRow({
             </span>
             <span className="live-party-friend-main">
                 <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
-                <span className="live-party-friend-sub">{presenceLabel(presence)}</span>
+				<span className="live-party-friend-sub">{presenceActivity(presence).detail || presenceActivity(presence).label}</span>
             </span>
-            <span className="live-party-friend-state">
-                {state === "game" ? "In match" : state === "online" ? "VALORANT" : state === "chat" ? "Riot Client" : "Offline"}
-            </span>
+			<span className="live-party-friend-state">
+				{presenceActivity(presence).label}
+			</span>
+			{unreadCount > 0 && <span className="live-party-friend-unread" aria-label={`${unreadCount} unread messages`}>{unreadCount}</span>}
+			<button type="button" className="live-party-profile-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenProfile(); }} aria-label={`Open ${presence.name || "friend"} profile`} title="Profile">i</button>
         </div>
     );
 }
@@ -666,7 +901,7 @@ function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
 function socialTitle(social: SocialStatusResponse | null, presences: SocialPresence[]) {
     if (!social) return "Connecting presence";
     if (social.status === "unavailable") return "Presence unavailable";
-    const valorantCount = presences.filter((presence) => ["game", "online"].includes(presenceState(presence))).length;
+    const valorantCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
     if (valorantCount) return `${valorantCount} in VALORANT`;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     return chatCount ? `${chatCount} on Riot Client` : "No active friends";
@@ -679,35 +914,15 @@ function socialEmptyLabel(social: SocialStatusResponse | null) {
 }
 
 function sortedPresences(social: SocialStatusResponse | null) {
-    return (social?.presences || [])
-        .filter((presence) => !!(presence.name || presence.product || presence.state || presence.queueId))
-        .sort((a, b) => presencePriority(a) - presencePriority(b) || (a.name || "").localeCompare(b.name || ""));
-}
-
-type PresenceState = "game" | "online" | "chat" | "offline";
-
-function presenceState(presence: SocialPresence): PresenceState {
-    if ((presence.state || "").toLowerCase() === "offline") return "offline";
-    if ((presence.product || "").toLowerCase() !== "valorant") {
-        return /pc|windows|desktop/i.test(presence.platform || "") ? "chat" : "offline";
-    }
-    return presence.queueId || /in.?game|pregame|match/i.test(presence.state || "") ? "game" : "online";
-}
-
-function presencePriority(presence: SocialPresence) {
-    const state = presenceState(presence);
-    return state === "game" ? 0 : state === "online" ? 1 : state === "chat" ? 2 : 3;
-}
-
-function presenceLabel(presence: SocialPresence) {
-    if (presenceState(presence) === "chat") {
-        return "Riot Client on PC";
-    }
-    const parts = [
-        presence.product?.toLowerCase() === "valorant" ? "VALORANT" : presence.product || "Riot",
-        presence.queueId ? queueName(presence.queueId) : presence.state,
-    ].filter(Boolean);
-    return parts.join(" - ");
+	const unique = new Map<string, SocialPresence>();
+	for (const presence of social?.presences || []) {
+		const puuid = presence.puuid?.trim().toLowerCase();
+		if (!puuid || unique.has(puuid)) continue;
+		unique.set(puuid, { ...presence, puuid });
+	}
+	return [...unique.values()].sort((a, b) =>
+		(a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }) || (a.puuid || "").localeCompare(b.puuid || ""),
+	);
 }
 
 function PartyMemberRow({

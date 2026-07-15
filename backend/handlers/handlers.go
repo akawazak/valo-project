@@ -21,9 +21,11 @@ import (
 )
 
 type Handler struct {
-	Val    *valclient.ValClient
-	Ticker *tick.Ticker
-	mu     sync.RWMutex // also used by remote.go
+	Val           *valclient.ValClient
+	Ticker        *tick.Ticker
+	mu            sync.RWMutex // also used by remote.go
+	oauthMu       sync.Mutex
+	oauthAttempts map[string]oauthAttempt
 
 	// trackingConn holds the lazy-initialized handle to the local
 	// tracking DB (backend/tracking). The first call to
@@ -69,6 +71,15 @@ type Handler struct {
 	liveExtrasMu         sync.Mutex
 	liveRanksInFlight    map[string]struct{}
 	likelyStacksInFlight map[string]struct{}
+
+	progressionMu          sync.Mutex
+	progressionSubscribers map[chan struct{}]struct{}
+	socialMu               sync.Mutex
+	socialSubscribers      map[chan struct{}]struct{}
+	chatMu                 sync.Mutex
+	chatSubscribers        map[chan struct{}]struct{}
+	chatSnapshotMu         sync.Mutex
+	chatSnapshots          map[string]struct{}
 }
 
 // CachedPlayerStats is the per-(puuid, agent) agent-specific record.
@@ -86,14 +97,19 @@ type CachedPlayerStats struct {
 
 func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
-		Val:                  Val,
-		namesCache:           make(map[string]string),
-		playerStatsCache:     make(map[string]CachedPlayerStats),
-		partyRankRefreshAt:   make(map[string]time.Time),
-		likelyStacks:         make(map[string]likelyStackCache),
-		liveRanks:            make(map[string]liveRankCache),
-		liveRanksInFlight:    make(map[string]struct{}),
-		likelyStacksInFlight: make(map[string]struct{}),
+		Val:                    Val,
+		namesCache:             make(map[string]string),
+		playerStatsCache:       make(map[string]CachedPlayerStats),
+		partyRankRefreshAt:     make(map[string]time.Time),
+		likelyStacks:           make(map[string]likelyStackCache),
+		liveRanks:              make(map[string]liveRankCache),
+		liveRanksInFlight:      make(map[string]struct{}),
+		likelyStacksInFlight:   make(map[string]struct{}),
+		progressionSubscribers: make(map[chan struct{}]struct{}),
+		socialSubscribers:      make(map[chan struct{}]struct{}),
+		chatSubscribers:        make(map[chan struct{}]struct{}),
+		chatSnapshots:          make(map[string]struct{}),
+		oauthAttempts:          make(map[string]oauthAttempt),
 	}
 }
 
@@ -108,6 +124,10 @@ func (h *Handler) SetTicker(ticker *tick.Ticker) {
 
 func (h *Handler) RestartTicker(newVal *valclient.ValClient) {
 	ticker := tick.NewTicker(newVal)
+	ticker.OnProgressionChanged = h.NotifyProgressionChanged
+	ticker.OnSocialChanged = h.NotifySocialChanged
+	ticker.OnChatChanged = h.NotifyChatChanged
+	ticker.OnChatEvent = func(uri string, data []byte) { go h.HandleLocalChatEvent(uri, data) }
 	h.SetTicker(ticker)
 	go ticker.Start()
 }
