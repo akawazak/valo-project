@@ -574,6 +574,12 @@ fn get_backend_token(state: State<'_, AppState>) -> String {
     state.backend_token.clone()
 }
 
+#[tauri::command]
+fn prepare_for_update(state: State<'_, AppState>) {
+    eprintln!("stopping backend sidecar before updater install");
+    stop_backend_sidecar(&state);
+}
+
 #[derive(Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RiotAccountSecrets {
@@ -1951,6 +1957,7 @@ pub fn run() {
             delete_login_session,
             get_ssid_cookie,
             get_backend_token,
+            prepare_for_update,
             save_riot_account_secrets,
             load_riot_account_secrets,
             delete_riot_account_secrets,

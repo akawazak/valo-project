@@ -88,6 +88,7 @@ jobs:
 
             ### Fixed
             - Restored party detection and post-match names where Riot returns them.
+            - Windows updates now stop the backend before replacing its executable.
             - Hardened portable updates with signed manifests and SHA-256 verification.
             - Fixed account, presence, match sync, and UI state issues found during the redesign.
 

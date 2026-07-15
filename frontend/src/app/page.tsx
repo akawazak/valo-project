@@ -53,7 +53,7 @@ import LivePartyStatus from '@/features/party/LivePartyStatus';
 import ReleaseNotesModal, { type ReleaseNotes } from '@/components/ReleaseNotesModal';
 
 const CURRENT_RELEASE: ReleaseNotes = {
-    version: "0.5.25",
+    version: "0.5.26",
     title: "What’s new",
     summary: "A clearer match review, a stronger profile, and a more reliable social experience.",
     added: [
@@ -69,6 +69,7 @@ const CURRENT_RELEASE: ReleaseNotes = {
     fixed: [
         "Restored party detection and post-match player names where Riot returns them.",
         "Hardened portable updates with signed manifests and SHA-256 verification.",
+        "Fixed Windows updates so the backend releases its file lock before installation begins.",
         "Fixed account, presence, match sync, and UI state issues found during the redesign.",
     ],
 };
@@ -476,7 +477,13 @@ function HomeApp() {
         if (!availableUpdate || isUpdating) return;
         setIsUpdating(true);
         try {
-            await availableUpdate.downloadAndInstall();
+            // Keep the backend available if the download itself fails. Once
+            // the signed bundle is local, release the sidecar file lock before
+            // NSIS replaces the installed backend executable.
+            await availableUpdate.download();
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("prepare_for_update");
+            await availableUpdate.install();
             setUpdateReady(true);
             setAvailableUpdate(null);
             // On Windows, the updater launches the NSIS installer and the
