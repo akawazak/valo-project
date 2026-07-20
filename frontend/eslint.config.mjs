@@ -52,7 +52,10 @@ export default [
     },
     rules: {
       ...nextPlugin.configs.recommended.rules,
-      ...nextPlugin.configs['core-web-vitals'].rules
+      ...nextPlugin.configs['core-web-vitals'].rules,
+      // VantaVault is a static Tauri app whose Riot artwork is resolved at
+      // runtime; Next's image optimizer is not available in the desktop build.
+      '@next/next/no-img-element': 'off',
     },
   },
 ];

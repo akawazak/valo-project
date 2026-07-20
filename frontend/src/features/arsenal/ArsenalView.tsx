@@ -150,11 +150,12 @@ export default function ArsenalView({
     const isViewingDefault = !activePreset || activePreset.uuid === DEFAULT_PRESET_ID;
     const isEditingDefault = Boolean(isEditing && editingPreset?.uuid === DEFAULT_PRESET_ID);
 
+    const selectedPresetUuid = selectedPreset?.uuid;
     useEffect(() => {
-        if (selectedPreset && selectedPreset.uuid !== DEFAULT_PRESET_ID) {
+        if (selectedPresetUuid && selectedPresetUuid !== DEFAULT_PRESET_ID) {
             setShowPresetEditor(true);
         }
-    }, [selectedPreset?.uuid]);
+    }, [selectedPresetUuid]);
 
     // For current loadout, fall back to whatever the game has equipped right now
     const identity: IdentityV1 = isViewingDefault

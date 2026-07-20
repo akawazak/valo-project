@@ -163,6 +163,7 @@ export interface StorefrontBonusOffer {
     Offer: StorefrontOffer;
     DiscountPercent?: number;
     DiscountCosts?: Record<string, number>;
+    IsSeen?: boolean;
 }
 
 export interface StorefrontBundleItem {
@@ -198,7 +199,9 @@ export interface StorefrontResponse {
     AccessoryStore?: {
         AccessoryStoreOffers?: AccessoryStoreOffer[];
         StorefrontID?: string;
+        AccessoryStoreRemainingDurationInSeconds?: number;
     };
+    UpgradeCurrencyStore?: { UpgradeCurrencyOffers?: StorefrontOffer[] };
 }
 
 export interface SprayAsset {

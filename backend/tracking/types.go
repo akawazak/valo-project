@@ -17,30 +17,39 @@ package tracking
 // Derived fields (KD, KDA, ADR, ACS, HSPct) are precomputed on the
 // backend at row-serialization time (see design doc §3).
 type PlayerStats struct {
-	Subject         string  `json:"subject"`
-	TeamID          string  `json:"teamId"`
-	PartyID         string  `json:"partyId,omitempty"`
-	GameName        string  `json:"gameName"`
-	TagLine         string  `json:"tagLine"`
-	PlayerCardID    string  `json:"playerCardId,omitempty"`
-	PlayerTitleID   string  `json:"playerTitleId,omitempty"`
-	CharacterID     string  `json:"characterId"`
-	Kills           int     `json:"kills"`
-	Deaths          int     `json:"deaths"`
-	Assists         int     `json:"assists"`
-	Score           int     `json:"score"`
-	Headshots       int     `json:"headshots"`
-	Bodyshots       int     `json:"bodyshots"`
-	Legshots        int     `json:"legshots"`
-	DamageDealt     int     `json:"damageDealt"`
-	RoundsPlayed    int     `json:"roundsPlayed"`
-	IsLocal         bool    `json:"isLocal"`
-	CompetitiveTier int     `json:"competitiveTier"`
-	KD              float64 `json:"kd"`
-	KDA             float64 `json:"kda"`
-	ADR             float64 `json:"adr"`
-	ACS             float64 `json:"acs"`
-	HSPct           float64 `json:"hsPct"`
+	Subject         string       `json:"subject"`
+	TeamID          string       `json:"teamId"`
+	PartyID         string       `json:"partyId,omitempty"`
+	GameName        string       `json:"gameName"`
+	TagLine         string       `json:"tagLine"`
+	PlayerCardID    string       `json:"playerCardId,omitempty"`
+	PlayerTitleID   string       `json:"playerTitleId,omitempty"`
+	CharacterID     string       `json:"characterId"`
+	Kills           int          `json:"kills"`
+	Deaths          int          `json:"deaths"`
+	Assists         int          `json:"assists"`
+	Score           int          `json:"score"`
+	Headshots       int          `json:"headshots"`
+	Bodyshots       int          `json:"bodyshots"`
+	Legshots        int          `json:"legshots"`
+	DamageDealt     int          `json:"damageDealt"`
+	RoundsPlayed    int          `json:"roundsPlayed"`
+	PlaytimeMillis  int64        `json:"playtimeMillis,omitempty"`
+	AbilityCasts    AbilityCasts `json:"abilityCasts,omitempty"`
+	IsLocal         bool         `json:"isLocal"`
+	CompetitiveTier int          `json:"competitiveTier"`
+	KD              float64      `json:"kd"`
+	KDA             float64      `json:"kda"`
+	ADR             float64      `json:"adr"`
+	ACS             float64      `json:"acs"`
+	HSPct           float64      `json:"hsPct"`
+}
+
+type AbilityCasts struct {
+	Grenade  int `json:"grenade"`
+	Ability1 int `json:"ability1"`
+	Ability2 int `json:"ability2"`
+	Ultimate int `json:"ultimate"`
 }
 
 // MatchLocation is a Riot world-space coordinate captured at an event.
@@ -66,22 +75,63 @@ type KillEvent struct {
 	DamageType      string          `json:"damageType,omitempty"`
 	DamageItem      string          `json:"damageItem,omitempty"`
 	SecondaryFire   bool            `json:"secondaryFire,omitempty"`
+	Assistants      []string        `json:"assistants,omitempty"`
 	PlayerLocations []MatchLocation `json:"playerLocations,omitempty"`
+}
+
+type RoundDamage struct {
+	Receiver  string `json:"receiver"`
+	Damage    int    `json:"damage"`
+	Legshots  int    `json:"legshots"`
+	Bodyshots int    `json:"bodyshots"`
+	Headshots int    `json:"headshots"`
+}
+
+type RoundEconomy struct {
+	LoadoutValue int    `json:"loadoutValue"`
+	Weapon       string `json:"weapon,omitempty"`
+	Armor        string `json:"armor,omitempty"`
+	Remaining    int    `json:"remaining"`
+	Spent        int    `json:"spent"`
+}
+
+type RoundAbilityEffects struct {
+	Grenade  int `json:"grenade"`
+	Ability1 int `json:"ability1"`
+	Ability2 int `json:"ability2"`
+	Ultimate int `json:"ultimate"`
+}
+
+// RoundPlayerStat is the factual receipt for one player in one round. The UI
+// uses this to explain buys, damage, assists and ability usage without guessing
+// intent or pretending it has video evidence.
+type RoundPlayerStat struct {
+	Subject       string              `json:"subject"`
+	Score         int                 `json:"score"`
+	Damage        []RoundDamage       `json:"damage,omitempty"`
+	Economy       RoundEconomy        `json:"economy"`
+	Ability       RoundAbilityEffects `json:"ability"`
+	WasAFK        bool                `json:"wasAfk,omitempty"`
+	WasPenalized  bool                `json:"wasPenalized,omitempty"`
+	StayedInSpawn bool                `json:"stayedInSpawn,omitempty"`
 }
 
 // MatchRound is factual, post-match round metadata returned by Riot. Keeping
 // the winner and objective result lets the UI calculate conversion rates
 // without presenting a modelled win probability as if it were ground truth.
 type MatchRound struct {
-	RoundNum        int    `json:"roundNum"`
-	WinningTeam     string `json:"winningTeam"`
-	RoundResult     string `json:"roundResult,omitempty"`
-	RoundCeremony   string `json:"roundCeremony,omitempty"`
-	BombPlanter     string `json:"bombPlanter,omitempty"`
-	BombDefuser     string `json:"bombDefuser,omitempty"`
-	PlantRoundTime  int    `json:"plantRoundTime,omitempty"`
-	PlantSite       string `json:"plantSite,omitempty"`
-	DefuseRoundTime int    `json:"defuseRoundTime,omitempty"`
+	RoundNum        int               `json:"roundNum"`
+	WinningTeam     string            `json:"winningTeam"`
+	RoundResult     string            `json:"roundResult,omitempty"`
+	RoundCeremony   string            `json:"roundCeremony,omitempty"`
+	BombPlanter     string            `json:"bombPlanter,omitempty"`
+	BombDefuser     string            `json:"bombDefuser,omitempty"`
+	PlantRoundTime  int               `json:"plantRoundTime,omitempty"`
+	PlantSite       string            `json:"plantSite,omitempty"`
+	DefuseRoundTime int               `json:"defuseRoundTime,omitempty"`
+	PlantLocation   MatchLocation     `json:"plantLocation,omitempty"`
+	DefuseLocation  MatchLocation     `json:"defuseLocation,omitempty"`
+	PlayerStats     []RoundPlayerStat `json:"playerStats,omitempty"`
 }
 
 type MatchPartyMember struct {
@@ -108,22 +158,25 @@ type MatchSummary struct {
 	RedRoundsWon     int                `json:"redRoundsWon"`
 	TierAfter        int                `json:"tierAfter"`
 	RREarned         int                `json:"rrEarned"`
+	AFKPenalty       int                `json:"afkPenalty,omitempty"`
+	PerformanceBonus int                `json:"performanceBonus,omitempty"`
 	LocalPlayer      PlayerStats        `json:"localPlayer"`
 	PartyMembers     []MatchPartyMember `json:"partyMembers,omitempty"`
 }
 
 // RRSnapshot is one row of `rr_snapshots` plus the API-shaped JSON.
 type RRSnapshot struct {
-	Puuid          string `json:"puuid"`
-	MatchID        string `json:"matchId"`
-	SeasonID       string `json:"seasonId"`
-	TierBefore     int    `json:"tierBefore"`
-	TierAfter      int    `json:"tierAfter"`
-	RRBefore       int    `json:"rrBefore"`
-	RRAfter        int    `json:"rrAfter"`
-	RREarned       int    `json:"rrEarned"`
-	AFKPenalty     int    `json:"afkPenalty"`
-	MatchStartTime int64  `json:"matchStartTime"`
+	Puuid            string `json:"puuid"`
+	MatchID          string `json:"matchId"`
+	SeasonID         string `json:"seasonId"`
+	TierBefore       int    `json:"tierBefore"`
+	TierAfter        int    `json:"tierAfter"`
+	RRBefore         int    `json:"rrBefore"`
+	RRAfter          int    `json:"rrAfter"`
+	RREarned         int    `json:"rrEarned"`
+	AFKPenalty       int    `json:"afkPenalty"`
+	PerformanceBonus int    `json:"performanceBonus"`
+	MatchStartTime   int64  `json:"matchStartTime"`
 }
 
 // AgentStat is one row of `agent_stats` (queue='all' by default).
@@ -313,6 +366,8 @@ type PlayerRow struct {
 	Legshots        int
 	DamageDealt     int
 	RoundsPlayed    int
+	PlaytimeMillis  int64
+	AbilityCasts    AbilityCasts
 	IsLocal         bool
 }
 

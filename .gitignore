@@ -14,6 +14,9 @@ backend/backend/
 frontend/src-tauri/binaries/
 frontend/src-tauri/portable/target/
 frontend/.playwright-cli/
+/.npm-cache/
+/backend/build-check/
+/frontend/public/brand-experiments/
 
 # Logs
 backend/log*.txt
@@ -31,6 +34,7 @@ AGENTS.md
 MEMORY.md
 /RELEASE_CHECKLIST.md
 memory/
+.idea/
 frontend/.codex-*.png
 frontend/*-qa.png
 VantaVault-portable.exe

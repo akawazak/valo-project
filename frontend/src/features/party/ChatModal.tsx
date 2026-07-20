@@ -182,7 +182,20 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 				void refreshConversations(true).catch(() => undefined);
 			}, 150);
 		}, controller.signal).catch(() => undefined);
-		return () => { clearTimeout(eventTimer); clearTimeout(socialEventTimer); controller.abort(); };
+		// SSE is the instant path. This local-history refresh is only a safety net
+		// for suspended laptops/proxies that leave a stream half-open indefinitely.
+		const safetyRefresh = window.setInterval(() => {
+			if (document.hidden) return;
+			void refreshConversations(false).catch(() => undefined);
+			const activeKey = selectedKeyRef.current;
+			if (activeKey) void refreshMessages(activeKey).catch(() => undefined);
+		}, 10_000);
+		return () => {
+			clearTimeout(eventTimer);
+			clearTimeout(socialEventTimer);
+			window.clearInterval(safetyRefresh);
+			controller.abort();
+		};
     }, [open, refreshConversations, refreshMessages]);
 
     useEffect(() => {

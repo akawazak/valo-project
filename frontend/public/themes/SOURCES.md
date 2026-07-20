@@ -6,5 +6,8 @@ These optimized wallpapers come from Riot Games' official [VALORANT Media](https
 - China Launch: China launch key art
 - Omen & Outlaw and Cypher Reborn: Episode 8 Act I wallpaper pack
 - Deadlock: Deadlock wallpaper pack
+- Viper: Viper wallpaper pack
+- Harbor: Harbor wallpaper pack
+- Gekko: Episode 6 Act II Gekko key art
 
 The images are bundled locally so themes remain fast and available offline. VALORANT and the artwork are property of Riot Games.

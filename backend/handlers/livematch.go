@@ -784,13 +784,12 @@ func liveRankFromMMR(mmr playerMMRResponse, seasonID string) (tier, rr, peakTier
 			}
 		}
 	}
-	for _, candidate := range []string{seasonID, tracking.NormalizeSeasonID(mmr.LatestCompetitiveUpdate.SeasonID)} {
-		if candidate == "" {
-			continue
+	if seasonID != "" {
+		season, found := competitiveSeason(competitive.SeasonalInfoBySeasonID, seasonID)
+		if !found || season.NumberOfGames <= 0 || season.CompetitiveTier <= 0 {
+			return 0, 0, peakTier
 		}
-		if season, found := competitive.SeasonalInfoBySeasonID[candidate]; found && season.CompetitiveTier > 0 {
-			return season.CompetitiveTier, season.RankedRating, peakTier
-		}
+		return season.CompetitiveTier, season.RankedRating, peakTier
 	}
 	if latest := mmr.LatestCompetitiveUpdate; latest.TierAfterUpdate > 0 {
 		return latest.TierAfterUpdate, latest.RankedRatingAfterUpdate, peakTier

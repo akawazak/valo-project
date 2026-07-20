@@ -22,6 +22,8 @@ import ProfilePanel from "@/features/profile/ProfilePanel";
 import ChatModal from "./ChatModal";
 import { presenceActivity, presenceState, queueName } from "./presence";
 import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
+import { playUiSound } from "@/lib/uiSounds";
+import { publishAppNotification } from "@/lib/appNotifications";
 import "./LivePartyStatus.css";
 
 const POLL_MS = 5000;
@@ -64,6 +66,31 @@ function SafePartyImage({ sources, className, fallback, fallbackClassName, eager
     return <img src={src} alt="" className={className} loading={eager ? "eager" : "lazy"} decoding="async" onError={() => setSourceIndex(index => index + 1)} />;
 }
 
+function formatQueueElapsed(milliseconds: number) {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours > 0
+        ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+        : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function QueueElapsed({ startedAt, prefix = "" }: { startedAt?: number; prefix?: string }) {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        if (!startedAt) return;
+        setNow(Date.now());
+        const timer = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [startedAt]);
+
+    // Only display a time Riot actually supplied. A future or implausibly old
+    // timestamp is omitted instead of starting a convincing but false timer.
+    if (!startedAt || startedAt > now + 5_000 || startedAt < now - 24 * 60 * 60 * 1000) return null;
+    return <>{prefix}{formatQueueElapsed(now - startedAt)}</>;
+}
+
 function FriendsGlyph() {
     return (
         <svg className="live-party-friends-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -78,7 +105,7 @@ function profileFromIdentity(puuid: string, displayName: string): PartyProfileTa
 }
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
-    const { activeAccount, isBackendOnline, isLocalClientActive } = useData();
+    const { activeAccount, isBackendOnline, isLocalClientActive, playerCards: knownPlayerCards } = useData();
     const [party, setParty] = useState<PartyStatusResponse | null>(null);
     const [social, setSocial] = useState<SocialStatusResponse | null>(null);
     const [stale, setStale] = useState(false);
@@ -96,6 +123,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 	const previousUnreadRef = useRef<Record<string, number> | null>(null);
 	const chatOpenRef = useRef(false);
 	const chatNoticeTimerRef = useRef<number | null>(null);
+	const [rememberedCardIds, setRememberedCardIds] = useState<Record<string, string>>({});
 	const contextMenu = overlay?.kind === "context" ? overlay : null;
 	const profileTarget = overlay?.kind === "profile" ? overlay.profile : null;
 	const chatOpen = overlay?.kind === "chat";
@@ -112,7 +140,22 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 				.filter((item) => item.type === "dm" && item.peerPuuid && item.latestMessage?.direction === "incoming" && item.unreadCount > (previousUnread[item.peerPuuid.toLowerCase()] || 0))
 				.sort((a, b) => (b.latestMessage?.timestamp || 0) - (a.latestMessage?.timestamp || 0))[0];
 			if (newest?.peerPuuid && newest.latestMessage) {
-				setChatNotice({ peer: newest.peerPuuid, name: newest.displayName, body: newest.latestMessage.body, timestamp: newest.latestMessage.timestamp });
+				const senderName = newest.latestMessage.senderName || newest.displayName || "Riot friend";
+				setChatNotice({
+					peer: newest.peerPuuid,
+					name: senderName,
+					body: newest.latestMessage.body,
+					timestamp: newest.latestMessage.timestamp,
+				});
+				playUiSound("message");
+				publishAppNotification({
+					id: `message:${newest.peerPuuid}:${newest.latestMessage.timestamp}`,
+					kind: "message",
+					title: `New message from ${senderName}`,
+					body: "Open Riot chat to read it.",
+					action: "profile",
+					accountPuuid: activeAccount?.puuid,
+				});
 				if (chatNoticeTimerRef.current) window.clearTimeout(chatNoticeTimerRef.current);
 				chatNoticeTimerRef.current = window.setTimeout(() => setChatNotice(null), 6000);
 			}
@@ -121,7 +164,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 		setChatUnread(chatData.unreadCount);
 		setChatUnreadByPeer(nextUnread);
 		setPartyConversation(chatData.conversations.find((item) => item.type === "party" && item.source === "local"));
-	}, []);
+	}, [activeAccount?.puuid]);
 
 	useEffect(() => () => {
 		if (chatNoticeTimerRef.current) window.clearTimeout(chatNoticeTimerRef.current);
@@ -129,6 +172,27 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 
     const [cardCache, setCardCache] = useState<Record<string, CardMeta>>({});
     const [tierCache, setTierCache] = useState<Record<number, TierMeta>>({});
+
+    // The app already loads card metadata for profiles. Seed this view from
+    // that shared cache so a message toast does not wait for (or depend on) a
+    // second public API request before it can show the sender's player card.
+    useEffect(() => {
+        if (!knownPlayerCards.length) return;
+        setCardCache((current) => {
+            let changed = false;
+            const next = { ...current };
+            for (const card of knownPlayerCards) {
+                const key = card.uuid.toLowerCase();
+                if (next[key]?.images.length) continue;
+                next[key] = {
+                    images: [card.displayIcon, card.smallArt, card.wideArt, card.largeArt]
+                        .filter((image): image is string => Boolean(image)),
+                };
+                changed = true;
+            }
+            return changed ? next : current;
+        });
+    }, [knownPlayerCards]);
 
     useEffect(() => {
         if (!contextMenu) return;
@@ -156,8 +220,15 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     }, [expanded]);
 
     const togglePartyPanel = () => {
+		const opening = !expanded;
 		setOverlay(null);
-        setExpanded((current) => !current);
+		setExpanded(opening);
+		if (opening && activeAccount && isBackendOnline) {
+			void getSocialStatus().then(setSocial).catch(() => {
+				// The existing stream/poll loop remains the fallback when Riot is
+				// temporarily unavailable during this one-shot panel refresh.
+			});
+		}
     };
 
     const openProfile = (profile: PartyProfileTarget) => {
@@ -271,10 +342,16 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 			clearTimeout(chatTimer);
 			chatTimer = window.setTimeout(refreshChat, 150);
 		}, chatController.signal).catch(() => undefined);
+		const safetyRefresh = window.setInterval(() => {
+			if (document.hidden) return;
+			refreshSocial();
+			refreshChat();
+		}, 15_000);
 		return () => {
 			active = false;
 			clearTimeout(socialTimer);
 			clearTimeout(chatTimer);
+			window.clearInterval(safetyRefresh);
 			socialController.abort();
 			chatController.abort();
 		};
@@ -295,7 +372,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                         images: [item.displayIcon, item.smallArt, item.wideArt].filter((image): image is string => Boolean(image)),
                     };
                 }
-                setCardCache(m);
+                setCardCache((current) => ({ ...m, ...current }));
             })
             .catch((err) => console.error("Error loading playercards API", err));
 
@@ -319,13 +396,88 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
         };
     }, []);
 
-    const presences = useMemo(() => sortedPresences(social), [social]);
-	const chatContacts = useMemo(() => presences.map((presence) => ({
+    const rawPresences = useMemo(() => sortedPresences(social), [social]);
+	useEffect(() => {
+		if (!activeAccount?.puuid) {
+			setRememberedCardIds({});
+			return;
+		}
+		try {
+			const cached = window.localStorage.getItem(`vantavault:social-cards:v1:${activeAccount.puuid.toLowerCase()}`);
+			const parsed: unknown = cached ? JSON.parse(cached) : {};
+			setRememberedCardIds(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, string> : {});
+		} catch {
+			setRememberedCardIds({});
+		}
+	}, [activeAccount?.puuid]);
+	useEffect(() => {
+		if (!activeAccount?.puuid) return;
+		const discovered: Record<string, string> = {};
+		for (const presence of rawPresences) {
+			if (presence.puuid && presence.cardId) discovered[presence.puuid.toLowerCase()] = presence.cardId;
+		}
+		for (const member of party?.members || []) {
+			if (member.puuid && member.cardId) discovered[member.puuid.toLowerCase()] = member.cardId;
+		}
+		if (!Object.keys(discovered).length) return;
+		setRememberedCardIds((current) => {
+			let changed = false;
+			const next = { ...current };
+			for (const [puuid, cardId] of Object.entries(discovered)) {
+				if (next[puuid] === cardId) continue;
+				next[puuid] = cardId;
+				changed = true;
+			}
+			if (!changed) return current;
+			const entries = Object.entries(next);
+			const bounded = Object.fromEntries(entries.slice(Math.max(0, entries.length - 500)));
+			try {
+				window.localStorage.setItem(`vantavault:social-cards:v1:${activeAccount.puuid.toLowerCase()}`, JSON.stringify(bounded));
+			} catch { /* The in-memory cache still works when storage is unavailable. */ }
+			return bounded;
+		});
+	}, [activeAccount?.puuid, party?.members, rawPresences]);
+	const presences = useMemo(() => rawPresences.map((presence) => ({
 		...presence,
-		puuid: presence.puuid,
-		name: presence.name,
-		avatar: presence.cardId ? cardCache[presence.cardId.toLowerCase()]?.images[0] : undefined,
-	})), [presences, cardCache]);
+		cardId: presence.cardId || rememberedCardIds[(presence.puuid || "").toLowerCase()],
+	})), [rawPresences, rememberedCardIds]);
+	const cardForPlayer = useCallback((puuid: string, cardId?: string) => {
+		const resolved = cardId || rememberedCardIds[puuid.toLowerCase()];
+		return resolved ? cardCache[resolved.toLowerCase()] : undefined;
+	}, [cardCache, rememberedCardIds]);
+	const chatContacts = useMemo(() => {
+		const contacts = new Map<string, SocialPresence & { avatar?: string }>(presences
+			.filter((presence) => Boolean(presence.puuid))
+			.map((presence) => [presence.puuid!.toLowerCase(), {
+				...presence,
+				puuid: presence.puuid,
+				name: presence.name,
+				avatar: presence.cardId ? cardCache[presence.cardId.toLowerCase()]?.images[0] : undefined,
+			}]));
+		for (const member of party?.members || []) {
+			if (!member.puuid || member.isLocal) continue;
+			const key = member.puuid.toLowerCase();
+			const existing = contacts.get(key);
+			const card = cardForPlayer(member.puuid, member.cardId);
+			contacts.set(key, {
+				...existing,
+				puuid: member.puuid,
+				name: member.name || existing?.name || "Party member",
+				avatar: card?.images[0] || existing?.avatar,
+			});
+		}
+		return [...contacts.values()];
+	}, [presences, party?.members, cardCache, cardForPlayer]);
+	const chatNoticePresence = chatNotice
+		? presences.find((presence) => presence.puuid?.toLowerCase() === chatNotice.peer.toLowerCase())
+		: undefined;
+	const chatNoticeName = chatNoticePresence?.name?.trim() || chatNotice?.name?.trim() || "Riot friend";
+	const chatNoticeCardId = chatNotice
+		? chatNoticePresence?.cardId || rememberedCardIds[chatNotice.peer.toLowerCase()]
+		: undefined;
+	const chatNoticeCard = chatNoticeCardId
+		? cardCache[chatNoticeCardId.toLowerCase()]
+		: undefined;
     const onlineCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
@@ -349,7 +501,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 					local={local}
 					party={party!}
 					friendCount={onlineCount}
-					card={cardCache[local.cardId?.toLowerCase()]}
+					card={cardForPlayer(local.puuid, local.cardId)}
 					tier={tierCache[local.competitiveTier]}
 					onOpen={togglePartyPanel}
 				/>
@@ -361,8 +513,17 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 	) : null;
 	const chatNoticePortal = chatNotice && typeof document !== "undefined" ? createPortal(
 		<button type="button" className="live-party-chat-notice" data-slot="chat-notice" data-party-portal aria-live="polite" onClick={() => openChat(chatNotice.peer)}>
-			<span className="live-party-chat-notice-icon" data-slot="chat-notice-avatar" aria-hidden="true">{chatNotice.name.slice(0, 1).toUpperCase()}</span>
-			<span data-slot="chat-notice-content"><strong>{chatNotice.name || "New Riot message"}</strong><small>{chatNotice.body}</small></span>
+			<span className="live-party-chat-notice-icon" data-slot="chat-notice-avatar" aria-hidden="true">
+				<SafePartyImage
+					key={`${chatNotice.peer}:${chatNoticeCardId || "fallback"}`}
+					sources={chatNoticeCard?.images || []}
+					className="live-party-chat-notice-avatar"
+					fallback={chatNoticeName.slice(0, 1).toUpperCase() || "?"}
+					fallbackClassName="live-party-chat-notice-fallback"
+					eager
+				/>
+			</span>
+			<span data-slot="chat-notice-content"><strong>{chatNoticeName}</strong><small>{chatNotice.body}</small></span>
 			<time dateTime={new Date(chatNotice.timestamp).toISOString()}>{formatSocialTime(chatNotice.timestamp)}</time>
 		</button>,
 		document.body,
@@ -389,7 +550,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 local={local}
                 party={party!}
                 friendCount={onlineCount}
-                card={cardCache[local.cardId?.toLowerCase()]}
+                card={cardForPlayer(local.puuid, local.cardId)}
                 tier={tierCache[local.competitiveTier]}
                 onOpen={togglePartyPanel}
 			/>
@@ -405,7 +566,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 local={local}
                 party={party!}
                 friendCount={onlineCount}
-                card={cardCache[local.cardId?.toLowerCase()]}
+                card={cardForPlayer(local.puuid, local.cardId)}
                 tier={tierCache[local.competitiveTier]}
                 onOpen={togglePartyPanel}
             />
@@ -424,7 +585,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 <div>
                     <div className="live-party-kicker">Party & Friends</div>
                     <div className="live-party-title">
-                        {hasParty ? phaseLabel(party!.phase, party!.queueId) : socialTitle(social, presences)}
+                        {hasParty ? <>{phaseLabel(party!.phase, party!.queueId)}{party!.phase === "matchmaking" && <QueueElapsed startedAt={party!.queueStartedAt} prefix=" · " />}</> : socialTitle(social, presences)}
                     </div>
                 </div>
                 <div className="live-party-header-actions">
@@ -448,6 +609,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                     </button>
                 </div>
             </div>
+            <div className="live-party-widget-scroll">
             <div className="live-party-overview">
                 <PresenceStat label={hasParty ? "Party" : "Friends"} value={hasParty ? `${members.length}/5` : String(social?.friendCount || presences.length)} />
                 <PresenceStat label="In match" value={String(inGameCount)} accent />
@@ -464,9 +626,12 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                             <PartyMemberRow
                                 key={member.puuid}
                                 member={member}
-                                card={cardCache[member.cardId?.toLowerCase()]}
+                                card={cardForPlayer(member.puuid, member.cardId)}
                                 tier={tierCache[member.competitiveTier]}
                                 onOpenProfile={() => openProfile(profileFromIdentity(member.puuid, member.name))}
+								onOpenChat={() => member.isLocal
+									? openProfile(profileFromIdentity(member.puuid, member.name))
+									: openChat(member.puuid)}
                                 onContextMenu={(event) => openContextMenu(event, profileFromIdentity(member.puuid, member.name))}
                             />
                         ))}
@@ -487,6 +652,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 				unreadByPeer={chatUnreadByPeer}
                 onContextMenu={openContextMenu}
             />
+            </div>
             {contextMenu && typeof document !== "undefined" && createPortal(
                 <div className="live-party-context-menu" data-party-portal style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
                     <button type="button" role="menuitem" onClick={() => setOverlay({ kind: "profile", profile: contextMenu.profile })}>Open Profile</button>
@@ -554,7 +720,7 @@ function PartyPill({
                 <SafePartyImage key={(card?.images || []).join("|") || local.name} sources={card?.images || []} className="live-party-pill-avatar-img" fallback={local.name.slice(0, 1).toUpperCase()} fallbackClassName="live-party-pill-avatar-letter" eager />
             </span>
             <span className="live-party-pill-body">
-                <span className="live-party-pill-kicker">{phaseShort(party.phase)}</span>
+                <span className="live-party-pill-kicker">{phaseShort(party.phase)}{party.phase === "matchmaking" && <QueueElapsed startedAt={party.queueStartedAt} prefix=" · " />}</span>
                 <span className="live-party-pill-title">{local.name}</span>
                 <span className="live-party-pill-sub">
                     {tier?.name ? tier.name : "Unranked"} - {party.members?.length || 0}/5
@@ -726,16 +892,24 @@ function FriendPresenceList({
 }
 
 function SocialRequests({ requests, events }: { requests: NonNullable<SocialStatusResponse["requests"]>; events: NonNullable<SocialStatusResponse["activity"]> }) {
-	const incoming = requests.filter((request) => request.direction === "incoming");
-	const outgoing = requests.filter((request) => request.direction === "outgoing");
 	const reconnect = Array.from(new Map(events.filter((event) => event.type === "friendship_ended").map((event) => [event.peerPuuid, event])).values());
 	const [requestStates, setRequestStates] = useState<Record<string, { state: "working" | "pending" | "error"; message?: string }>>({});
+	const [resolvedRequests, setResolvedRequests] = useState<Set<string>>(() => new Set());
+	const restoreTimers = useRef<Record<string, number>>({});
 	const [riotID, setRiotID] = useState("");
 	const [sendState, setSendState] = useState<{ state: "idle" | "working" | "done" | "error"; message?: string }>({ state: "idle" });
+	const visibleRequests = requests.filter((request) => !resolvedRequests.has(request.puuid));
+	const incoming = visibleRequests.filter((request) => request.direction === "incoming");
+	const outgoing = visibleRequests.filter((request) => request.direction === "outgoing");
 	useEffect(() => {
 		const visible = new Set(requests.map((request) => request.puuid));
 		setRequestStates((current) => Object.fromEntries(Object.entries(current).filter(([peer]) => visible.has(peer))));
+		setResolvedRequests((current) => {
+			const next = new Set(Array.from(current).filter((peer) => visible.has(peer)));
+			return next.size === current.size ? current : next;
+		});
 	}, [requests]);
+	useEffect(() => () => Object.values(restoreTimers.current).forEach((timer) => window.clearTimeout(timer)), []);
 	const send = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		const separator = riotID.lastIndexOf("#");
@@ -760,7 +934,27 @@ function SocialRequests({ requests, events }: { requests: NonNullable<SocialStat
 			const result = await actOnSocialRequest(puuid, action);
 			setRequestStates((current) => ({ ...current, [puuid]: result.confirmed
 				? { state: "pending", message: "Confirmed by Riot" }
-				: { state: "pending", message: "Sent to Riot · waiting for the roster update" } }));
+				: { state: "pending", message: "Waiting for Riot to return the request details" } }));
+			if (result.confirmed && action !== "send") {
+				setResolvedRequests((current) => new Set(current).add(puuid));
+				window.clearTimeout(restoreTimers.current[puuid]);
+				restoreTimers.current[puuid] = window.setTimeout(() => {
+					setResolvedRequests((current) => {
+						const next = new Set(current);
+						next.delete(puuid);
+						return next;
+					});
+				}, 6_000);
+			} else if (!result.confirmed) {
+				window.clearTimeout(restoreTimers.current[puuid]);
+				restoreTimers.current[puuid] = window.setTimeout(() => {
+					setRequestStates((current) => {
+						const next = { ...current };
+						delete next[puuid];
+						return next;
+					});
+				}, 4_000);
+			}
 		} catch (error) {
 			setRequestStates((current) => ({ ...current, [puuid]: { state: "error", message: error instanceof Error ? error.message : "Request action failed" } }));
 		}
@@ -771,7 +965,7 @@ function SocialRequests({ requests, events }: { requests: NonNullable<SocialStat
 			<div><input id="live-party-riot-id" value={riotID} onChange={(event) => setRiotID(event.target.value)} placeholder="Name#Tag" autoComplete="off" spellCheck={false} /><button type="submit" disabled={sendState.state === "working"}>{sendState.state === "working" ? "Sending…" : "Send"}</button></div>
 			{sendState.message ? <small aria-live="polite" className={sendState.state === "error" ? "is-error" : ""}>{sendState.message}</small> : <small>Use the player&apos;s full Riot ID.</small>}
 		</form>
-		{!requests.length && !reconnect.length && <div className="live-party-social-empty"><strong>No pending requests</strong><span>Incoming and sent requests will appear here.</span></div>}
+		{!visibleRequests.length && !reconnect.length && <div className="live-party-social-empty"><strong>No pending requests</strong><span>Incoming and sent requests will appear here.</span></div>}
 		{incoming.length > 0 && <SocialRequestGroup title="Incoming" requests={incoming} states={requestStates} onAction={act} />}
 		{outgoing.length > 0 && <SocialRequestGroup title="Sent" requests={outgoing} states={requestStates} onAction={act} />}
 		{reconnect.length > 0 && <section className="live-party-request-group">
@@ -779,7 +973,7 @@ function SocialRequests({ requests, events }: { requests: NonNullable<SocialStat
 			{reconnect.map((event) => { const actionState = requestStates[event.peerPuuid]; return <div className="live-party-request-row" key={event.peerPuuid}>
 				<i aria-hidden="true">{(event.name || "?").slice(0, 1).toUpperCase()}</i>
 				<span><strong>{event.name || "Unknown Riot account"}</strong><small>{actionState?.message || "Previously observed in your Riot friends list"}</small></span>
-				<div className="live-party-request-actions"><button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => act(event.peerPuuid, "send")}>{actionState?.state === "working" ? "Sendingâ€¦" : "Send request"}</button></div>
+				<div className="live-party-request-actions"><button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => act(event.peerPuuid, "send")}>{actionState?.state === "working" ? "Sending…" : "Send request"}</button></div>
 			</div>})}
 		</section>}
 	</div>;
@@ -930,12 +1124,14 @@ function PartyMemberRow({
     card,
     tier,
     onOpenProfile,
+	onOpenChat,
     onContextMenu,
 }: {
     member: PartyMember;
     card?: CardMeta;
     tier?: TierMeta;
     onOpenProfile: () => void;
+	onOpenChat: () => void;
     onContextMenu: (event: React.MouseEvent) => void;
 }) {
     const avatarSources = card?.images || [];
@@ -944,8 +1140,9 @@ function PartyMemberRow({
             className={`live-party-member${member.isLocal ? " is-local" : ""}`}
             role="button"
             tabIndex={0}
-            onClick={onOpenProfile}
-            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenProfile(); }}
+			aria-label={member.isLocal ? `Open ${member.name} profile` : `Message ${member.name}`}
+            onClick={onOpenChat}
+            onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenChat(); }}
             onContextMenu={onContextMenu}
         >
             <div className="live-party-avatar" aria-hidden="true">
@@ -963,11 +1160,15 @@ function PartyMemberRow({
                     {" - "}
                     {tier?.name ? tier.name : "Unranked"}
                 </div>
+                <div className={`live-party-ready-state${member.isReady ? " is-ready" : ""}`}>
+                    <i aria-hidden="true" />{member.isReady ? "Ready" : "Not ready"}
+                </div>
             </div>
 
             <div className="live-party-rank" aria-hidden="true">
                 <SafePartyImage key={tier?.icon || tier?.name || "rank"} sources={tier?.icon ? [tier.icon] : []} className="live-party-rank-img" fallback={tier?.name ? tier.name.slice(0, 1) : "?"} fallbackClassName="live-party-rank-letter" eager />
             </div>
+			<button type="button" className="live-party-profile-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenProfile(); }} aria-label={`Open ${member.name || "party member"} profile`} title="Profile">i</button>
         </div>
     );
 }

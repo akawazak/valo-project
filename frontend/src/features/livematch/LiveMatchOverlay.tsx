@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutItem, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { useFloatingWidgetDrag } from '@/hooks/useFloatingWidgetDrag';
-import { Weapon } from '@/lib/types';
+import { GunBuddy, Weapon } from '@/lib/types';
 import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
 import ProfilePanel from '@/features/profile/ProfilePanel';
 import './LiveMatchOverlay.css';
@@ -18,7 +18,7 @@ import './LiveMatchOverlay.css';
 //   4. Display name ascending (used when PUUID is hidden, e.g. enemy
 //      pregame placeholders)
 const SELECTION_RANK: Record<string, number> = { locked: 0, selected: 1, none: 2 };
-type LivePublicMap = { uuid?: string; displayName: string; splash?: string; mapUrl?: string };
+type LivePublicMap = { uuid?: string; displayName: string; displayIcon?: string; listViewIcon?: string; listViewIconTall?: string; splash?: string; mapUrl?: string };
 type LivePublicAgent = { uuid?: string; displayName: string; displayIcon?: string; fullPortrait?: string };
 type LivePublicTierSet = { tiers?: Array<{ tier: number; tierName?: string; largeIcon?: string }> };
 type LivePublicGameMode = { uuid?: string; displayName?: string; displayIcon?: string; listViewIcon?: string };
@@ -69,6 +69,7 @@ function SafeLiveWeaponImage({ sources }: { sources: string[] }) {
             src={src}
             alt=""
             aria-hidden="true"
+            className="live-player-loadout-weapon"
             onError={() => setSourceIndex((index) => index + 1)}
         />
     );
@@ -89,10 +90,10 @@ function stablePlayerSort(players: LivePlayer[] | undefined): LivePlayer[] {
 type ProfileTarget = { puuid: string; gameName: string; tagLine: string };
 
 export default function LiveMatchOverlay() {
-    const { activeAccount, weapons, playerCards } = useData();
+    const { activeAccount, weapons, allBuddies, playerCards } = useData();
     const [match, setMatch] = useState<LiveMatchResponse | null>(null);
     const [dismissedMatchKey, setDismissedMatchKey] = useState("");
-    const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string }>>({});
+    const [mapCache, setMapCache] = useState<Record<string, { name: string; splash: string; discordImage: string }>>({});
     const [agentCache, setAgentCache] = useState<Record<string, { name: string; icon: string; full: string }>>({});
     const [tierCache, setTierCache] = useState<Record<number, { name: string; icon: string }>>({});
     const [gameModeCache, setGameModeCache] = useState<Record<string, string>>({});
@@ -107,7 +108,9 @@ export default function LiveMatchOverlay() {
     );
     const discordLocalAgentId = match?.allyTeam?.find((player) => player.isLocal)?.agentId || "";
     const discordAgentName = discordLocalAgentId ? agentCache[discordLocalAgentId.toLowerCase()]?.name || "" : "";
+    const discordAgentImage = discordLocalAgentId ? agentCache[discordLocalAgentId.toLowerCase()]?.icon || "" : "";
     const discordMapName = match?.mapId ? mapCache[match.mapId.toLowerCase()]?.name || "" : "";
+    const discordMapImage = match?.mapId ? mapCache[match.mapId.toLowerCase()]?.discordImage || "" : "";
     const discordPartySize = useMemo(() => {
         const allPlayers = [...(match?.allyTeam || []), ...(match?.enemyTeam || [])];
         const localPlayer = allPlayers.find((player) => player.isLocal);
@@ -127,19 +130,25 @@ export default function LiveMatchOverlay() {
         window.dispatchEvent(new CustomEvent("vantavault:match-phase", {
             detail: {
                 phase: match?.phase || "none",
+                matchId: match?.matchId || "",
                 queueId: match?.queueId || "",
                 mapName: discordMapName,
+                mapImage: discordMapImage,
                 agentName: discordAgentName,
+                agentImage: discordAgentImage,
                 timeLeft: match?.timeLeft || 0,
                 partySize: discordPartySize,
                 allyCount: match?.allyTeam?.length || 0,
                 enemyCount: match?.enemyTeam?.length || 0,
+                allyScore: match?.allyScore || 0,
+                enemyScore: match?.enemyScore || 0,
+                scoreAvailable: Boolean(match?.scoreAvailable),
             },
         }));
         return () => {
             window.dispatchEvent(new CustomEvent("vantavault:match-phase", { detail: { phase: "none", queueId: "" } }));
         };
-    }, [discordAgentName, discordMapName, discordPartySize, match?.allyTeam?.length, match?.enemyTeam?.length, match?.phase, match?.queueId, match?.timeLeft]);
+    }, [discordAgentImage, discordAgentName, discordMapImage, discordMapName, discordPartySize, match?.allyScore, match?.allyTeam?.length, match?.enemyScore, match?.enemyTeam?.length, match?.matchId, match?.phase, match?.queueId, match?.scoreAvailable, match?.timeLeft]);
 
     // ---- Local countdown timer ----
     // The backend only emits timeLeft at each 5s poll. We capture the
@@ -230,10 +239,14 @@ export default function LiveMatchOverlay() {
     useEffect(() => {
         fetchCachedPublicJson<{ data?: LivePublicMap[] }>("https://valorant-api.com/v1/maps")
             .then(d => {
-                const m: Record<string, { name: string; splash: string }> = {};
+                const m: Record<string, { name: string; splash: string; discordImage: string }> = {};
                 for (const item of d.data || []) {
                     if (item.uuid) {
-                        const meta = { name: item.displayName, splash: item.splash || "" };
+                        const meta = {
+                            name: item.displayName,
+                            splash: item.splash || "",
+                            discordImage: item.listViewIconTall || item.splash || item.listViewIcon || item.displayIcon || "",
+                        };
                         m[item.uuid.toLowerCase()] = meta;
                         if (item.mapUrl) m[item.mapUrl.toLowerCase()] = meta;
                     }
@@ -359,7 +372,7 @@ export default function LiveMatchOverlay() {
         );
     }
 
-    const currentMap = mapCache[match.mapId?.toLowerCase()] || { name: "Unknown Map", splash: "" };
+    const currentMap = mapCache[match.mapId?.toLowerCase()] || { name: "Unknown Map", splash: "", discordImage: "" };
     const sortedAllies = stablePlayerSort(match.allyTeam);
     const sortedEnemies = stablePlayerSort(match.enemyTeam);
     const partySizes = partyGroupSizes([...sortedAllies, ...sortedEnemies]);
@@ -510,6 +523,7 @@ export default function LiveMatchOverlay() {
                     tier={tierCache[selectedPlayer.competitiveTier]}
                     peakTier={tierCache[selectedPlayer.peakTier || 0]}
                     weapons={weapons}
+                    buddies={allBuddies}
                     onClose={() => setSelectedPlayer(null)}
                     onViewProfile={(profile) => {
                         setSelectedPlayer(null);
@@ -671,6 +685,7 @@ function LivePlayerModal({
     tier,
     peakTier,
     weapons,
+    buddies,
     onClose,
     onViewProfile,
 }: {
@@ -681,6 +696,7 @@ function LivePlayerModal({
     tier?: { name: string; icon: string };
     peakTier?: { name: string; icon: string };
     weapons: Weapon[];
+    buddies: GunBuddy[];
     onClose: () => void;
     onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
@@ -690,6 +706,7 @@ function LivePlayerModal({
     const [loadoutState, setLoadoutState] = useState<LoadoutState>({
         status: "idle",
         ids: [],
+        items: [],
         message: "",
     });
 
@@ -710,11 +727,11 @@ function LivePlayerModal({
     useEffect(() => {
         if (!showLoadout) return;
         if (!player.puuid) {
-            setLoadoutState({ status: "error", ids: [], message: "This player has no public Riot ID." });
+            setLoadoutState({ status: "error", ids: [], items: [], message: "This player has no public Riot ID." });
             return;
         }
         let cancelled = false;
-        setLoadoutState({ status: "loading", ids: [], message: "Reading this player's live loadout..." });
+        setLoadoutState({ status: "loading", ids: [], items: [], message: "Reading this player's live loadout..." });
         const phase = match.phase === "none" ? undefined : match.phase;
         getLiveLoadouts(phase, match.matchId).then((response) => {
             if (!cancelled) setLoadoutState(resolveLiveLoadout(response, player.puuid));
@@ -727,33 +744,86 @@ function LivePlayerModal({
     const loadoutIds = loadoutState.ids;
 
     const equippedSkins = useMemo(() => {
-        if (!loadoutIds?.length) return [];
-        const byItemId = new Map<string, { uuid: string; weaponId: string; weapon: string; name: string; iconSources: string[] }>();
+        if (!loadoutIds?.length && !loadoutState.items.length) return [];
+        type Cosmetic = {
+            uuid: string;
+            weaponId: string;
+            weapon: string;
+            name: string;
+            variant: string;
+            level: string;
+            buddy?: { name: string; icon: string };
+            iconSources: string[];
+        };
+        const byItemId = new Map<string, { weapon: Weapon; skinIndex: number }>();
+        const weaponById = new Map<string, Weapon>();
         for (const weapon of weapons) {
-            for (const skin of weapon.skins) {
-                const standardSkin = skin.uuid === weapon.defaultSkinUuid;
-                const cosmetic = {
-                    uuid: skin.uuid,
-                    weaponId: weapon.uuid,
-                    weapon: weapon.displayName,
-                    name: skin.displayName,
-                    iconSources: (standardSkin
-                        ? [weapon.displayIcon, skin.displayIcon, skin.chromas[0]?.fullRender]
-                        : [skin.displayIcon, skin.chromas[0]?.fullRender, weapon.displayIcon]
-                    ).filter(Boolean),
-                };
-                byItemId.set(skin.uuid.toLowerCase(), cosmetic);
-                for (const level of skin.levels) byItemId.set(level.uuid.toLowerCase(), cosmetic);
-                for (const chroma of skin.chromas) byItemId.set(chroma.uuid.toLowerCase(), cosmetic);
+            weaponById.set(weapon.uuid.toLowerCase(), weapon);
+            for (let skinIndex = 0; skinIndex < weapon.skins.length; skinIndex += 1) {
+                const skin = weapon.skins[skinIndex];
+                const match = { weapon, skinIndex };
+                byItemId.set(skin.uuid.toLowerCase(), match);
+                for (const level of skin.levels) byItemId.set(level.uuid.toLowerCase(), match);
+                for (const chroma of skin.chromas) byItemId.set(chroma.uuid.toLowerCase(), match);
             }
         }
+
+        const buddyByLevel = new Map<string, { name: string; icon: string }>();
+        for (const buddy of buddies) {
+            for (const level of buddy.levels || []) {
+                buddyByLevel.set(level.uuid.toLowerCase(), { name: buddy.displayName, icon: level.displayIcon || buddy.levels[0]?.displayIcon || "" });
+            }
+        }
+
+        const resolveItem = (entry: LiveLoadoutItem): Cosmetic | null => {
+            const itemIds = entry.itemIds || [];
+            let weapon = weaponById.get(entry.weaponId.toLowerCase());
+            let skinIndex = -1;
+            for (const id of itemIds) {
+                const match = byItemId.get(id.toLowerCase());
+                if (!match) continue;
+                weapon ||= match.weapon;
+                if (match.weapon.uuid === weapon.uuid) skinIndex = match.skinIndex;
+            }
+            if (!weapon) return null;
+            const skin = skinIndex >= 0
+                ? weapon.skins[skinIndex]
+                : weapon.skins.find((candidate) => candidate.uuid === weapon!.defaultSkinUuid) || weapon.skins[0];
+            if (!skin) return null;
+            const selectedChroma = skin.chromas.find((candidate) => itemIds.some((id) => id.toLowerCase() === candidate.uuid.toLowerCase())) || skin.chromas[0];
+            const selectedLevel = skin.levels.find((candidate) => itemIds.some((id) => id.toLowerCase() === candidate.uuid.toLowerCase())) || skin.levels[0];
+            const buddy = itemIds.map((id) => buddyByLevel.get(id.toLowerCase())).find(Boolean);
+            const isBaseChroma = !selectedChroma || skin.chromas.indexOf(selectedChroma) <= 0;
+            const isBaseLevel = !selectedLevel || skin.levels.indexOf(selectedLevel) <= 0;
+            return {
+                uuid: `${weapon.uuid}:${skin.uuid}`,
+                weaponId: weapon.uuid,
+                weapon: weapon.displayName,
+                name: skin.displayName,
+                variant: isBaseChroma ? "" : cleanLiveCosmeticDetail(selectedChroma.displayName, skin.displayName),
+                level: isBaseLevel ? "" : cleanLiveCosmeticDetail(selectedLevel.displayName, skin.displayName),
+                buddy,
+                // This is the same visual priority as Presets: the equipped
+                // chroma render first. In particular, Standard skins now use
+                // their dark in-game render instead of the pale weapon glyph.
+                iconSources: [selectedChroma?.fullRender, skin.displayIcon, selectedLevel?.displayIcon, weapon.displayIcon].filter(Boolean),
+            };
+        };
+
+        if (loadoutState.items.length > 0) {
+            return loadoutState.items.map(resolveItem).filter((item): item is Cosmetic => Boolean(item));
+        }
+
+        // Backward-compatible fallback for an older running sidecar. It cannot
+        // expose variant/buddy relationships, but still keeps loadouts usable
+        // until the app is restarted onto the new backend.
         return Array.from(new Map(
-            loadoutIds
-                .map((id) => byItemId.get(id.toLowerCase()))
-                .filter((skin): skin is { uuid: string; weaponId: string; weapon: string; name: string; iconSources: string[] } => Boolean(skin))
-                .map((skin) => [skin.weaponId, skin]),
+            loadoutIds.map((id) => byItemId.get(id.toLowerCase())).filter(Boolean).map((match) => {
+                const weapon = match!.weapon;
+                return [weapon.uuid, resolveItem({ weaponId: weapon.uuid, itemIds: loadoutIds })];
+            }).filter((entry): entry is [string, Cosmetic] => Boolean(entry[1])),
         ).values());
-    }, [loadoutIds, weapons]);
+    }, [buddies, loadoutIds, loadoutState.items, weapons]);
 
     const loadoutColumns = useMemo(() => {
         const equippedByWeapon = new Map(equippedSkins.map((skin) => [skin.weaponId, skin]));
@@ -865,8 +935,16 @@ function LivePlayerModal({
                                             <h3>{section.label}</h3>
                                             {section.skins.map((skin) => skin ? (
                                                 <div className="live-player-loadout-item" key={skin.uuid}>
+                                                    {skin.buddy?.icon && (
+                                                        <span className="live-player-loadout-buddy" title={`Gun buddy: ${skin.buddy.name}`} role="img" aria-label={`Gun buddy: ${skin.buddy.name}`}>
+                                                            <img src={skin.buddy.icon} alt="" aria-hidden="true" />
+                                                        </span>
+                                                    )}
                                                     <SafeLiveWeaponImage sources={skin.iconSources} />
-                                                    <span><b>{skin.weapon}</b><small>{skin.name}</small></span>
+                                                    <span>
+                                                        <b>{skin.weapon}</b>
+                                                        <small>{[skin.name, skin.level, skin.variant].filter(Boolean).join(" · ")}</small>
+                                                    </span>
                                                 </div>
                                             ) : null)}
                                         </section>
@@ -897,31 +975,41 @@ function LivePlayerModal({
 type LoadoutState = {
     status: "idle" | "loading" | "ready" | "empty" | "error";
     ids: string[];
+    items: LiveLoadoutItem[];
     message: string;
 };
 
+function cleanLiveCosmeticDetail(value: string, skinName: string) {
+    const withoutSkin = value.replace(skinName, "").trim();
+    const variant = withoutSkin.match(/\(Variant\s*\d*\s*([^)]+)\)/i)?.[1]?.trim();
+    if (variant) return variant;
+    const level = withoutSkin.match(/(?:Level\s*\d+\s*)?\(([^)]+)\)/i)?.[1]?.trim();
+    return level || withoutSkin.replace(/^[-â€“â€”:\s]+/, "") || value;
+}
+
 function resolveLiveLoadout(response: LiveLoadoutsResponse, puuid: string): LoadoutState {
     if (response.phase === "error") {
-        return { status: "error", ids: [], message: response.error || "Riot could not read live loadouts. Try again." };
+        return { status: "error", ids: [], items: [], message: response.error || "Riot could not read live loadouts. Try again." };
     }
     if (response.phase === "none") {
-        return { status: "error", ids: [], message: "No active match loadout is available. Try again after agent select." };
+        return { status: "error", ids: [], items: [], message: "No active match loadout is available. Try again after agent select." };
     }
     if (response.loadoutsValid === false) {
-        return { status: "error", ids: [], message: "Riot is still preparing live loadouts. Try again in a moment." };
+        return { status: "error", ids: [], items: [], message: "Riot is still preparing live loadouts. Try again in a moment." };
     }
     const loadout = response.players?.find((entry) => entry.puuid?.toLowerCase() === puuid.toLowerCase());
     if (!loadout) {
-        return { status: "error", ids: [], message: "Riot has not exposed this player's loadout yet." };
+        return { status: "error", ids: [], items: [], message: "Riot has not exposed this player's loadout yet." };
     }
     const ids = loadout.skinIds || [];
+    const items = loadout.items || [];
     if (ids.length === 0 && loadout.gunCount > 0) {
-        return { status: "error", ids: [], message: "Weapon data arrived without cosmetic details. Try again." };
+        return { status: "error", ids: [], items, message: "Weapon data arrived without cosmetic details. Try again." };
     }
     if (ids.length === 0) {
-        return { status: "empty", ids: [], message: "This player has no visible weapon cosmetics yet." };
+        return { status: "empty", ids: [], items, message: "This player has no visible weapon cosmetics yet." };
     }
-    return { status: "ready", ids, message: "" };
+    return { status: "ready", ids, items, message: "" };
 }
 
 function LiveProfileModal({

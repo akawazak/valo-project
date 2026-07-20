@@ -71,6 +71,7 @@ interface PublicMap {
 interface PublicTierSet { tiers?: Array<{ tier?: number; smallIcon?: string }> }
 interface PublicSeason { uuid?: string; displayName?: string; parentUuid?: string; startTime?: string; assetPath?: string }
 interface MapMeta {
+    uuid: string;
     name: string;
     splash: string;
     displayIcon: string;
@@ -96,6 +97,25 @@ function mapZoneLabel(callout: MapMeta["callouts"][number]): string {
     if (region === "c" || region.startsWith("c ")) return "C Site";
     if (region.includes("mid")) return "Mid";
     return "Other";
+}
+
+function mapCalloutPlotPosition(map: MapMeta, callout: MapMeta["callouts"][number]) {
+    const left = callout.y * map.xMultiplier! + map.xScalarToAdd!;
+    let top = callout.x * map.yMultiplier! + map.yScalarToAdd!;
+
+    // Valorant-API's Breeze A Lobby anchor lands below the non-transparent minimap geometry.
+    if (
+        (map.uuid === "2fb9a4fd-47b8-4e7d-a969-74b4046ebd53" || map.name.trim().toLowerCase() === "breeze")
+        && callout.superRegion.trim().toLowerCase() === "a"
+        && callout.name.trim().toLowerCase() === "lobby"
+    ) {
+        top -= 0.065;
+    }
+
+    return {
+        left: Math.max(0, Math.min(1, left)),
+        top: Math.max(0, Math.min(1, top)),
+    };
 }
 interface SeasonMeta {
     uuid: string;
@@ -336,6 +356,7 @@ async function loadMaps(): Promise<Record<string, MapMeta>> {
                       ? "other"
                       : "standard";
                 const meta: MapMeta = {
+                    uuid: mp.uuid,
                     name: mp.displayName,
                     splash: mp.splash || "",
                     displayIcon: mp.displayIcon || "",
@@ -916,6 +937,11 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     if (showProfileFacade) {
         const overviewReady = overviewLoadedFor === puuid;
         const matchesReady = historyLoadedFor === puuid && historyLoaded && history.length >= requiredProfileMatches;
+        const profileLoadMessage = matchesReady
+            ? "Finishing profile..."
+            : overviewReady
+                ? "Loading recent matches..."
+                : "Loading rank and identity...";
         return (
             <div className={s.profileFacade} role="status" aria-live="polite">
                 {viewedProfile && (
@@ -935,17 +961,16 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                         </>
                     ) : (
                         <>
-                            <div className={s.profileLoadMark} aria-hidden="true"><i /><i /><i /></div>
-                            <span className={s.profileLoadKicker}>PROFILE SYNC</span>
+                            <span className={s.profileLoadKicker}>PROFILE</span>
                             <strong>{viewedProfile?.gameName || activeAccount.gameName || "Player"}</strong>
-                            <small>Preparing one complete snapshot</small>
+                            <small>{profileLoadMessage}</small>
                             <div className={s.profileLoadTrack} aria-hidden="true">
-                                <span className={overviewReady ? s.profileLoadTrackComplete : ""} />
-                                <span className={matchesReady ? s.profileLoadTrackComplete : ""} />
+                                <span className={overviewReady ? s.profileLoadTrackComplete : s.profileLoadTrackActive} />
+                                <span className={matchesReady ? s.profileLoadTrackComplete : overviewReady ? s.profileLoadTrackActive : ""} />
                             </div>
-                            <div className={s.profileLoadSteps}>
-                                <span className={overviewReady ? s.profileLoadStepComplete : ""}>Rank &amp; identity</span>
-                                <span className={matchesReady ? s.profileLoadStepComplete : ""}>Recent matches</span>
+                            <div className={s.profileLoadSteps} aria-hidden="true">
+                                <span className={overviewReady ? s.profileLoadStepComplete : s.profileLoadStepActive}>Rank &amp; identity</span>
+                                <span className={matchesReady ? s.profileLoadStepComplete : overviewReady ? s.profileLoadStepActive : ""}>Recent matches</span>
                             </div>
                         </>
                     )}
@@ -1352,6 +1377,8 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 mapVisuals={mapVisuals}
                 playerCardImages={playerCardImages}
                 rewardAssets={rewardAssets}
+                rankActs={overview?.rankActs ?? []}
+                seasonNames={Object.fromEntries(Object.entries(seasons).map(([key, value]) => [key, value.name]))}
                 onViewProfile={viewProfile}
             />
         </div>
@@ -1472,10 +1499,45 @@ interface DuelFocus {
 interface DuelFinisher {
     name: string;
     icon: string;
+    kind: "ability" | "weapon";
 }
 
 function fightEventKey(event: MatchKillEvent): string {
     return `${event.roundNum}:${event.gameTime}:${event.killer.toLowerCase()}:${event.victim.toLowerCase()}`;
+}
+
+const RIOT_ABILITY_WEAPON_SLOTS: Record<string, string> = {
+    "856d9a7e-4b06-dc37-15dc-9d809c37cb90": "ability1", // Chamber — Headhunter
+    "39099fb5-4293-def4-1e09-2e9080ce7456": "ultimate", // Chamber — Tour de Force
+    "95336ae4-45d4-1032-cfaf-6bad01910607": "ultimate", // Neon — Overdrive
+};
+
+function riotAbilitySlotKey(damageType: string, damageItem: string): string {
+    if (damageType.includes("ability")) {
+        return damageItem === "grenadeability" ? "grenade" : damageItem;
+    }
+    return RIOT_ABILITY_WEAPON_SLOTS[damageItem] || "";
+}
+
+function MapDuelFinisher({ finisher, offset }: { finisher: DuelFinisher; offset: { x: number; y: number } }) {
+    const [failed, setFailed] = useState(false);
+    if (failed) return null;
+    return (
+        <span
+            className={`${s.mapDuelWeapon} ${finisher.kind === "ability" ? s.mapDuelWeaponAbility : s.mapDuelWeaponGun}`}
+            title={finisher.name}
+            style={{ "--weapon-x": `${offset.x}px`, "--weapon-y": `${offset.y}px` } as CSSProperties}
+        >
+            <Image
+                src={finisher.icon}
+                alt={finisher.name}
+                width={finisher.kind === "ability" ? 20 : 40}
+                height={finisher.kind === "ability" ? 20 : 18}
+                unoptimized
+                onError={() => setFailed(true)}
+            />
+        </span>
+    );
 }
 
 function MapDuelMarker({
@@ -1497,11 +1559,16 @@ function MapDuelMarker({
 }) {
     const playerName = local ? "You" : player?.gameName || agent?.name || "Player";
     const weaponOffset = useMemo(() => {
-        if (!avoidPoint) return { x: 0, y: -27 };
+        if (!avoidPoint) return { x: 0, y: -30 };
         const dx = point.left - avoidPoint.left;
         const dy = point.top - avoidPoint.top;
-        const distance = Math.hypot(dx, dy) || 1;
-        return { x: (dx / distance) * 29, y: (dy / distance) * 29 };
+        const y = Math.abs(dy) < 0.035 ? -30 : dy > 0 ? 37 : -30;
+        const blockedByVerticalEdge = (y < 0 && point.top < 0.11) || (y > 0 && point.top > 0.88);
+        if (!blockedByVerticalEdge) return { x: 0, y };
+
+        let x = dx >= 0 ? 34 : -34;
+        if ((x < 0 && point.left < 0.11) || (x > 0 && point.left > 0.89)) x *= -1;
+        return { x, y: 0 };
     }, [avoidPoint, point.left, point.top]);
     return (
         <span
@@ -1510,15 +1577,7 @@ function MapDuelMarker({
             title={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
             aria-label={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
         >
-            {!dead && finisher?.icon ? (
-                <span
-                    className={s.mapDuelWeapon}
-                    title={finisher.name}
-                    style={{ "--weapon-x": `${weaponOffset.x}px`, "--weapon-y": `${weaponOffset.y}px` } as CSSProperties}
-                >
-                    <Image src={finisher.icon} alt={finisher.name} width={48} height={18} unoptimized />
-                </span>
-            ) : null}
+            {!dead && finisher?.icon ? <MapDuelFinisher key={finisher.icon} finisher={finisher} offset={weaponOffset} /> : null}
             <span className={s.mapDuelPortrait}>
                 {agent?.icon ? (
                     <Image src={agent.icon} alt={agent.name} width={42} height={42} unoptimized />
@@ -1561,7 +1620,7 @@ function MatchRow({
     onToggle: () => void;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
-    const [activeMatchTab, setActiveMatchTab] = useState<"scoreboard" | "map">("scoreboard");
+    const [activeMatchTab, setActiveMatchTab] = useState<"scoreboard" | "rounds" | "map">("scoreboard");
     const [loadedAnalytics, setLoadedAnalytics] = useState<ProfileMatchDetails | null>(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [analyticsError, setAnalyticsError] = useState("");
@@ -1580,9 +1639,11 @@ function MatchRow({
     const blueSide = match.localPlayer.teamId.toLowerCase() === "blue";
     const ownRounds = blueSide ? match.blueRoundsWon : match.redRoundsWon;
     const enemyRounds = blueSide ? match.redRoundsWon : match.blueRoundsWon;
+    const completionState = detail?.matchInfo.completionState || "Completed";
+    const unusualCompletion = !/^completed$/i.test(completionState);
 
-    const openMapTab = useCallback(async () => {
-        setActiveMatchTab("map");
+    const openAnalyticsTab = useCallback(async (tab: "rounds" | "map") => {
+        setActiveMatchTab(tab);
         if ((detail?.rounds?.length || 0) > 0 || loadedAnalytics !== null || analyticsLoading) return;
         setAnalyticsLoading(true);
         setAnalyticsError("");
@@ -1739,6 +1800,10 @@ function MatchRow({
                                 {rrSign}
                                 {rrEarned}
                             </div>
+                            {(match.performanceBonus || match.afkPenalty) ? <div className={s.matchRrReceipt}>
+                                {match.performanceBonus ? <span data-tone="good">+{match.performanceBonus} performance</span> : null}
+                                {match.afkPenalty ? <span data-tone="danger">{match.afkPenalty > 0 ? "-" : ""}{Math.abs(match.afkPenalty)} AFK</span> : null}
+                            </div> : null}
                         </div>
                     ) : match.isRanked ? (
                         <div className={s.matchTimeCell}>
@@ -1770,6 +1835,7 @@ function MatchRow({
                                 <span className={`${s.matchModalResult} ${resultClass}`}>{match.win ? "Victory" : "Defeat"}</span>
                                 <h2>{mapName}</h2>
                                 <p>{queueName} · {fmtLength(match.gameLengthMillis)} · {fmtDate(match.gameStartMillis)}</p>
+                                {unusualCompletion ? <span className={s.matchCompletionBadge}>{completionState}</span> : null}
                             </div>
                             <div className={s.matchModalScore}>
                                 <strong className={match.win ? s.winText : s.lossText}>{ownRounds}</strong>
@@ -1781,6 +1847,13 @@ function MatchRow({
                         <nav className={s.matchDetailTabs} aria-label="Match detail views">
                             <button
                                 type="button"
+                                className={activeMatchTab === "rounds" ? s.matchDetailTabActive : ""}
+                                onClick={() => void openAnalyticsTab("rounds")}
+                            >
+                                Round review
+                            </button>
+                            <button
+                                type="button"
                                 className={activeMatchTab === "scoreboard" ? s.matchDetailTabActive : ""}
                                 onClick={() => setActiveMatchTab("scoreboard")}
                             >
@@ -1789,7 +1862,7 @@ function MatchRow({
                             <button
                                 type="button"
                                 className={activeMatchTab === "map" ? s.matchDetailTabActive : ""}
-                                onClick={openMapTab}
+                                onClick={() => void openAnalyticsTab("map")}
                             >
                                 Map
                             </button>
@@ -1805,6 +1878,13 @@ function MatchRow({
                                         agents={agents}
                                         tierAssets={tierAssets}
                                         onViewProfile={onViewProfile}
+                                    />
+                                ) : activeMatchTab === "rounds" ? (
+                                    <RoundReview
+                                        detail={loadedAnalytics ?? detail}
+                                        map={mapMeta}
+                                        agents={agents}
+                                        weapons={weapons}
                                     />
                                 ) : (
                                     <MatchMapAnalytics
@@ -1827,6 +1907,211 @@ function MatchRow({
             )}
         </div>
     );
+}
+
+function RoundReview({
+    detail,
+    map,
+    agents,
+    weapons,
+}: {
+    detail: ProfileMatchDetails;
+    map?: MapMeta;
+    agents: Record<string, AgentMeta>;
+    weapons: Weapon[];
+}) {
+    const rounds = detail.rounds || [];
+    const local = detail.players.find((player) => player.isLocal);
+    const localSubject = local?.subject.toLowerCase() || "";
+    const localTeam = local?.teamId.toLowerCase() || "";
+    const [selectedRoundNum, setSelectedRoundNum] = useState(rounds[0]?.roundNum ?? 0);
+    const weaponById = useMemo(() => new Map(weapons.map((weapon) => [weapon.uuid.toLowerCase(), weapon])), [weapons]);
+    const selectedRound = rounds.find((round) => round.roundNum === selectedRoundNum) || rounds[0];
+    const selectedStat = selectedRound?.playerStats?.find((stat) => stat.subject.toLowerCase() === localSubject);
+    const selectedKills = (detail.kills || []).filter((event) => event.roundNum === selectedRound?.roundNum);
+    const localKills = selectedKills.filter((event) => event.killer.toLowerCase() === localSubject);
+    const localDeaths = selectedKills.filter((event) => event.victim.toLowerCase() === localSubject);
+    const localAssists = selectedKills.filter((event) => event.assistants?.some((assistant) => assistant.toLowerCase() === localSubject));
+    const damageDone = selectedStat?.damage?.reduce((sum, event) => sum + event.damage, 0) || 0;
+    const headshots = selectedStat?.damage?.reduce((sum, event) => sum + event.headshots, 0) || 0;
+    const roundWon = selectedRound?.winningTeam.toLowerCase() === localTeam;
+    const weapon = selectedStat?.economy.weapon ? weaponById.get(selectedStat.economy.weapon.toLowerCase()) : undefined;
+    const hasDetailedRounds = rounds.some((round) => (round.playerStats?.length || 0) > 0);
+    const selectedEvents = [...localKills, ...localDeaths];
+    const selectedAltFireEvents = selectedEvents.filter((event) => event.secondaryFire);
+    const canPlot = Boolean(map?.displayIcon && typeof map.xMultiplier === "number" && typeof map.yMultiplier === "number" && typeof map.xScalarToAdd === "number" && typeof map.yScalarToAdd === "number");
+    const plot = (x: number, y: number) => ({
+        left: Math.max(0, Math.min(1, y * map!.xMultiplier! + map!.xScalarToAdd!)) * 100,
+        top: Math.max(0, Math.min(1, x * map!.yMultiplier! + map!.yScalarToAdd!)) * 100,
+    });
+    const playerBySubject = useMemo(() => new Map(detail.players.map((player) => [player.subject.toLowerCase(), player])), [detail.players]);
+    const firstKills = useMemo(() => {
+        const byRound = new Map<number, MatchKillEvent>();
+        for (const event of detail.kills || []) {
+            const current = byRound.get(event.roundNum);
+            if (!current || event.gameTime < current.gameTime) byRound.set(event.roundNum, event);
+        }
+        return byRound;
+    }, [detail.kills]);
+    const opening = [...firstKills.values()].filter((event) => event.killer.toLowerCase() === localSubject || event.victim.toLowerCase() === localSubject);
+    const openingWins = opening.filter((event) => event.killer.toLowerCase() === localSubject);
+    const convertedOpeningWins = openingWins.filter((event) => rounds.find((round) => round.roundNum === event.roundNum)?.winningTeam.toLowerCase() === localTeam).length;
+    const allLocalDeaths = (detail.kills || []).filter((event) => event.victim.toLowerCase() === localSubject);
+    const tradedDeaths = allLocalDeaths.filter((death) => (detail.kills || []).some((event) => event.roundNum === death.roundNum && event.roundTime >= death.roundTime && event.roundTime - death.roundTime <= 5_000 && event.victim.toLowerCase() === death.killer.toLowerCase() && playerBySubject.get(event.killer.toLowerCase())?.teamId.toLowerCase() === localTeam)).length;
+    const totalAbilityEffects = rounds.reduce((sum, round) => {
+        const stat = round.playerStats?.find((entry) => entry.subject.toLowerCase() === localSubject);
+        return sum + (stat?.ability.grenade || 0) + (stat?.ability.ability1 || 0) + (stat?.ability.ability2 || 0) + (stat?.ability.ultimate || 0);
+    }, 0);
+    const abilityUsage = ([
+        ["grenade", local?.abilityCasts?.grenade || 0],
+        ["ability1", local?.abilityCasts?.ability1 || 0],
+        ["ability2", local?.abilityCasts?.ability2 || 0],
+        ["ultimate", local?.abilityCasts?.ultimate || 0],
+    ] as const).filter(([, count]) => count > 0).map(([slot, count]) => ({
+        count,
+        name: agents[local?.characterId.toLowerCase() || ""]?.abilities?.[slot]?.name || ({ grenade: "Signature", ability1: "Ability 1", ability2: "Ability 2", ultimate: "Ultimate" } as const)[slot],
+    }));
+    const totalAbilityCasts = abilityUsage.reduce((sum, ability) => sum + ability.count, 0);
+    const objectiveLines = [
+        selectedRound?.bombPlanter ? `${selectedRound.bombPlanter.toLowerCase() === localSubject ? "You planted" : "Spike planted"}${selectedRound.plantSite ? ` at ${selectedRound.plantSite}` : ""}${selectedRound.plantRoundTime ? ` · ${fmtLength(selectedRound.plantRoundTime)}` : ""}` : "",
+        selectedRound?.bombDefuser ? `${selectedRound.bombDefuser.toLowerCase() === localSubject ? "You defused" : "Spike defused"}${selectedRound.defuseRoundTime ? ` · ${fmtLength(selectedRound.defuseRoundTime)}` : ""}` : "",
+    ].filter(Boolean);
+    const flaggedRounds = rounds.filter((round) => round.playerStats?.some((entry) => entry.subject.toLowerCase() === localSubject && (entry.wasAfk || entry.wasPenalized || entry.stayedInSpawn)));
+    const roundTimeline = useMemo(() => {
+        if (!selectedRound) return [];
+        const timeline: Array<{
+            id: string;
+            time: number;
+            order: number;
+            kind: "economy" | "kill" | "plant" | "defuse" | "result";
+            label: string;
+            detail: string;
+            icon?: string;
+            local?: boolean;
+        }> = [];
+        const nameOf = (subject?: string) => {
+            if (!subject) return "Unknown player";
+            if (subject.toLowerCase() === localSubject) return "You";
+            const player = playerBySubject.get(subject.toLowerCase());
+            return player?.gameName || "Player";
+        };
+        const playerTeam = (subject?: string) => playerBySubject.get(subject?.toLowerCase() || "")?.teamId.toLowerCase() || "";
+        const stats = selectedRound.playerStats || [];
+        const allyValue = stats.filter((stat) => playerTeam(stat.subject) === localTeam).reduce((sum, stat) => sum + (stat.economy.loadoutValue || 0), 0);
+        const enemyValue = stats.filter((stat) => playerTeam(stat.subject) && playerTeam(stat.subject) !== localTeam).reduce((sum, stat) => sum + (stat.economy.loadoutValue || 0), 0);
+        if (stats.length) timeline.push({ id: "buy", time: 0, order: 0, kind: "economy", label: "Round loadouts", detail: `Your team ${allyValue.toLocaleString()} · Enemy ${enemyValue.toLocaleString()}` });
+
+        const events = [...selectedKills].sort((a, b) => a.roundTime - b.roundTime || a.gameTime - b.gameTime);
+        events.forEach((event, index) => {
+            const damageItem = event.damageItem?.trim().toLowerCase() || "";
+            const killer = playerBySubject.get(event.killer.toLowerCase());
+            const killerAgent = agents[killer?.characterId.toLowerCase() || ""];
+            const abilitySlot = riotAbilitySlotKey(event.damageType?.toLowerCase() || "", damageItem);
+            const ability = abilitySlot ? killerAgent?.abilities?.[abilitySlot] : undefined;
+            const usedWeapon = damageItem ? weaponById.get(damageItem) : undefined;
+            const prior = events.slice(0, index).reverse().find((candidate) => (
+                event.roundTime >= candidate.roundTime
+                && event.roundTime - candidate.roundTime <= 5_000
+                && event.victim.toLowerCase() === candidate.killer.toLowerCase()
+                && playerTeam(event.killer) === playerTeam(candidate.victim)
+            ));
+            const isOpening = index === 0;
+            const isTrade = Boolean(prior);
+            timeline.push({
+                id: fightEventKey(event),
+                time: event.roundTime || event.gameTime,
+                order: 2 + index,
+                kind: "kill",
+                label: isOpening ? "Opening duel" : isTrade ? "Trade" : "Elimination",
+                detail: `${nameOf(event.killer)} eliminated ${nameOf(event.victim)}${ability?.name ? ` · ${ability.name}` : usedWeapon?.displayName ? ` · ${usedWeapon.displayName}` : ""}`,
+                icon: ability?.icon || usedWeapon?.displayIcon,
+                local: event.killer.toLowerCase() === localSubject || event.victim.toLowerCase() === localSubject,
+            });
+        });
+        if (selectedRound.bombPlanter) timeline.push({ id: "plant", time: selectedRound.plantRoundTime || 0, order: 90, kind: "plant", label: `Spike planted${selectedRound.plantSite ? ` · ${selectedRound.plantSite}` : ""}`, detail: nameOf(selectedRound.bombPlanter) });
+        if (selectedRound.bombDefuser) timeline.push({ id: "defuse", time: selectedRound.defuseRoundTime || 0, order: 95, kind: "defuse", label: "Spike defused", detail: nameOf(selectedRound.bombDefuser) });
+        timeline.push({ id: "result", time: Math.max(...timeline.map((item) => item.time), 0) + 1, order: 100, kind: "result", label: roundWon ? "Round won" : "Round lost", detail: selectedRound.roundResult || selectedRound.roundCeremony || "Round completed", local: true });
+        return timeline.sort((a, b) => a.time - b.time || a.order - b.order);
+    }, [agents, localSubject, localTeam, playerBySubject, roundWon, selectedKills, selectedRound, weaponById]);
+
+    if (!rounds.length) return <div className={s.mapAnalyticsEmpty}><strong>Round evidence is not cached yet.</strong><span>Open this view while connected to refresh the match details.</span></div>;
+
+    return <section className={s.roundReview}>
+        <header className={s.roundReviewHeader}>
+            <div><span>Round evidence</span><strong>Read the match one decision at a time</strong></div>
+            <small>{hasDetailedRounds ? "Riot match receipt" : "Objective timeline available · detailed buys require a refresh"}</small>
+        </header>
+        <div className={s.roundFilmstrip} role="list" aria-label="Rounds">
+            {rounds.map((round) => {
+                const won = round.winningTeam.toLowerCase() === localTeam;
+                const stat = round.playerStats?.find((entry) => entry.subject.toLowerCase() === localSubject);
+                const events = (detail.kills || []).filter((event) => event.roundNum === round.roundNum);
+                const kills = events.filter((event) => event.killer.toLowerCase() === localSubject).length;
+                const deaths = events.filter((event) => event.victim.toLowerCase() === localSubject).length;
+                return <button key={round.roundNum} type="button" role="listitem" data-result={won ? "win" : "loss"} data-active={round.roundNum === selectedRound?.roundNum} onClick={() => setSelectedRoundNum(round.roundNum)}>
+                    <small>R{round.roundNum + 1}</small><strong>{won ? "W" : "L"}</strong><span>{kills ? `${kills}K` : deaths ? "D" : stat?.economy.spent ? `${Math.round(stat.economy.spent / 100) / 10}k` : "—"}</span>
+                </button>;
+            })}
+        </div>
+        <div className={s.roundEvidenceGrid}>
+            <div className={s.roundMapStage}>
+                <header><span>Round {selectedRound!.roundNum + 1}</span><strong>{selectedRound!.plantSite ? `${selectedRound!.plantSite} site` : selectedRound!.roundResult || "Round positions"}</strong></header>
+                <div className={s.roundMapCanvas}>
+                    {map?.displayIcon ? <Image src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="680px" unoptimized /> : null}
+                    {canPlot && selectedEvents.map((event) => {
+                        const position = plot(event.victimX, event.victimY);
+                        const isKill = event.killer.toLowerCase() === localSubject;
+                        return <span key={fightEventKey(event)} className={isKill ? s.roundMapKill : s.roundMapDeath} style={{ left: `${position.left}%`, top: `${position.top}%` }} title={isKill ? "Your kill" : "Your death"}>{isKill ? "+" : "×"}</span>;
+                    })}
+                    {canPlot && selectedRound!.plantLocation && (selectedRound!.plantLocation.x || selectedRound!.plantLocation.y) ? (() => { const p = plot(selectedRound!.plantLocation!.x, selectedRound!.plantLocation!.y); return <i className={s.roundSpikeMarker} data-event="plant" title={`Spike planted${selectedRound!.plantRoundTime ? ` at ${fmtLength(selectedRound!.plantRoundTime)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>P</i>; })() : null}
+                    {canPlot && selectedRound!.defuseLocation && (selectedRound!.defuseLocation.x || selectedRound!.defuseLocation.y) ? (() => { const p = plot(selectedRound!.defuseLocation!.x, selectedRound!.defuseLocation!.y); return <i className={s.roundSpikeMarker} data-event="defuse" title={`Spike defused${selectedRound!.defuseRoundTime ? ` at ${fmtLength(selectedRound!.defuseRoundTime)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>D</i>; })() : null}
+                </div>
+                <footer>{selectedEvents.length ? `${selectedEvents.length} fight${selectedEvents.length === 1 ? "" : "s"} involving you` : "No kill or death for you this round"}<span>{selectedRound!.bombPlanter ? "P plant" : ""}{selectedRound!.bombPlanter && selectedRound!.bombDefuser ? " · " : ""}{selectedRound!.bombDefuser ? "D defuse" : ""}</span></footer>
+            </div>
+            <aside className={s.roundReceipt}>
+                <div className={s.roundReceiptResult} data-result={roundWon ? "win" : "loss"}><span>{roundWon ? "Round won" : "Round lost"}</span><strong>{selectedRound!.roundResult || selectedRound!.roundCeremony || "Elimination"}</strong></div>
+                <div className={s.roundReceiptPlayer}>
+                    {local && agents[local.characterId.toLowerCase()]?.icon ? <Image src={agents[local.characterId.toLowerCase()].icon} alt="" width={44} height={44} unoptimized /> : null}
+                    <div><span>Your impact</span><strong>{localKills.length}K · {localDeaths.length}D · {localAssists.length}A</strong></div>
+                    <b>{damageDone}<small> dmg</small></b>
+                </div>
+                <dl className={s.roundReceiptStats}>
+                    <div><dt>Loadout</dt><dd>{selectedStat?.economy.loadoutValue?.toLocaleString() || "—"}</dd></div>
+                    <div><dt>Spent</dt><dd>{selectedStat?.economy.spent?.toLocaleString() || "—"}</dd></div>
+                    <div><dt>Credits left</dt><dd>{selectedStat?.economy.remaining?.toLocaleString() || "—"}</dd></div>
+                    <div><dt>Headshots</dt><dd>{headshots || "—"}</dd></div>
+                </dl>
+                <div className={s.roundLoadout}>
+                    <span>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={112} height={34} unoptimized /> : null}</span>
+                    <p><small>Primary</small><strong>{weapon?.displayName || (selectedStat?.economy.weapon ? "Weapon recorded" : "No weapon recorded")}</strong></p>
+                    <em>{selectedStat?.economy.armor ? "Armor equipped" : "No armor"}</em>
+                </div>
+                <div className={s.roundObjectiveLine}>
+                    <span>Objective timeline</span>
+                    <strong>{objectiveLines.length ? objectiveLines.map((line) => <small key={line}>{line}</small>) : "No objective action recorded"}</strong>
+                    {selectedAltFireEvents.length ? <em>{selectedAltFireEvents.length} fight{selectedAltFireEvents.length === 1 ? "" : "s"} recorded with secondary fire.</em> : null}
+                </div>
+            </aside>
+        </div>
+        <section className={s.roundTimeline} aria-label={`Round ${selectedRound!.roundNum + 1} event timeline`}>
+            <header><div><span>Round timeline</span><strong>What happened, in order</strong></div><small>{roundTimeline.length} recorded events</small></header>
+            <div className={s.roundTimelineRail}>
+                {roundTimeline.map((event, index) => <article key={event.id} data-kind={event.kind} data-local={event.local || undefined}>
+                    <time>{event.time ? fmtLength(event.time) : "START"}</time>
+                    <i><span>{index + 1}</span></i>
+                    <div>{event.icon ? <Image src={event.icon} alt="" width={38} height={22} unoptimized /> : null}<span><strong>{event.label}</strong><small>{event.detail}</small></span></div>
+                </article>)}
+            </div>
+        </section>
+        <div className={s.matchPatterns}>
+            <header><span>Match patterns</span><small>Factual signals from this match</small></header>
+            <article data-tone={openingWins.length && convertedOpeningWins === openingWins.length ? "good" : "neutral"}><span>First contact</span><strong>{openingWins.length} of {opening.length} opening duels won</strong><small>{openingWins.length ? `${convertedOpeningWins} of those ${openingWins.length === 1 ? "round" : "rounds"} converted into a win.` : "You did not record an opening kill."}</small></article>
+            <article data-tone={allLocalDeaths.length && tradedDeaths === 0 ? "danger" : "neutral"}><span>Trade window</span><strong>{tradedDeaths} of {allLocalDeaths.length} deaths traded</strong><small>Counts a teammate eliminating your killer within five seconds.</small></article>
+            <article data-tone="neutral"><span>Ability usage</span><strong>{totalAbilityCasts ? `${totalAbilityCasts} casts` : `${totalAbilityEffects} recorded effects`}</strong><small>{abilityUsage.length ? abilityUsage.map((ability) => `${ability.name} ${ability.count}`).join(" · ") : hasDetailedRounds ? "No cast total was reported; round effects are still preserved." : "Refresh this match to preserve ability evidence."}{totalAbilityCasts && totalAbilityEffects ? ` · ${totalAbilityEffects} round effects` : ""}</small></article>
+            {local?.playtimeMillis ? <article data-tone="neutral"><span>Active time</span><strong>{fmtLength(local.playtimeMillis)} recorded</strong><small>{detail.matchInfo.gameLengthMillis ? `${fmtLength(detail.matchInfo.gameLengthMillis)} total match duration. ` : ""}Riot&apos;s player timer is shown directly; disconnect intent is not inferred.</small></article> : null}
+            {flaggedRounds.length ? <article data-tone="danger"><span>Riot status</span><strong>{flaggedRounds.length} round{flaggedRounds.length === 1 ? "" : "s"} flagged</strong><small>AFK, spawn, or penalty state was reported in rounds {flaggedRounds.map((round) => round.roundNum + 1).join(", ")}.</small></article> : <article data-tone="good"><span>Riot status</span><strong>No round penalties reported</strong><small>No AFK, spawn, or round penalty flags were present in this match payload.</small></article>}
+        </div>
+    </section>;
 }
 
 function MatchMapAnalytics({
@@ -2044,14 +2329,13 @@ function MatchMapAnalytics({
         const damageItemKey = selectedFight.damageItem?.trim().toLowerCase() || "";
         const weapon = damageItemKey ? weaponById.get(damageItemKey) : undefined;
         const killerAgent = agents[killerPlayer?.characterId?.toLowerCase() || ""];
-        const isAbility = selectedFight.damageType?.toLowerCase().includes("ability");
-        const ability = isAbility ? killerAgent?.abilities?.[damageItemKey] : undefined;
+        const damageType = selectedFight.damageType?.toLowerCase() || "";
+        const abilitySlot = riotAbilitySlotKey(damageType, damageItemKey);
+        const isAbility = Boolean(abilitySlot);
+        const ability = abilitySlot ? killerAgent?.abilities?.[abilitySlot] : undefined;
         const finisher: DuelFinisher | undefined = isAbility
-            ? ability?.icon ? { name: ability.name, icon: ability.icon } : undefined
-            : damageItemKey ? {
-                name: weapon?.displayName || "Weapon",
-                icon: weapon?.displayIcon || `https://media.valorant-api.com/weapons/${damageItemKey}/displayicon.png`,
-            } : undefined;
+            ? ability?.icon ? { name: ability.name, icon: ability.icon, kind: "ability" } : undefined
+            : weapon?.displayIcon ? { name: weapon.displayName || "Weapon", icon: weapon.displayIcon, kind: "weapon" } : undefined;
         const localDeath = victimSubject === analysis.localSubject;
         const roundWinner = (detail.rounds || []).find((round) => round.roundNum === selectedFight.roundNum)?.winningTeam.toLowerCase();
         const roundWon = roundWinner ? roundWinner === analysis.localTeam : null;
@@ -2076,8 +2360,7 @@ function MatchMapAnalytics({
         for (const callout of map.callouts) {
             const zone = mapZoneLabel(callout);
             if (zone === "Other") continue;
-            const left = Math.max(0, Math.min(1, callout.y * map.xMultiplier! + map.xScalarToAdd!));
-            const top = Math.max(0, Math.min(1, callout.x * map.yMultiplier! + map.yScalarToAdd!));
+            const { left, top } = mapCalloutPlotPosition(map, callout);
             const points = groups.get(zone) || [];
             points.push({ left, top });
             groups.set(zone, points);
@@ -2211,7 +2494,13 @@ function MatchMapAnalytics({
         return <div className={s.mapAnalyticsEmpty}>Loading this match&apos;s map events...</div>;
     }
     if (error) {
-        return <div className={s.mapAnalyticsEmpty}>{error}</div>;
+        const needsRiotAccess = /auth|log in|session|token/i.test(error);
+        return (
+            <div className={s.mapAnalyticsEmpty} role="status">
+                <strong>{needsRiotAccess ? "Map analysis needs Riot access" : "Map analysis unavailable"}</strong>
+                <span>{needsRiotAccess ? "Reconnect this Riot account, then reopen the match." : error}</span>
+            </div>
+        );
     }
     if (!kills.length) {
         return <div className={s.mapAnalyticsEmpty}>No positional events were returned for this match.</div>;
@@ -2279,9 +2568,8 @@ function MatchMapAnalytics({
                                     </span>
                                 );
                             })}
-                            {map!.callouts.map((callout, index) => {
-                                const left = Math.max(0, Math.min(1, callout.y * map!.xMultiplier! + map!.xScalarToAdd!));
-                                const top = Math.max(0, Math.min(1, callout.x * map!.yMultiplier! + map!.yScalarToAdd!));
+                            {!selectedFight && map!.callouts.map((callout, index) => {
+                                const { left, top } = mapCalloutPlotPosition(map!, callout);
                                 return (
                                     <span
                                         key={`${callout.superRegion}-${callout.name}-${index}`}
@@ -2743,7 +3031,10 @@ function buildScorePartyGroups(
             const bLocal = b.some((player) => player.isLocal);
             return Number(bLocal) - Number(aLocal) || b.length - a.length;
         });
-    const palette = ["#5ca9ff", "#b47cff", "#ff7a98", "#f2c14f", "#43d9c1"];
+    // Party identity is deliberately independent from the selected app accent and
+    // from the ally/enemy team colours. The viewing party is sorted first, so it
+    // always receives the same warm gold marker across themes and matches.
+    const palette = ["#e8b84a", "#9b7cff", "#4fa8ff", "#ff7699", "#a7b0ba"];
     const bySubject = new Map<string, ScorePartyGroup>();
 
     groups.forEach(([, members], index) => {

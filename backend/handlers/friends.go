@@ -102,8 +102,9 @@ type remoteSocialProbe struct {
 	Error  string
 }
 
-// GetSocialStatus keeps the selected account authoritative. A token-authenticated
-// account never falls through to a different account in the local Riot Client.
+// GetSocialStatus keeps the selected account authoritative. Remote XMPP is
+// preferred, but a temporary remote failure may use the local Riot Client only
+// when its session belongs to the exact same account.
 func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	remoteOnly := strings.EqualFold(r.URL.Query().Get("remoteOnly"), "true")
 	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
@@ -134,9 +135,20 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		if remoteResp.Status == "ok" && remoteResp.RemoteStatus == "live" {
 			h.attachSocialHistory(remoteAuth.Puuid, &remoteResp)
+			h.returnAny(w, remoteResp)
+			return
 		}
-		h.returnAny(w, remoteResp)
-		return
+		if remoteOnly {
+			h.returnAny(w, remoteResp)
+			return
+		}
+		localSession, sessionErr := h.fetchLocalChatSession()
+		if sessionErr != nil || !strings.EqualFold(localSession.PUUID, remoteAuth.Puuid) {
+			// Never leak another locally signed-in account into the selected
+			// remote profile. Preserve the useful remote error in this case.
+			h.returnAny(w, remoteResp)
+			return
+		}
 	}
 	selected := selectedAccountPuuid(r)
 	if selected != "" {

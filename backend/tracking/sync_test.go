@@ -444,6 +444,12 @@ func TestListCachedMatchesIncludesQueuedPartyMembers(t *testing.T) {
 	if len(detail.Rounds) != 1 || detail.Rounds[0].WinningTeam != "Blue" || detail.Rounds[0].PlantSite != "A" {
 		t.Fatalf("cached rounds = %+v, want persisted Blue A-site round", detail.Rounds)
 	}
+	if len(detail.Rounds[0].PlayerStats) != 1 || detail.Rounds[0].PlayerStats[0].Economy.Spent != 3900 {
+		t.Fatalf("cached round receipt = %+v, want 3900 spent", detail.Rounds[0].PlayerStats)
+	}
+	if got := detail.Rounds[0].PlayerStats[0].Damage[0].Damage; got != 156 {
+		t.Fatalf("cached round damage = %d, want 156", got)
+	}
 	partyIDs := map[string]string{}
 	for _, player := range detail.Players {
 		partyIDs[player.Subject] = player.PartyID
@@ -514,11 +520,13 @@ func matchFixture(puuid string) map[string]any {
 				"accountLevel":    321,
 				"competitiveTier": 15,
 				"stats": map[string]any{
-					"score":        5200,
-					"roundsPlayed": 20,
-					"kills":        18,
-					"deaths":       12,
-					"assists":      6,
+					"score":          5200,
+					"roundsPlayed":   20,
+					"kills":          18,
+					"deaths":         12,
+					"assists":        6,
+					"playtimeMillis": 2100000,
+					"abilityCasts":   map[string]any{"grenadeCasts": 8, "ability1Casts": 10, "ability2Casts": 6, "ultimateCasts": 2},
 				},
 			},
 			{
@@ -547,9 +555,14 @@ func matchFixture(puuid string) map[string]any {
 				"plantRoundTime":  42000,
 				"plantSite":       "A",
 				"defuseRoundTime": 73000,
+				"plantLocation":   map[string]any{"x": 100, "y": 200},
+				"defuseLocation":  map[string]any{"x": 110, "y": 210},
 				"playerStats": []map[string]any{
 					{
 						"subject": puuid,
+						"score":   300,
+						"economy": map[string]any{"loadoutValue": 4500, "weapon": "weapon-1", "armor": "armor-1", "remaining": 600, "spent": 3900},
+						"ability": map[string]any{"grenadeEffects": 2, "ability1Effects": 1, "ability2Effects": 0, "ultimateEffects": 0},
 						"damage": []map[string]any{
 							{"receiver": "enemy", "damage": 156, "headshots": 1, "bodyshots": 2, "legshots": 0},
 						},
@@ -639,7 +652,13 @@ func matchFixtureWithParty(puuid string) map[string]any {
 				"bombPlanter":   "solo-player",
 				"bombDefuser":   puuid,
 				"plantSite":     "A",
-				"playerStats":   []map[string]any{},
+				"playerStats": []map[string]any{{
+					"subject": puuid,
+					"score":   300,
+					"economy": map[string]any{"loadoutValue": 4500, "weapon": "weapon-1", "armor": "armor-1", "remaining": 600, "spent": 3900},
+					"ability": map[string]any{"grenadeEffects": 2, "ability1Effects": 1, "ability2Effects": 0, "ultimateEffects": 0},
+					"damage":  []map[string]any{{"receiver": "enemy", "damage": 156, "headshots": 1, "bodyshots": 2, "legshots": 0}},
+				}},
 			},
 		},
 	}

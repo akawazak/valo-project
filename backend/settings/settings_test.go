@@ -18,7 +18,7 @@ func TestSaveRawMergesDefaultsAndReplacesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.AutoSelectAgent || !got.AutoSyncMatches || got.MatchRetentionDays != 365 || !got.ShowLiveMatch || !got.ShowPartyWidget || got.ShowUnownedCosmetics {
+	if got.AutoSelectAgent || !got.AutoSyncMatches || got.MatchRetentionDays != 365 || !got.ShowLiveMatch || !got.ShowPartyWidget || got.ShowUnownedCosmetics || !got.SoundEnabled || got.SoundVolume != 28 {
 		t.Fatalf("legacy settings were not merged with defaults: %+v", got)
 	}
 
@@ -39,6 +39,16 @@ func TestSaveRawMergesDefaultsAndReplacesExistingFile(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0) {
 		t.Fatalf("settings file permissions are not private: info=%v err=%v", info, err)
+	}
+}
+
+func TestSaveRawRejectsInvalidSoundVolume(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("APPDATA", configDir)
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+
+	if err := SaveRaw([]byte(`{"soundVolume":101}`)); err == nil {
+		t.Fatal("expected invalid sound volume to be rejected")
 	}
 }
 

@@ -79,14 +79,14 @@ export function saveStoredAccounts(accounts: RiotAccount[]): Promise<void> {
     saveQueue = saveQueue.catch(() => undefined).then(async () => {
         try {
             await Promise.all(accounts.map(saveSecrets));
-            await persistPublicAccounts(accounts);
+            localStorage.removeItem("riot_secure_storage_error");
         } catch (error) {
-            // Preserve the working legacy copy if Credential Manager is unavailable.
-            // The next launch retries migration before removing it.
-            localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-            await savePersistedAccounts(accounts.map(publicAccount)).catch(() => undefined);
+            // Keep credentials in memory for this session, but never fall back to
+            // persisting Riot secrets in WebView localStorage.
+            localStorage.setItem("riot_secure_storage_error", "1");
             console.error("Could not migrate Riot credentials to Windows Credential Manager:", error);
         }
+        await persistPublicAccounts(accounts);
     });
     return saveQueue;
 }
@@ -127,8 +127,8 @@ export async function hydrateStoredAccounts(): Promise<RiotAccount[]> {
     }));
 
     accountCache = hydrated;
-    if (migrationSucceeded) await persistPublicAccounts(hydrated);
-    else await savePersistedAccounts(hydrated.map(publicAccount));
+    if (!migrationSucceeded) localStorage.setItem("riot_secure_storage_error", "1");
+    await persistPublicAccounts(hydrated);
     return hydrated;
 }
 

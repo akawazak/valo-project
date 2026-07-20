@@ -5,10 +5,11 @@ import Image from "next/image";
 import { RiotAccount } from "@/lib/types";
 import { useData } from "@/context/DataContext";
 import { getProfileOverview } from "@/services/api";
+import type { AppTab } from "@/lib/appTabs";
 
 interface AppTopbarProps {
-    activeTab: "store" | "skins" | "profile";
-    onTabChange: (tab: "store" | "skins" | "profile") => void;
+    activeTab: AppTab;
+    onTabChange: (tab: AppTab) => void;
     activeAccount: RiotAccount | null;
     useLocalSso: boolean;
     isLocalClientActive: boolean;
@@ -17,6 +18,7 @@ interface AppTopbarProps {
     onOpenAccounts: () => void;
     playerCardId?: string;
     socialControl?: ReactNode;
+    notificationControl?: ReactNode;
 }
 
 const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
@@ -36,6 +38,7 @@ export default function AppTopbar({
     onOpenAccounts,
     playerCardId,
     socialControl,
+    notificationControl,
 }: AppTopbarProps) {
     const { playerCards } = useData();
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
@@ -133,6 +136,8 @@ export default function AppTopbar({
                     </button>
 
                     {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
+
+                    {notificationControl}
 
                     <button type="button" className="topbar-settings-btn" onClick={onOpenSettings} title="Open Settings">
                         <svg className="settings-gear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

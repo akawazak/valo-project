@@ -13,6 +13,7 @@ import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { getStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
+import { configureUiSounds, playUiSound } from '@/lib/uiSounds';
 
 const DISCORD_QUEUE_LABELS: Record<string, string> = {
     competitive: "Competitive",
@@ -51,6 +52,9 @@ import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
 import ReleaseNotesModal, { type ReleaseNotes } from '@/components/ReleaseNotesModal';
+import NotificationCenter from '@/features/notifications/NotificationCenter';
+import { publishAppNotification, useAppNotifications } from '@/lib/appNotifications';
+import type { AppTab } from '@/lib/appTabs';
 
 const CURRENT_RELEASE: ReleaseNotes = {
     version: "0.5.26",
@@ -78,13 +82,19 @@ const RELEASE_NOTES_STORAGE_KEY = "vantavault:last-seen-release:v2";
 
 type DiscordMatchPhase = {
     phase: string;
+    matchId: string;
     queueId: string;
     mapName: string;
+    mapImage: string;
     agentName: string;
+    agentImage: string;
     timeLeft: number;
     partySize: number;
     allyCount: number;
     enemyCount: number;
+    allyScore: number;
+    enemyScore: number;
+    scoreAvailable: boolean;
 };
 
 type PortableUpdateState = {
@@ -138,17 +148,28 @@ function HomeApp() {
     const [showLiveMatch, setShowLiveMatch] = useState<boolean | undefined>(undefined);
     const [showPartyWidget, setShowPartyWidget] = useState<boolean | undefined>(undefined);
     const [showUnownedCosmetics, setShowUnownedCosmetics] = useState<boolean | undefined>(undefined);
+	const [soundEnabled, setSoundEnabled] = useState<boolean | undefined>(undefined);
+	const [soundVolume, setSoundVolume] = useState<number | undefined>(undefined);
     const [profileIdentity, setProfileIdentity] = useState<{ currentRank: string; currentTier: number; accountLevel: number | null }>({ currentRank: "Unranked", currentTier: 0, accountLevel: null });
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(true);
-    const [loadingMessage, setLoadingMessage] = useState('Loading application data...');
+    const [loadingMessage, setLoadingMessage] = useState('Loading your VantaVault data...');
     
     // Core Layout State
-    const [activeTab, setActiveTab] = useState<'skins' | 'store' | 'profile'>('store');
-    const [discordMatchPhase, setDiscordMatchPhase] = useState<DiscordMatchPhase>({ phase: "none", queueId: "", mapName: "", agentName: "", timeLeft: 0, partySize: 0, allyCount: 0, enemyCount: 0 });
+    const [activeTab, setActiveTab] = useState<AppTab>('store');
+    const [discordMatchPhase, setDiscordMatchPhase] = useState<DiscordMatchPhase>({ phase: "none", matchId: "", queueId: "", mapName: "", mapImage: "", agentName: "", agentImage: "", timeLeft: 0, partySize: 0, allyCount: 0, enemyCount: 0, allyScore: 0, enemyScore: 0, scoreAvailable: false });
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
     const autoOpenedOverlayKeyRef = useRef("");
+	const previousSoundPhaseRef = useRef<DiscordMatchPhase["phase"]>("none");
+
+    const selectAppTab = useCallback((tab: AppTab) => {
+        setActiveTab(tab);
+        if (tab !== 'profile') setProfileTarget(null);
+        setIsWorkspaceOpen(tab === 'skins');
+    }, []);
+
+    const notifications = useAppNotifications(activeAccount?.puuid);
 
     useEffect(() => {
         setProfileTarget(null);
@@ -159,14 +180,24 @@ function HomeApp() {
             const detail = (event as CustomEvent<Partial<DiscordMatchPhase>>).detail;
             const nextPhase = {
                 phase: detail?.phase || "none",
+                matchId: detail?.matchId || "",
                 queueId: detail?.queueId || "",
                 mapName: detail?.mapName || "",
+                mapImage: detail?.mapImage || "",
                 agentName: detail?.agentName || "",
+                agentImage: detail?.agentImage || "",
                 timeLeft: detail?.timeLeft || 0,
                 partySize: detail?.partySize || 0,
                 allyCount: detail?.allyCount || 0,
                 enemyCount: detail?.enemyCount || 0,
+                allyScore: detail?.allyScore || 0,
+                enemyScore: detail?.enemyScore || 0,
+                scoreAvailable: Boolean(detail?.scoreAvailable),
             };
+			if (nextPhase.phase === "pregame" && previousSoundPhaseRef.current !== "pregame") {
+				playUiSound("matchFound");
+			}
+			previousSoundPhaseRef.current = nextPhase.phase;
             setDiscordMatchPhase(nextPhase);
         };
         window.addEventListener("vantavault:match-phase", onMatchPhase);
@@ -233,37 +264,39 @@ function HomeApp() {
         let details = activeTab === "store" ? "Browsing Store" : activeTab === "profile" ? "Viewing Profiles" : "Building a Loadout";
         let activityState = "VantaVault desktop companion";
         const queueName = discordQueueLabel(discordMatchPhase.queueId);
-        const partyText = discordMatchPhase.partySize > 1 ? `${discordMatchPhase.partySize}-stack` : "";
-        const lobbyText = discordMatchPhase.allyCount > 0 && discordMatchPhase.enemyCount > 0
-            ? `${discordMatchPhase.allyCount}v${discordMatchPhase.enemyCount}`
-            : "";
         if (discordMatchPhase.phase === "pregame") {
-            details = discordMatchPhase.agentName ? `Agent Select — ${discordMatchPhase.agentName}` : "Agent Select";
-            activityState = [queueName, discordMatchPhase.mapName, discordMatchPhase.timeLeft > 0 ? `${discordMatchPhase.timeLeft}s left` : ""].filter(Boolean).join(" • ");
+            details = `Agent Select · ${queueName}`;
+            activityState = discordMatchPhase.mapName
+                ? `${discordMatchPhase.agentName || "Choosing agent"} on ${discordMatchPhase.mapName}`
+                : discordMatchPhase.agentName || "Choosing agent";
         } else if (discordMatchPhase.phase === "coregame") {
-            details = discordMatchPhase.agentName ? `In Match — ${discordMatchPhase.agentName}` : "In Match";
-            activityState = discordMatchPhase.mapName ? `${queueName} on ${discordMatchPhase.mapName}` : queueName;
+            const score = discordMatchPhase.scoreAvailable
+                ? ` · ${discordMatchPhase.allyScore}–${discordMatchPhase.enemyScore}`
+                : "";
+            details = `${queueName}${score}`;
+            activityState = discordMatchPhase.agentName && discordMatchPhase.mapName
+                ? `${discordMatchPhase.agentName} on ${discordMatchPhase.mapName}`
+                : discordMatchPhase.mapName || discordMatchPhase.agentName || "Live match";
         }
-        if (discordMatchPhase.phase === "pregame") {
-            details = `Agent Select - ${queueName}`;
-            activityState = [
-                discordMatchPhase.agentName || "Choosing agent",
-                discordMatchPhase.mapName,
-                discordMatchPhase.timeLeft > 0 ? `${discordMatchPhase.timeLeft}s left` : "",
-                partyText,
-            ].filter(Boolean).join(" - ");
-        } else if (discordMatchPhase.phase === "coregame") {
-            details = `Playing ${queueName}`;
-            activityState = [
-                discordMatchPhase.agentName && discordMatchPhase.mapName
-                    ? `${discordMatchPhase.agentName} on ${discordMatchPhase.mapName}`
-                    : discordMatchPhase.mapName || discordMatchPhase.agentName || "Live match",
-                lobbyText,
-                partyText,
-            ].filter(Boolean).join(" - ");
-        }
+        const inMatch = discordMatchPhase.phase === "pregame" || discordMatchPhase.phase === "coregame";
+        const endAt = discordMatchPhase.phase === "pregame" && discordMatchPhase.timeLeft > 0
+            ? Math.floor(Date.now() / 1000) + discordMatchPhase.timeLeft
+            : null;
         void import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke("set_discord_presence", { details, activityState }))
+            .then(({ invoke }) => invoke("set_discord_presence", {
+                activity: {
+                    details,
+                    state: activityState,
+                    activityKey: inMatch ? `${discordMatchPhase.matchId || "match"}:${discordMatchPhase.phase}` : `app:${activeTab}`,
+                    largeImage: inMatch ? discordMatchPhase.mapImage : "",
+                    largeText: inMatch ? discordMatchPhase.mapName : "",
+                    smallImage: inMatch ? discordMatchPhase.agentImage : "",
+                    smallText: inMatch ? discordMatchPhase.agentName : "",
+                    partyCurrent: discordMatchPhase.partySize > 1 ? discordMatchPhase.partySize : 0,
+                    partyMax: discordMatchPhase.partySize > 1 ? 5 : 0,
+                    endAt,
+                },
+            }))
             .catch(() => {});
     }, [activeTab, discordMatchPhase]);
     
@@ -282,6 +315,43 @@ function HomeApp() {
     const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
     const [showReleaseNotes, setShowReleaseNotes] = useState(false);
 
+    useEffect(() => {
+        const onShortcut = (event: KeyboardEvent) => {
+            if (event.defaultPrevented || event.altKey) return;
+            const key = event.key.toLowerCase();
+            const commandKey = event.ctrlKey || event.metaKey;
+
+            if (commandKey && event.shiftKey && key === 'r') {
+                event.preventDefault();
+                void import('@tauri-apps/plugin-process')
+                    .then(({ relaunch }) => relaunch())
+                    .catch(() => window.location.reload());
+                return;
+            }
+            if (event.key === 'F5' || (commandKey && !event.shiftKey && key === 'r')) {
+                event.preventDefault();
+                window.location.reload();
+                return;
+            }
+            if (commandKey && key === ',') {
+                event.preventDefault();
+                setIsSettingsOpen((current) => !current);
+                return;
+            }
+            if (!commandKey || event.shiftKey) return;
+            if ((event.target as Element | null)?.closest('input, textarea, select, [contenteditable="true"]')) return;
+            if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return;
+
+            const tab: AppTab | null = key === '1' ? 'store' : key === '2' ? 'profile' : key === '3' ? 'skins' : null;
+            if (!tab) return;
+            event.preventDefault();
+            selectAppTab(tab);
+        };
+
+        window.addEventListener('keydown', onShortcut);
+        return () => window.removeEventListener('keydown', onShortcut);
+    }, [selectAppTab]);
+
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
         showToast, toastMessage, handleCloseToast,
@@ -294,10 +364,12 @@ function HomeApp() {
             if (!message) return;
             setToastMessage(message);
             setShowToast(true);
+			playUiSound("error");
+            publishAppNotification({ id: `error:${message}:${Math.floor(Date.now() / 60_000)}`, kind: "error", title: "VantaVault needs attention", body: message, action: activeTab, accountPuuid: activeAccount?.puuid });
         };
         window.addEventListener("vantavault:error", onAppError);
         return () => window.removeEventListener("vantavault:error", onAppError);
-    }, [setShowToast, setToastMessage]);
+    }, [activeAccount?.puuid, activeTab, setShowToast, setToastMessage]);
 
     const {
         presets, selectedPreset, isEditing, editingPreset,
@@ -546,6 +618,8 @@ function HomeApp() {
             setShowLiveMatch(settings.showLiveMatch);
             setShowPartyWidget(settings.showPartyWidget);
             setShowUnownedCosmetics(settings.showUnownedCosmetics);
+			setSoundEnabled(settings.soundEnabled);
+			setSoundVolume(settings.soundVolume);
 			const useLegacyUI = !settings.uiSettingsSaved;
 			const backendAppearance = settings.appearance || {} as Settings["appearance"];
 			let effectiveAppearance = backendAppearance;
@@ -582,7 +656,7 @@ function HomeApp() {
 
     useEffect(() => {
         if (isClientHealthy) {
-            setLoadingMessage('Loading application data...');
+            setLoadingMessage('Loading your VantaVault data...');
             loadInitialData();
         } else {
             setIsLoading(false);
@@ -600,9 +674,11 @@ function HomeApp() {
             showOfflineFriends === undefined ||
             showLiveMatch === undefined ||
             showPartyWidget === undefined ||
-            showUnownedCosmetics === undefined
+			showUnownedCosmetics === undefined ||
+			soundEnabled === undefined ||
+			soundVolume === undefined
         ) return;
-		const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, theme, accentTheme, interfaceTheme, uiSettingsSaved: true, appearance };
+		const next = { autoSelectAgent, useLocalSso, autoSyncMatches, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, soundEnabled, soundVolume, theme, accentTheme, interfaceTheme, uiSettingsSaved: true, appearance };
         if (JSON.stringify(prevSettingsRef.current) === JSON.stringify(next)) return;
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
@@ -610,7 +686,12 @@ function HomeApp() {
             console.error("Failed to save settings:", error);
             reportAppError("Settings could not be saved. Please try again.");
         });
-	}, [accentTheme, appearance, autoSelectAgent, autoSyncMatches, interfaceTheme, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, theme, useLocalSso]);
+	}, [accentTheme, appearance, autoSelectAgent, autoSyncMatches, interfaceTheme, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, soundEnabled, soundVolume, theme, useLocalSso]);
+
+	useEffect(() => {
+		if (soundEnabled === undefined || soundVolume === undefined) return;
+		configureUiSounds({ enabled: soundEnabled, volume: soundVolume });
+	}, [soundEnabled, soundVolume]);
 
     useEffect(() => {
         let alive = true;
@@ -725,6 +806,7 @@ function HomeApp() {
             navigator.clipboard.writeText(code);
             setToastMessage(`Copied share code for "${preset.name}" to clipboard!`);
             setShowToast(true);
+			playUiSound("success");
         } catch (e) {
             console.error(e);
             alert('Failed to copy share code.');
@@ -740,6 +822,7 @@ function HomeApp() {
             setImportError('');
             setToastMessage('Preset imported successfully!');
             setShowToast(true);
+			playUiSound("success");
         } catch (err: unknown) {
             setImportError(err instanceof Error ? err.message : 'Invalid preset code.');
         }
@@ -756,11 +839,21 @@ function HomeApp() {
 
     if (isLoading || dataContextLoading) {
         return (
-            <div className="d-flex flex-column justify-content-center align-items-center vh-100 bg-dark text-white">
-                <div className="spinner-border text-danger" role="status" style={{ width: '3rem', height: '3rem' }}>
-                    <span className="visually-hidden">Loading...</span>
-                </div>
-                <p className="mt-3 text-muted">{loadingMessage}</p>
+            <div className="loading-screen">
+                <main className="loading-launch" role="status" aria-live="polite" aria-busy="true">
+                    <div className="loading-brand" aria-label="VantaVault">
+                        <img src="/brand-mark.svg" alt="" width="42" height="42" />
+                        <span>VANTA<strong>VAULT</strong></span>
+                    </div>
+                    <div className="loading-copy">
+                        <span className="loading-kicker">Desktop companion</span>
+                        <h1>Preparing your session</h1>
+                        <p className="loading-text">{loadingMessage}</p>
+                    </div>
+                    <div className="loading-progress" aria-hidden="true">
+                        <span />
+                    </div>
+                </main>
             </div>
         );
     }
@@ -771,12 +864,7 @@ function HomeApp() {
         <div className="app-container">
             <AppTopbar
                 activeTab={activeTab}
-                onTabChange={(tab) => {
-                    setActiveTab(tab);
-                    if (tab !== 'profile') setProfileTarget(null);
-                    if (tab === 'store' || tab === 'profile') setIsWorkspaceOpen(false);
-                    if (tab === 'skins') setIsWorkspaceOpen(true);
-                }}
+                onTabChange={selectAppTab}
                 activeAccount={activeAccount}
                 useLocalSso={useLocalSso || false}
                 isLocalClientActive={isLocalClientActive}
@@ -785,13 +873,15 @@ function HomeApp() {
                 onOpenAccounts={() => setIsAccountsOpen(true)}
                 playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
                 socialControl={(showPartyWidget ?? true) ? <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} /> : null}
+                notificationControl={<NotificationCenter items={notifications.items} unreadCount={notifications.unreadCount} onRead={notifications.markRead} onReadAll={notifications.markAllRead} onClear={notifications.clear} onNavigate={selectAppTab} />}
             />
 
             <div className="app-content-wrapper">
-                <main className="app-main-content">
-                    {activeTab === 'store' ? (
+                <main className="app-main-content" data-active-tab={activeTab}>
+                    <div hidden={activeTab !== 'store'}>
                         <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
-                    ) : activeTab === 'profile' ? (
+                    </div>
+                    {activeTab === 'profile' ? (
                         <ProfilePanel
                             key={`${activeAccount?.puuid || "none"}:${profileTarget?.puuid || "own"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
@@ -800,7 +890,7 @@ function HomeApp() {
                             onRequestedProfileChange={setProfileTarget}
                             autoSyncMatches={autoSyncMatches ?? true}
                         />
-                    ) : (
+                    ) : activeTab === 'skins' ? (
                         isWorkspaceOpen ? (
                             <ArsenalView
                                 weapons={weapons}
@@ -871,7 +961,7 @@ function HomeApp() {
                                 onNewPreset={() => handleOpenPresetNameModal(NamingMode.New)}
                             />
                         )
-                    )}
+                    ) : null}
                 </main>
             </div>
 
@@ -932,6 +1022,10 @@ function HomeApp() {
                 onShowPartyWidgetChange={setShowPartyWidget}
                 showUnownedCosmetics={showUnownedCosmetics ?? false}
                 onShowUnownedCosmeticsChange={setShowUnownedCosmetics}
+				soundEnabled={soundEnabled ?? true}
+				onSoundEnabledChange={setSoundEnabled}
+				soundVolume={soundVolume ?? 28}
+				onSoundVolumeChange={setSoundVolume}
                 launchAtStartup={launchAtStartup}
                 onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
                 theme={theme}

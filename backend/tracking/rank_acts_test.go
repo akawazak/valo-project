@@ -181,6 +181,23 @@ func TestMergeRankActEvidencePreservesAuthorityAndAddsCompleteness(t *testing.T)
 	}
 }
 
+func TestMergeRankActEvidenceCorrectsPlacementResultsFromCachedMatches(t *testing.T) {
+	updates := []RankActSummary{{
+		SeasonID: "v26a4", Games: 3, Wins: 0, RankedRating: 0, PeakRank: 21, FinalRank: 21,
+	}}
+	cachedMatches := []RankActSummary{{
+		SeasonID: "v26a4", Games: 3, Wins: 2, PeakRank: 21, FinalRank: 21,
+	}}
+
+	got := MergeRankActEvidence(updates, cachedMatches)
+	if len(got) != 1 {
+		t.Fatalf("merged acts = %+v, want one act", got)
+	}
+	if got[0].Games != 3 || got[0].Wins != 2 {
+		t.Fatalf("placement results were not corrected from match evidence: %+v", got[0])
+	}
+}
+
 func TestOverviewKeepsOlderRankOutOfCurrentAct(t *testing.T) {
 	db, err := OpenTrackingDB(t.TempDir())
 	if err != nil {
@@ -194,7 +211,9 @@ func TestOverviewKeepsOlderRankOutOfCurrentAct(t *testing.T) {
 		ranked               bool
 	}{
 		{"ranked-old", "competitive", "previous-act", 100, 16, true},
-		{"casual-current", "swiftplay", "current-act", 200, 0, false},
+		// Riot carries the previous competitive tier into casual match payloads.
+		// It must not become the current act's rank without a competitive match.
+		{"casual-current", "swiftplay", "current-act", 200, 16, false},
 	} {
 		_, err = db.Exec(`INSERT INTO matches
 			(matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId, blueWins, rawJsonPath, cachedAt, accountPuuid)

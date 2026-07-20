@@ -1,10 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
+import { playUiSound } from "@/lib/uiSounds";
 
 const RIOT_WALLPAPERS = [
     { id: 'evolution', name: 'Evolution', url: '/themes/evolution.jpg' },
@@ -12,7 +14,31 @@ const RIOT_WALLPAPERS = [
     { id: 'omen-outlaw', name: 'Omen & Outlaw', url: '/themes/omen-outlaw.jpg' },
     { id: 'cypher-reborn', name: 'Cypher Reborn', url: '/themes/cypher-reborn.jpg' },
     { id: 'deadlock', name: 'Deadlock', url: '/themes/deadlock.jpg' },
+    { id: 'viper', name: 'Viper', url: '/themes/viper.jpg' },
+    { id: 'harbor', name: 'Harbor', url: '/themes/harbor.jpg' },
+    { id: 'gekko', name: 'Gekko', url: '/themes/gekko.jpg' },
 ] as const;
+
+const GITHUB_REPOSITORY_URL = "https://github.com/akawazak/valo-project";
+const GITHUB_RELEASE_URL = `${GITHUB_REPOSITORY_URL}/releases/latest`;
+const DISCORD_INVITE_URL = "https://discord.gg/gxGQwWyECE";
+
+const SETTINGS_SECTIONS = [
+    { id: "general", label: "General", description: "Startup and cosmetic browsing" },
+    { id: "appearance", label: "Appearance", description: "Theme, wallpaper, and accent" },
+    { id: "match", label: "Match & social", description: "Sync, friends, and live match" },
+    { id: "data", label: "Data", description: "Backups, retention, and storage" },
+    { id: "connection", label: "Connection", description: "Choose how Riot signs in" },
+    { id: "about", label: "About", description: "Updates and community" },
+] as const;
+
+type SettingsSection = typeof SETTINGS_SECTIONS[number]["id"];
+
+function openExternal(url: string) {
+    void import("@tauri-apps/plugin-shell")
+        .then(({ open }) => open(url))
+        .catch(() => window.open(url, "_blank", "noopener,noreferrer"));
+}
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -35,6 +61,10 @@ interface SettingsModalProps {
     onShowPartyWidgetChange: (v: boolean) => void;
     showUnownedCosmetics: boolean;
     onShowUnownedCosmeticsChange: (v: boolean) => void;
+	soundEnabled: boolean;
+	onSoundEnabledChange: (v: boolean) => void;
+	soundVolume: number;
+	onSoundVolumeChange: (v: number) => void;
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
     theme: string;
@@ -101,6 +131,10 @@ export default function SettingsModal({
     onShowPartyWidgetChange,
     showUnownedCosmetics,
     onShowUnownedCosmeticsChange,
+	soundEnabled,
+	onSoundEnabledChange,
+	soundVolume,
+	onSoundVolumeChange,
     launchAtStartup,
     onLaunchAtStartupChange,
     theme,
@@ -131,7 +165,28 @@ export default function SettingsModal({
     const [storageMessage, setStorageMessage] = useState("");
     const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [recoveryMessage, setRecoveryMessage] = useState("");
+    const [secureStorageFailed, setSecureStorageFailed] = useState(false);
+    const [projectLinkCopied, setProjectLinkCopied] = useState(false);
+    const [activeSection, setActiveSection] = useState<SettingsSection>("general");
     const backupInputRef = useRef<HTMLInputElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const wallpaperPreloadRef = useRef<HTMLImageElement[]>([]);
+    const activeSectionCopy = SETTINGS_SECTIONS.find((section) => section.id === activeSection)!;
+    const panelBleed = Math.round(Math.min(100, Math.max(0, ((100 - appearance.panelOpacity) / 55) * 100)));
+    const panelBleedLabel = panelBleed < 34 ? "Subtle" : panelBleed < 67 ? "Balanced" : "Strong";
+
+    useEffect(() => {
+        wallpaperPreloadRef.current = RIOT_WALLPAPERS.map((item) => {
+            const image = new window.Image();
+            image.decoding = "async";
+            image.src = item.url;
+            return image;
+        });
+
+        return () => {
+            wallpaperPreloadRef.current = [];
+        };
+    }, []);
 
     const refreshStorage = useCallback(async () => {
         const [status, sessionBytes] = await Promise.all([
@@ -146,72 +201,79 @@ export default function SettingsModal({
 
     useEffect(() => {
         if (!isOpen) return;
+        setSecureStorageFailed(localStorage.getItem("riot_secure_storage_error") === "1");
         void refreshStorage().catch((error) => setStorageMessage(error instanceof Error ? error.message : String(error)));
     }, [isOpen, refreshStorage]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") onClose();
+        };
+        window.addEventListener("keydown", closeOnEscape);
+        return () => window.removeEventListener("keydown", closeOnEscape);
+    }, [isOpen, onClose]);
 
     if (!isOpen) return null;
 
     return (
         <div className="settings-modal-overlay" onClick={onClose}>
-            <div className="settings-modal-container single-pane" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-modal-container single-pane" data-slot="settings-dialog" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
                 <button className="settings-modal-close" onClick={onClose} aria-label="Close settings">
                     &times;
                 </button>
 
                 <div className="settings-modal-sidebar">
                     <div className="settings-sidebar-header">
-                        <div className="tactical-kicker">// SYSTEM CONFIG</div>
-                        <h2 className="settings-sidebar-title">Settings</h2>
+                        <Image src="/brand-mark.svg" alt="" width={34} height={34} />
+                        <div>
+                            <h2 className="settings-sidebar-title">Settings</h2>
+                            <span>VantaVault preferences</span>
+                        </div>
                     </div>
 
+                    <nav className="settings-section-nav" aria-label="Settings categories">
+                        {SETTINGS_SECTIONS.map((section) => (
+                            <button
+                                key={section.id}
+                                type="button"
+                                className={activeSection === section.id ? "active" : ""}
+                                onClick={() => {
+                                    setActiveSection(section.id);
+                                    if (contentRef.current) contentRef.current.scrollTop = 0;
+                                }}
+                                aria-current={activeSection === section.id ? "page" : undefined}
+                            >
+                                <strong>{section.label}</strong>
+                                <span>{section.description}</span>
+                            </button>
+                        ))}
+                    </nav>
+
                     <div className="settings-sidebar-footer">
-                                {appVersion && (
-                                    <div className="settings-version-info">
-                                        <span>Version {appVersion}</span>
-                                        {isPortable && updateReady ? (
-                                            <button
-                                                type="button"
-                                                className="settings-update-now-btn"
-                                                onClick={onRestartForUpdate}
-                                            >
-                                                Restart now
-                                            </button>
-                                        ) : isPortable && isUpdating ? (
-                                            <span className="settings-update-status">Downloading...</span>
-                                        ) : isPortable ? (
-                                            <span className="settings-update-status clean">Portable build</span>
-                                        ) : updateReady ? (
-                                            <button
-                                                type="button"
-                                                className="settings-update-now-btn"
-                                                onClick={onRestartForUpdate}
-                                            >
-                                                Restart now
-                                            </button>
-                                        ) : updateAvailable ? (
-                                            <button
-                                                type="button"
-                                                className="settings-update-now-btn"
-                                                onClick={onInstallUpdate}
-                                                disabled={isUpdating}
-                                            >
-                                                {isUpdating ? "Updating..." : `Update to v${updateVersion || "?"}`}
-                                            </button>
-                                        ) : (
-                                            <span className="settings-update-status clean">Up to date</span>
-                                        )}
-                                        <span className="settings-update-lastcheck">Last check: {formatRelativeTime(lastUpdateCheck)}</span>
-                                    </div>
-                                )}
+                        <button
+                            type="button"
+                            className="settings-version-card"
+                            onClick={() => {
+                                setActiveSection("about");
+                                if (contentRef.current) contentRef.current.scrollTop = 0;
+                            }}
+                        >
+                            <span>VantaVault {appVersion || "Desktop"}</span>
+                            <small>{updateReady ? "Restart to finish updating" : updateAvailable ? `Version ${updateVersion} available` : "Open source desktop companion"}</small>
+                        </button>
                     </div>
                 </div>
 
-                <div className="settings-modal-content">
+                <div ref={contentRef} className="settings-modal-content">
                     <div className="settings-tab-pane">
-                        <h3 className="settings-pane-title">General Settings</h3>
+                        <header className="settings-pane-header">
+                            <h3>{activeSectionCopy.label}</h3>
+                            <p>{activeSectionCopy.description}</p>
+                        </header>
 
                         <div className="settings-list">
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "general"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Auto Agent Select</div>
                                     <div className="settings-item-desc">Automatically apply your agent-linked preset when a match is found.</div>
@@ -228,7 +290,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "general"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Launch at Login</div>
                                     <div className="settings-item-desc">Start VantaVault automatically when you sign in to Windows.</div>
@@ -245,7 +307,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "general"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Show Locked Cosmetics</div>
                                     <div className="settings-item-desc">Include player cards, titles, sprays, and flexes that are not confirmed on this account.</div>
@@ -262,7 +324,40 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+							<div className="settings-item settings-item--stacked" hidden={activeSection !== "general"}>
+								<div className="settings-sound-heading">
+									<div className="settings-item-info">
+										<div className="settings-item-label">Interface Sounds</div>
+										<div className="settings-item-desc">Subtle cues for messages, match found, and important results. Navigation stays silent.</div>
+									</div>
+									<div className="settings-item-control">
+										<label className="switch-control">
+											<input aria-label="Interface Sounds" type="checkbox" checked={soundEnabled} onChange={(event) => onSoundEnabledChange(event.target.checked)} />
+											<span className="switch-slider" />
+										</label>
+									</div>
+								</div>
+								<div className="settings-sound-controls">
+									<AppearanceRange label="Sound volume" hint="Kept intentionally below system volume." value={soundVolume} min={0} max={100} onChange={onSoundVolumeChange} />
+									<button type="button" className="settings-update-now-btn" onClick={() => playUiSound("message", { force: true })}>Preview</button>
+								</div>
+							</div>
+
+                            <div className="settings-item settings-item--stacked" hidden={activeSection !== "general"}>
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Keyboard Shortcuts</div>
+                                    <div className="settings-item-desc">Recovery and navigation while VantaVault is focused.</div>
+                                </div>
+                                <div className="settings-shortcut-list" data-slot="keyboard-shortcuts">
+                                    <div><span>Reload interface</span><span><kbd>F5</kbd><kbd>Ctrl + R</kbd></span></div>
+                                    <div><span>Restart app and backend</span><kbd>Ctrl + Shift + R</kbd></div>
+                                    <div><span>Open Settings</span><kbd>Ctrl + ,</kbd></div>
+                                    <div><span>Store / Profile / Presets</span><span><kbd>Ctrl + 1</kbd><kbd>Ctrl + 2</kbd><kbd>Ctrl + 3</kbd></span></div>
+                                    <div><span>Close Settings</span><kbd>Esc</kbd></div>
+                                </div>
+                            </div>
+
+                            <div className="settings-item" hidden={activeSection !== "appearance"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Visual Theme</div>
                                     <div className="settings-item-desc">Switch between light and dark themes.</div>
@@ -287,7 +382,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "appearance"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Interface Theme</div>
                                     <div className="settings-item-desc">Change the atmosphere, surfaces, and background art without moving your UI.</div>
@@ -318,7 +413,7 @@ export default function SettingsModal({
                                                 onClick={() => setAppearance({ backgroundId: item.id, backgroundUrl: item.url, backgroundName: item.name })}
                                                 aria-pressed={appearance.backgroundId === item.id}
                                             >
-                                                <img src={item.url} alt="" />
+                                                <img src={item.url} alt="" loading="eager" decoding="async" />
                                                 <strong>{item.name}</strong>
                                             </button>
                                         ))}
@@ -329,10 +424,10 @@ export default function SettingsModal({
                                             {appearance.backgroundId && <button type="button" className="settings-update-now-btn" onClick={resetAppearance}>Clear wallpaper</button>}
                                         </div>
                                         <div className="appearance-sliders">
-                                            <AppearanceRange label="Art strength" value={appearance.strength} min={10} max={80} onChange={(strength) => setAppearance({ strength })} />
-                                            <AppearanceRange label="Background blur" value={appearance.blur} min={0} max={18} suffix="px" onChange={(blur) => setAppearance({ blur })} />
-                                            <AppearanceRange label="Saturation" value={appearance.saturation} min={30} max={140} onChange={(saturation) => setAppearance({ saturation })} />
-                                            <AppearanceRange label="Panel opacity" value={appearance.panelOpacity} min={45} max={100} onChange={(panelOpacity) => setAppearance({ panelOpacity })} />
+                                            <AppearanceRange label="Wallpaper visibility" hint="How strongly the artwork appears behind the app." value={appearance.strength} min={10} max={80} onChange={(strength) => setAppearance({ strength })} />
+                                            <AppearanceRange label="Wallpaper blur" hint="Softens the artwork without blurring the interface." value={appearance.blur} min={0} max={18} suffix="px" onChange={(blur) => setAppearance({ blur })} />
+                                            <AppearanceRange label="Wallpaper color" hint="Lower is muted; higher is more vivid." value={appearance.saturation} min={30} max={140} onChange={(saturation) => setAppearance({ saturation })} />
+                                            <AppearanceRange label="Wallpaper through cards" hint="Left keeps cards solid; right reveals more artwork." value={panelBleed} valueLabel={panelBleedLabel} min={0} max={100} onChange={(bleed) => setAppearance({ panelOpacity: Math.round(100 - bleed * 0.55) })} />
                                         </div>
                                         <div className="appearance-position" aria-label="Background position">
                                             {(['left', 'center', 'right'] as const).map((position) => (
@@ -343,7 +438,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "appearance"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Accent Style</div>
                                     <div className="settings-item-desc">Change the app accent so the interface is not locked to Valorant red.</div>
@@ -371,7 +466,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={activeSection !== "about"}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Updates</div>
                                     <div className="settings-item-desc">
@@ -451,8 +546,7 @@ export default function SettingsModal({
 
                         </div>
 
-                        <h3 className="settings-pane-title settings-pane-subtitle">Profile & Presence</h3>
-                        <div className="settings-list">
+                        <div className="settings-list" hidden={activeSection !== "match"}>
                             <div className="settings-item">
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Automatic Match Sync</div>
@@ -507,8 +601,7 @@ export default function SettingsModal({
                             </div>
                         </div>
 
-                        <h3 className="settings-pane-title settings-pane-subtitle">Data & Recovery</h3>
-                        <div className="settings-list">
+                        <div className="settings-list" hidden={activeSection !== "data"}>
                             <div className="settings-item">
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Backup Current Account</div>
@@ -589,8 +682,7 @@ export default function SettingsModal({
                             {recoveryMessage && <div className="settings-storage-message">{recoveryMessage}</div>}
                         </div>
 
-                        <h3 className="settings-pane-title settings-pane-subtitle">Storage</h3>
-                        <div className="settings-list">
+                        <div className="settings-list" hidden={activeSection !== "data"}>
                             <div className="settings-item">
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Match Retention</div>
@@ -666,7 +758,7 @@ export default function SettingsModal({
                         </div>
 
                         {/* Connection Mode */}
-                        <div className="connection-mode-card">
+                        <div className="connection-mode-card" hidden={activeSection !== "connection"}>
                             <div className="connection-mode-header">
                                 <div>
                                     <div className="settings-item-label" style={{ marginBottom: '2px' }}>Connection Mode</div>
@@ -720,7 +812,45 @@ export default function SettingsModal({
                                     </span>
                                 </div>
                             )}
+                            {secureStorageFailed && (
+                                <div className="connection-security-warning" role="status">
+                                    Riot credentials could not be saved to Windows Credential Manager. This session still works, but reconnect the account after restarting VantaVault.
+                                </div>
+                            )}
                         </div>
+
+                        <section className="settings-about-card" hidden={activeSection !== "about"}>
+                            <div className="settings-about-brand">
+                                <Image src="/brand-mark.svg" alt="" width={52} height={52} />
+                                <div>
+                                    <strong>VantaVault</strong>
+                                    <span>Version {appVersion || "unknown"}</span>
+                                </div>
+                            </div>
+                            <p>Open-source VALORANT loadouts, profiles, match review, and live-match context in one desktop app.</p>
+                            <div className="settings-about-actions">
+                                <button type="button" className="btn-tactical btn-tactical-accent" onClick={() => openExternal(GITHUB_RELEASE_URL)}>
+                                    Download latest
+                                </button>
+                                <button type="button" className="btn-tactical" onClick={() => openExternal(GITHUB_REPOSITORY_URL)}>
+                                    View on GitHub
+                                </button>
+                                <button type="button" className="btn-tactical" onClick={() => {
+                                    void navigator.clipboard.writeText(GITHUB_REPOSITORY_URL)
+                                        .then(() => {
+                                            setProjectLinkCopied(true);
+                                            window.setTimeout(() => setProjectLinkCopied(false), 1800);
+                                        })
+                                        .catch(() => openExternal(GITHUB_REPOSITORY_URL));
+                                }}>
+                                    {projectLinkCopied ? "Link copied" : "Copy project link"}
+                                </button>
+                                <button type="button" className="btn-tactical" onClick={() => openExternal(DISCORD_INVITE_URL)}>
+                                    Join Discord
+                                </button>
+                            </div>
+                            <small>VantaVault is not endorsed by Riot Games. Riot Games and VALORANT are trademarks of Riot Games, Inc.</small>
+                        </section>
                     </div>
                 </div>
             </div>
@@ -728,11 +858,12 @@ export default function SettingsModal({
     );
 }
 
-function AppearanceRange({ label, value, min, max, suffix = '%', onChange }: { label: string; value: number; min: number; max: number; suffix?: string; onChange: (value: number) => void }) {
+function AppearanceRange({ label, hint, value, valueLabel, min, max, suffix = '%', onChange }: { label: string; hint?: string; value: number; valueLabel?: string; min: number; max: number; suffix?: string; onChange: (value: number) => void }) {
     return (
         <label className="appearance-range">
-            <span>{label}<strong>{value}{suffix}</strong></span>
-            <input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+            <span>{label}<strong>{valueLabel || `${value}${suffix}`}</strong></span>
+            <input type="range" min={min} max={max} value={value} aria-label={label} aria-valuetext={valueLabel || `${value}${suffix}`} onChange={(event) => onChange(Number(event.target.value))} />
+            {hint && <small>{hint}</small>}
         </label>
     );
 }

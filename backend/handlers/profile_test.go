@@ -4,9 +4,34 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"backend/tracking"
 )
+
+func TestCachedOverlayRankDoesNotRankUnplacedCurrentAct(t *testing.T) {
+	h := NewHandler(nil)
+	h.liveRanks["live-match"] = liveRankCache{
+		Players: map[string]liveRankSnapshot{
+			"player-1": {CompetitiveTier: 18, RankedRating: 14, PeakTier: 18},
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+		UpdatedAt: time.Now(),
+	}
+	overview := &tracking.Overview{
+		CurrentRank: tracking.CurrentRank{TierName: "Unranked"},
+	}
+
+	if h.applyCachedLiveRankToOverview(nil, overview, "player-1") {
+		t.Fatal("an overlay rank without current-act games was treated as authoritative")
+	}
+	if overview.CurrentRank.CompetitiveTier != 0 || overview.CurrentRank.RankedRating != 0 {
+		t.Fatalf("cached overlay rank leaked into current rank: %+v", overview.CurrentRank)
+	}
+	if overview.PeakRank.CompetitiveTier != 18 {
+		t.Fatalf("historical peak was lost: %+v", overview.PeakRank)
+	}
+}
 
 func TestRiotFailureReasonKeepsRankErrorsActionable(t *testing.T) {
 	if got := riotFailureReason(errors.New(`Riot API returned status 404: {"message":"resource not found"}`)); got != "HTTP 404" {
@@ -137,7 +162,14 @@ func TestMergeLiveMMRDoesNotMakePreviousActCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	overview := &tracking.Overview{CurrentSeasonID: "current-unranked"}
+	overview := &tracking.Overview{
+		CurrentSeasonID: "current-unranked",
+		CurrentRank: tracking.CurrentRank{
+			CompetitiveTier: 16,
+			RankedRating:    63,
+			TierName:        "Diamond 1",
+		},
+	}
 	mergeLiveMMR(overview, live)
 
 	if overview.CurrentSeasonID != "current-unranked" ||
@@ -147,6 +179,18 @@ func TestMergeLiveMMRDoesNotMakePreviousActCurrent(t *testing.T) {
 	}
 	if len(overview.RankActs) != 1 || overview.RankActs[0].SeasonID != "previous-act" {
 		t.Fatalf("previous act was not retained in history: %+v", overview.RankActs)
+	}
+}
+
+func TestCurrentSeasonRRSnapshotsExcludePreviousAct(t *testing.T) {
+	snapshots := []tracking.RRSnapshot{
+		{MatchID: "current", SeasonID: "v26a4", RREarned: 18},
+		{MatchID: "previous", SeasonID: "ce2783e8-44fc-dd48-3da3-33b5ba6c4a22", RREarned: 24},
+	}
+
+	got := currentSeasonRRSnapshots(snapshots, "4f0864e2-40af-28a4-de2c-0e9e64e75f23")
+	if len(got) != 1 || got[0].MatchID != "current" || got[0].RREarned != 18 {
+		t.Fatalf("current act deltas = %+v", got)
 	}
 }
 

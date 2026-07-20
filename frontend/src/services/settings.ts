@@ -11,6 +11,8 @@ export type Settings = {
     showLiveMatch: boolean;
     showPartyWidget: boolean;
     showUnownedCosmetics: boolean;
+	soundEnabled: boolean;
+	soundVolume: number;
 	theme: 'light' | 'dark';
 	accentTheme: 'valorant' | 'aqua' | 'violet' | 'gold';
 	interfaceTheme: 'default' | 'protocol' | 'cinematic';

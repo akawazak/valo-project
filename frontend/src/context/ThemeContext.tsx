@@ -90,12 +90,17 @@ function applyInterfaceTheme(theme: InterfaceTheme) {
 function applyAppearance(settings: AppearanceSettings) {
     const root = document.documentElement;
     const allowedUrl = settings.backgroundUrl.startsWith('/themes/');
+    const normalizedPanelOpacity = Math.min(1, Math.max(0, (settings.panelOpacity - 45) / 55));
+    const readableDarkPanelOpacity = 0.66 + normalizedPanelOpacity * 0.3;
+    const readableLightPanelOpacity = 0.86 + normalizedPanelOpacity * 0.12;
     root.toggleAttribute('data-custom-background', allowedUrl);
     root.style.setProperty('--custom-background-image', allowedUrl ? `url("${settings.backgroundUrl}")` : 'none');
     root.style.setProperty('--custom-background-strength', String(settings.strength / 100));
     root.style.setProperty('--custom-background-blur', `${settings.blur}px`);
     root.style.setProperty('--custom-background-saturation', `${settings.saturation}%`);
     root.style.setProperty('--custom-panel-opacity', `${settings.panelOpacity / 100}`);
+    root.style.setProperty('--custom-dark-panel-opacity', readableDarkPanelOpacity.toFixed(3));
+    root.style.setProperty('--custom-light-panel-opacity', readableLightPanelOpacity.toFixed(3));
     root.style.setProperty('--custom-background-position', settings.position);
     localStorage.setItem('appearance_settings', JSON.stringify(settings));
 }

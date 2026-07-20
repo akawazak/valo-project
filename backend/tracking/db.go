@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS match_players (
     legshots        INTEGER NOT NULL DEFAULT 0,
     damageDealt     INTEGER NOT NULL DEFAULT 0,
     roundsPlayed    INTEGER NOT NULL DEFAULT 0,
+    playtimeMillis  INTEGER NOT NULL DEFAULT 0,
+    grenadeCasts    INTEGER NOT NULL DEFAULT 0,
+    ability1Casts   INTEGER NOT NULL DEFAULT 0,
+    ability2Casts   INTEGER NOT NULL DEFAULT 0,
+    ultimateCasts   INTEGER NOT NULL DEFAULT 0,
     isLocal         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (matchID, subject)
 );
@@ -76,6 +81,7 @@ CREATE TABLE IF NOT EXISTS match_kills (
     damageType       TEXT    NOT NULL DEFAULT '',
     damageItem       TEXT    NOT NULL DEFAULT '',
     secondaryFire    INTEGER NOT NULL DEFAULT 0,
+    assistants       TEXT    NOT NULL DEFAULT '[]',
     playerLocations  TEXT    NOT NULL DEFAULT '[]',
     PRIMARY KEY (matchID, roundNum, gameTime, killer, victim)
 );
@@ -94,6 +100,11 @@ CREATE TABLE IF NOT EXISTS match_rounds (
     plantRoundTime   INTEGER NOT NULL DEFAULT 0,
     plantSite        TEXT    NOT NULL DEFAULT '',
     defuseRoundTime  INTEGER NOT NULL DEFAULT 0,
+    plantLocationX   INTEGER NOT NULL DEFAULT 0,
+    plantLocationY   INTEGER NOT NULL DEFAULT 0,
+    defuseLocationX  INTEGER NOT NULL DEFAULT 0,
+    defuseLocationY  INTEGER NOT NULL DEFAULT 0,
+    playerStats      TEXT    NOT NULL DEFAULT '[]',
     PRIMARY KEY (matchID, roundNum)
 );
 CREATE INDEX IF NOT EXISTS idx_match_rounds_match_round ON match_rounds(matchID, roundNum);
@@ -108,6 +119,7 @@ CREATE TABLE IF NOT EXISTS rr_snapshots (
     rrAfter        INTEGER NOT NULL DEFAULT 0,
     rrEarned       INTEGER NOT NULL DEFAULT 0,
     afkPenalty     INTEGER NOT NULL DEFAULT 0,
+    performanceBonus INTEGER NOT NULL DEFAULT 0,
     matchStartTime INTEGER NOT NULL,
     PRIMARY KEY (puuid, matchID)
 );
@@ -276,6 +288,25 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 	if err := ensureMatchPlayerNameColumns(db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	for _, migration := range []struct{ table, column, definition string }{
+		{"match_players", "playtimeMillis", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "grenadeCasts", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "ability1Casts", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "ability2Casts", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "ultimateCasts", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_kills", "assistants", "TEXT NOT NULL DEFAULT '[]'"},
+		{"match_rounds", "plantLocationX", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_rounds", "plantLocationY", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_rounds", "defuseLocationX", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_rounds", "defuseLocationY", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_rounds", "playerStats", "TEXT NOT NULL DEFAULT '[]'"},
+		{"rr_snapshots", "performanceBonus", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissing(db, migration.table, migration.column, migration.definition); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	if err := addColumnIfMissing(db, "matches", "analyticsVersion", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		_ = db.Close()
@@ -583,7 +614,7 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		"",
 		cachedAt,
 		puuid,
-		2,
+		3,
 	)
 	if err != nil {
 		return fmt.Errorf("tracking: insert match: %w", err)
@@ -598,8 +629,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		INSERT INTO match_players
 		    (matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		     kills, deaths, assists, score, headshots, bodyshots, legshots,
-		     damageDealt, roundsPlayed, isLocal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare player insert: %w", err)
@@ -628,6 +659,11 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 			p.Legshots,
 			p.DamageDealt,
 			p.RoundsPlayed,
+			p.PlaytimeMillis,
+			p.AbilityCasts.Grenade,
+			p.AbilityCasts.Ability1,
+			p.AbilityCasts.Ability2,
+			p.AbilityCasts.Ultimate,
 			boolToInt(p.IsLocal),
 		)
 		if err != nil {
@@ -641,8 +677,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 	killStmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO match_kills
 		    (matchID, roundNum, gameTime, roundTime, killer, victim, victimX, victimY,
-		     damageType, damageItem, secondaryFire, playerLocations)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     damageType, damageItem, secondaryFire, assistants, playerLocations)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare kill insert: %w", err)
@@ -653,10 +689,14 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		if err != nil {
 			return fmt.Errorf("tracking: encode kill locations: %w", err)
 		}
+		assistants, err := json.Marshal(event.Assistants)
+		if err != nil {
+			return fmt.Errorf("tracking: encode kill assistants: %w", err)
+		}
 		if _, err := killStmt.Exec(
 			matchID, event.RoundNum, event.GameTime, event.RoundTime, event.Killer, event.Victim,
 			event.VictimX, event.VictimY, event.DamageType, event.DamageItem,
-			boolToInt(event.SecondaryFire), string(locations),
+			boolToInt(event.SecondaryFire), string(assistants), string(locations),
 		); err != nil {
 			return fmt.Errorf("tracking: insert kill event: %w", err)
 		}
@@ -668,18 +708,24 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 	roundStmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO match_rounds
 		    (matchID, roundNum, winningTeam, roundResult, roundCeremony, bombPlanter,
-		     bombDefuser, plantRoundTime, plantSite, defuseRoundTime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     bombDefuser, plantRoundTime, plantSite, defuseRoundTime,
+		     plantLocationX, plantLocationY, defuseLocationX, defuseLocationY, playerStats)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare round insert: %w", err)
 	}
 	defer roundStmt.Close()
 	for _, round := range parsed.Rounds {
+		playerStats, err := json.Marshal(round.PlayerStats)
+		if err != nil {
+			return fmt.Errorf("tracking: encode round player stats: %w", err)
+		}
 		if _, err := roundStmt.Exec(
 			matchID, round.RoundNum, round.WinningTeam, round.RoundResult, round.RoundCeremony,
 			round.BombPlanter, round.BombDefuser, round.PlantRoundTime, round.PlantSite,
-			round.DefuseRoundTime,
+			round.DefuseRoundTime, round.PlantLocation.X, round.PlantLocation.Y,
+			round.DefuseLocation.X, round.DefuseLocation.Y, string(playerStats),
 		); err != nil {
 			return fmt.Errorf("tracking: insert round %d: %w", round.RoundNum, err)
 		}
@@ -720,7 +766,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	rows, err := db.Query(`
 		SELECT matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		       kills, deaths, assists, score, headshots, bodyshots, legshots,
-		       damageDealt, roundsPlayed, isLocal
+		       damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal
 		FROM match_players WHERE matchID = ? ORDER BY teamId, score DESC`, matchID)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetMatchFromCache players: %w", err)
@@ -737,7 +783,8 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 			&p.CharacterID, &p.AccountLevel, &p.CompetitiveTier,
 			&p.Kills, &p.Deaths, &p.Assists, &p.Score,
 			&p.Headshots, &p.Bodyshots, &p.Legshots, &p.DamageDealt,
-			&p.RoundsPlayed, &isLocal,
+			&p.RoundsPlayed, &p.PlaytimeMillis, &p.AbilityCasts.Grenade, &p.AbilityCasts.Ability1,
+			&p.AbilityCasts.Ability2, &p.AbilityCasts.Ultimate, &isLocal,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: scan player: %w", err)
 		}
@@ -755,7 +802,7 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 
 	killRows, err := db.Query(`
 		SELECT roundNum, gameTime, roundTime, killer, victim, victimX, victimY,
-		       damageType, damageItem, secondaryFire, playerLocations
+		       damageType, damageItem, secondaryFire, assistants, playerLocations
 		FROM match_kills WHERE matchID = ? ORDER BY roundNum, gameTime`, matchID)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: select kill events: %w", err)
@@ -765,15 +812,20 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	for killRows.Next() {
 		var event KillEvent
 		var secondaryFire int
-		var locations string
+		var assistants, locations string
 		if err := killRows.Scan(
 			&event.RoundNum, &event.GameTime, &event.RoundTime, &event.Killer, &event.Victim,
 			&event.VictimX, &event.VictimY, &event.DamageType, &event.DamageItem,
-			&secondaryFire, &locations,
+			&secondaryFire, &assistants, &locations,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: scan kill event: %w", err)
 		}
 		event.SecondaryFire = secondaryFire == 1
+		if assistants != "" {
+			if err := json.Unmarshal([]byte(assistants), &event.Assistants); err != nil {
+				return nil, fmt.Errorf("tracking: decode kill assistants: %w", err)
+			}
+		}
 		if locations != "" {
 			if err := json.Unmarshal([]byte(locations), &event.PlayerLocations); err != nil {
 				return nil, fmt.Errorf("tracking: decode kill locations: %w", err)
@@ -790,7 +842,8 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 
 	roundRows, err := db.Query(`
 		SELECT roundNum, winningTeam, roundResult, roundCeremony, bombPlanter,
-		       bombDefuser, plantRoundTime, plantSite, defuseRoundTime
+		       bombDefuser, plantRoundTime, plantSite, defuseRoundTime,
+		       plantLocationX, plantLocationY, defuseLocationX, defuseLocationY, playerStats
 		FROM match_rounds WHERE matchID = ? ORDER BY roundNum`, matchID)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: select round results: %w", err)
@@ -799,12 +852,19 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	var rounds []MatchRound
 	for roundRows.Next() {
 		var round MatchRound
+		var playerStats string
 		if err := roundRows.Scan(
 			&round.RoundNum, &round.WinningTeam, &round.RoundResult, &round.RoundCeremony,
 			&round.BombPlanter, &round.BombDefuser, &round.PlantRoundTime, &round.PlantSite,
-			&round.DefuseRoundTime,
+			&round.DefuseRoundTime, &round.PlantLocation.X, &round.PlantLocation.Y,
+			&round.DefuseLocation.X, &round.DefuseLocation.Y, &playerStats,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: scan round result: %w", err)
+		}
+		if playerStats != "" {
+			if err := json.Unmarshal([]byte(playerStats), &round.PlayerStats); err != nil {
+				return nil, fmt.Errorf("tracking: decode round player stats: %w", err)
+			}
 		}
 		rounds = append(rounds, round)
 	}
@@ -823,11 +883,11 @@ func UpsertRRSnapshot(db *sql.DB, snap RRSnapshot) error {
 	}
 	_, err := db.Exec(`
 		INSERT OR REPLACE INTO rr_snapshots
-		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, performanceBonus, matchStartTime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		strings.ToLower(snap.Puuid), snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
-		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.MatchStartTime,
+		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.PerformanceBonus, snap.MatchStartTime,
 	)
 	if err != nil {
 		return fmt.Errorf("tracking: UpsertRRSnapshot: %w", err)
@@ -844,11 +904,11 @@ func InsertRRSnapshotIfAbsent(db *sql.DB, snap RRSnapshot) error {
 	}
 	_, err := db.Exec(`
 		INSERT OR IGNORE INTO rr_snapshots
-		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, matchStartTime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    (puuid, matchID, seasonId, tierBefore, tierAfter, rrBefore, rrAfter, rrEarned, afkPenalty, performanceBonus, matchStartTime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		strings.ToLower(snap.Puuid), snap.MatchID, snap.SeasonID, snap.TierBefore, snap.TierAfter,
-		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.MatchStartTime,
+		snap.RRBefore, snap.RRAfter, snap.RREarned, snap.AFKPenalty, snap.PerformanceBonus, snap.MatchStartTime,
 	)
 	if err != nil {
 		return fmt.Errorf("tracking: InsertRRSnapshotIfAbsent: %w", err)
@@ -1000,7 +1060,7 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 		       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 		       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
 		       mp.roundsPlayed,
-		       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0)
+		       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0), COALESCE(rr.afkPenalty, 0), COALESCE(rr.performanceBonus, 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
 		LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
@@ -1031,7 +1091,7 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 			&s.LocalPlayer.Assists, &s.LocalPlayer.Score,
 			&s.LocalPlayer.Headshots, &s.LocalPlayer.Bodyshots, &s.LocalPlayer.Legshots,
 			&s.LocalPlayer.DamageDealt, &roundsPlay,
-			&s.TierAfter, &s.RREarned,
+			&s.TierAfter, &s.RREarned, &s.AFKPenalty, &s.PerformanceBonus,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: ListCachedMatches scan: %w", err)
 		}
@@ -1090,7 +1150,7 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 	if len(seasonIDs) == 0 {
 		rows, err = db.Query(`
 			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
-			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
+			       r.rrAfter, r.rrEarned, r.afkPenalty, r.performanceBonus, r.matchStartTime
 			FROM rr_snapshots r
 			WHERE r.puuid = ?
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
@@ -1106,7 +1166,7 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 		}
 		rows, err = db.Query(`
 			SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
-			       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
+			       r.rrAfter, r.rrEarned, r.afkPenalty, r.performanceBonus, r.matchStartTime
 			FROM rr_snapshots r
 			WHERE r.puuid = ? AND r.seasonId IN (`+placeholders+`)
 			ORDER BY r.matchStartTime ASC, r.matchID ASC
@@ -1122,7 +1182,7 @@ func GetRRSnapshots(db *sql.DB, puuid, seasonID string) ([]RRSnapshot, error) {
 		var r RRSnapshot
 		if err := rows.Scan(
 			&r.Puuid, &r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
-			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.MatchStartTime,
+			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.PerformanceBonus, &r.MatchStartTime,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: GetRRSnapshots scan: %w", err)
 		}
@@ -1200,7 +1260,12 @@ func MergeRankActEvidence(sources ...[]RankActSummary) []RankActSummary {
 			}
 
 			current := &acts[index]
-			if incoming.Games > current.Games {
+			// Match details are the reliable source for W/L during placements:
+			// a won placement can award 0 RR, so competitive-update snapshots
+			// cannot infer the result from RREarned alone. Later evidence with
+			// the same complete sample may therefore correct the win count while
+			// the earlier source still owns exact rank and RR state below.
+			if incoming.Games >= current.Games {
 				current.Games = incoming.Games
 				current.Wins = incoming.Wins
 			}
@@ -1505,6 +1570,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		FROM match_players mp
 		JOIN matches m ON m.matchID = mp.matchID
 		WHERE mp.subject = ? AND mp.competitiveTier > 0
+		  AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
 		  AND (? = '' OR m.seasonId = ?)
 		ORDER BY m.gameStartMillis DESC
 		LIMIT 1
@@ -1545,7 +1611,9 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 	row = db.QueryRow(`
 		SELECT MAX(mp.competitiveTier)
 		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
 		WHERE mp.subject = ?
+		  AND (m.isRanked = 1 OR LOWER(m.queueID) = 'competitive')
 	`, puuid)
 	var peakTier int
 	if err := row.Scan(&peakTier); err == nil && peakTier > 0 {
@@ -1557,7 +1625,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 
 	rows, err := db.Query(`
 		SELECT r.puuid, r.matchID, r.seasonId, r.tierBefore, r.tierAfter, r.rrBefore,
-		       r.rrAfter, r.rrEarned, r.afkPenalty, r.matchStartTime
+		       r.rrAfter, r.rrEarned, r.afkPenalty, r.performanceBonus, r.matchStartTime
 		FROM rr_snapshots r
 		WHERE r.puuid = ?
 		ORDER BY r.matchStartTime DESC
@@ -1571,7 +1639,7 @@ func GetOverview(db *sql.DB, puuid string) (*Overview, error) {
 		var r RRSnapshot
 		if err := rows.Scan(
 			&r.Puuid, &r.MatchID, &r.SeasonID, &r.TierBefore, &r.TierAfter, &r.RRBefore,
-			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.MatchStartTime,
+			&r.RRAfter, &r.RREarned, &r.AFKPenalty, &r.PerformanceBonus, &r.MatchStartTime,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: GetOverview rr scan: %w", err)
 		}
@@ -1919,6 +1987,8 @@ type parsedPlayer struct {
 	Legshots        int
 	DamageDealt     int
 	RoundsPlayed    int
+	PlaytimeMillis  int64
+	AbilityCasts    AbilityCasts
 	IsLocal         bool
 }
 
@@ -1956,11 +2026,18 @@ type rawMatchDetails struct {
 		AccountLevel    int    `json:"accountLevel"`
 		CompetitiveTier int    `json:"competitiveTier"`
 		Stats           *struct {
-			Score        int `json:"score"`
-			RoundsPlayed int `json:"roundsPlayed"`
-			Kills        int `json:"kills"`
-			Deaths       int `json:"deaths"`
-			Assists      int `json:"assists"`
+			Score          int   `json:"score"`
+			RoundsPlayed   int   `json:"roundsPlayed"`
+			Kills          int   `json:"kills"`
+			Deaths         int   `json:"deaths"`
+			Assists        int   `json:"assists"`
+			PlaytimeMillis int64 `json:"playtimeMillis"`
+			AbilityCasts   *struct {
+				GrenadeCasts  int `json:"grenadeCasts"`
+				Ability1Casts int `json:"ability1Casts"`
+				Ability2Casts int `json:"ability2Casts"`
+				UltimateCasts int `json:"ultimateCasts"`
+			} `json:"abilityCasts"`
 		} `json:"stats"`
 		RoundDamage []struct {
 			Receiver string `json:"receiver"`
@@ -1982,13 +2059,39 @@ type rawMatchDetails struct {
 		PlantRoundTime  int    `json:"plantRoundTime"`
 		PlantSite       string `json:"plantSite"`
 		DefuseRoundTime int    `json:"defuseRoundTime"`
-		PlayerStats     []struct {
-			Subject string `json:"subject"`
-			Kills   []struct {
-				GameTime       int    `json:"gameTime"`
-				RoundTime      int    `json:"roundTime"`
-				Killer         string `json:"killer"`
-				Victim         string `json:"victim"`
+		PlantLocation   struct {
+			X int `json:"x"`
+			Y int `json:"y"`
+		} `json:"plantLocation"`
+		DefuseLocation struct {
+			X int `json:"x"`
+			Y int `json:"y"`
+		} `json:"defuseLocation"`
+		PlayerStats []struct {
+			Subject       string `json:"subject"`
+			Score         int    `json:"score"`
+			WasAFK        bool   `json:"wasAfk"`
+			WasPenalized  bool   `json:"wasPenalized"`
+			StayedInSpawn bool   `json:"stayedInSpawn"`
+			Economy       struct {
+				LoadoutValue int    `json:"loadoutValue"`
+				Weapon       string `json:"weapon"`
+				Armor        string `json:"armor"`
+				Remaining    int    `json:"remaining"`
+				Spent        int    `json:"spent"`
+			} `json:"economy"`
+			Ability struct {
+				GrenadeEffects  int `json:"grenadeEffects"`
+				Ability1Effects int `json:"ability1Effects"`
+				Ability2Effects int `json:"ability2Effects"`
+				UltimateEffects int `json:"ultimateEffects"`
+			} `json:"ability"`
+			Kills []struct {
+				GameTime       int      `json:"gameTime"`
+				RoundTime      int      `json:"roundTime"`
+				Killer         string   `json:"killer"`
+				Victim         string   `json:"victim"`
+				Assistants     []string `json:"assistants"`
 				VictimLocation struct {
 					X int `json:"x"`
 					Y int `json:"y"`
@@ -2061,7 +2164,7 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 	type shotTally struct{ head, body, leg, dmg int }
 	shots := map[string]*shotTally{}
 	for _, rr := range r.RoundResults {
-		out.Rounds = append(out.Rounds, MatchRound{
+		round := MatchRound{
 			RoundNum:        rr.RoundNum,
 			WinningTeam:     rr.WinningTeam,
 			RoundResult:     rr.RoundResult,
@@ -2071,8 +2174,16 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 			PlantRoundTime:  rr.PlantRoundTime,
 			PlantSite:       rr.PlantSite,
 			DefuseRoundTime: rr.DefuseRoundTime,
-		})
+			PlantLocation:   MatchLocation{X: rr.PlantLocation.X, Y: rr.PlantLocation.Y},
+			DefuseLocation:  MatchLocation{X: rr.DefuseLocation.X, Y: rr.DefuseLocation.Y},
+		}
 		for _, ps := range rr.PlayerStats {
+			roundStat := RoundPlayerStat{
+				Subject: strings.ToLower(ps.Subject), Score: ps.Score,
+				Economy: RoundEconomy{LoadoutValue: ps.Economy.LoadoutValue, Weapon: ps.Economy.Weapon, Armor: ps.Economy.Armor, Remaining: ps.Economy.Remaining, Spent: ps.Economy.Spent},
+				Ability: RoundAbilityEffects{Grenade: ps.Ability.GrenadeEffects, Ability1: ps.Ability.Ability1Effects, Ability2: ps.Ability.Ability2Effects, Ultimate: ps.Ability.UltimateEffects},
+				WasAFK:  ps.WasAFK, WasPenalized: ps.WasPenalized, StayedInSpawn: ps.StayedInSpawn,
+			}
 			for _, kill := range ps.Kills {
 				event := KillEvent{
 					RoundNum:      rr.RoundNum,
@@ -2085,6 +2196,9 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 					DamageType:    kill.FinishingDamage.DamageType,
 					DamageItem:    kill.FinishingDamage.DamageItem,
 					SecondaryFire: kill.FinishingDamage.IsSecondaryFireMode,
+				}
+				for _, assistant := range kill.Assistants {
+					event.Assistants = append(event.Assistants, strings.ToLower(assistant))
 				}
 				for _, location := range kill.PlayerLocations {
 					event.PlayerLocations = append(event.PlayerLocations, MatchLocation{
@@ -2100,12 +2214,15 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 				shots[ps.Subject] = t
 			}
 			for _, d := range ps.Damage {
+				roundStat.Damage = append(roundStat.Damage, RoundDamage{Receiver: strings.ToLower(d.Receiver), Damage: d.Damage, Legshots: d.Legshots, Bodyshots: d.Bodyshots, Headshots: d.Headshots})
 				t.head += d.Headshots
 				t.body += d.Bodyshots
 				t.leg += d.Legshots
 				t.dmg += d.Damage
 			}
+			round.PlayerStats = append(round.PlayerStats, roundStat)
 		}
+		out.Rounds = append(out.Rounds, round)
 	}
 
 	for _, p := range r.Players {
@@ -2125,6 +2242,10 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 			pl.Assists = p.Stats.Assists
 			pl.Score = p.Stats.Score
 			pl.RoundsPlayed = p.Stats.RoundsPlayed
+			pl.PlaytimeMillis = p.Stats.PlaytimeMillis
+			if p.Stats.AbilityCasts != nil {
+				pl.AbilityCasts = AbilityCasts{Grenade: p.Stats.AbilityCasts.GrenadeCasts, Ability1: p.Stats.AbilityCasts.Ability1Casts, Ability2: p.Stats.AbilityCasts.Ability2Casts, Ultimate: p.Stats.AbilityCasts.UltimateCasts}
+			}
 		}
 		for _, rd := range p.RoundDamage {
 			pl.DamageDealt += rd.Damage

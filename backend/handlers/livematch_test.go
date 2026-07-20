@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestLiveRankFromMMRUsesLatestUpdateAndPeak(t *testing.T) {
+func TestLiveRankFromMMRKeepsPreviousActOutOfCurrentRank(t *testing.T) {
 	var mmr playerMMRResponse
 	mmr.LatestCompetitiveUpdate.SeasonID = "previous-act"
 	mmr.LatestCompetitiveUpdate.TierAfterUpdate = 17
@@ -34,8 +34,8 @@ func TestLiveRankFromMMRUsesLatestUpdateAndPeak(t *testing.T) {
 	}
 
 	tier, rr, peak := liveRankFromMMR(mmr, "missing-current-act")
-	if tier != 17 || rr != 42 || peak != 19 {
-		t.Fatalf("rank fallback = (%d, %d, %d), want (17, 42, 19)", tier, rr, peak)
+	if tier != 0 || rr != 0 || peak != 19 {
+		t.Fatalf("rank result = (%d, %d, %d), want unranked current act and peak 19", tier, rr, peak)
 	}
 }
 

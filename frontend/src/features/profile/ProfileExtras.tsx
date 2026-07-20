@@ -12,6 +12,7 @@ import {
     type ProfileLeaderboard,
     type ProfileMatchSummary,
     type ProfileRRSnapshot,
+    type ProfileRankActSummary,
     type AccountXPResponse,
     type DailyTicketResponse,
     type ItemUpgradeDefinition,
@@ -34,6 +35,7 @@ interface Props {
     matches: ProfileMatchSummary[]; rr: ProfileRRSnapshot[]; agentNames: Record<string, string>; mapNames: Record<string, string>;
     agentVisuals: Record<string, string>; mapVisuals: Record<string, string>;
     playerCardImages: Record<string, string>; rewardAssets: Record<string, RewardAsset>; onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+    rankActs: ProfileRankActSummary[]; seasonNames: Record<string, string>;
 }
 interface RewardAsset { name: string; image: string; type: string; owned: boolean }
 
@@ -48,7 +50,7 @@ const average = (values: number[]) => values.length ? values.reduce((sum, value)
 const labelKey = (value: string, labels: Record<string, string>, fallback: string) => labels[value?.toLowerCase()] || fallback;
 const numberFrom = (value: unknown, key: string) => typeof value === "object" && value && typeof (value as Record<string, unknown>)[key] === "number" ? (value as Record<string, number>)[key] : 0;
 
-export default function ProfileExtras({ view, onClose, puuid, region, seasonId, isOwnProfile, matches, rr, agentNames, mapNames, agentVisuals, mapVisuals, playerCardImages, rewardAssets, onViewProfile }: Props) {
+export default function ProfileExtras({ view, onClose, puuid, region, seasonId, isOwnProfile, matches, rr, rankActs, seasonNames, agentNames, mapNames, agentVisuals, mapVisuals, playerCardImages, rewardAssets, onViewProfile }: Props) {
     const [missions, setMissions] = useState<RiotMissionsResponse | null>(null);
     const [accountXP, setAccountXP] = useState<AccountXPResponse | null>(null);
     const [dailyTicket, setDailyTicket] = useState<DailyTicketResponse | null>(null);
@@ -149,7 +151,7 @@ export default function ProfileExtras({ view, onClose, puuid, region, seasonId, 
             <header className={s.careerHeader}><div><span>{copy.eyebrow}</span><h2>{copy.title}</h2><p>{copy.detail}</p></div><button onClick={onClose} aria-label={`Close ${copy.title}`}>×</button></header>
             <div className={s.careerBody}>
                 {error ? <div className={s.extrasError}>{error}</div> : null}
-                {view === "analytics" ? <Analytics data={analytics} rrCount={rr.length} agentNames={agentNames} mapNames={mapNames} agentVisuals={agentVisuals} mapVisuals={mapVisuals} /> : null}
+                {view === "analytics" ? <Analytics data={analytics} rrCount={rr.length} rankActs={rankActs} seasonNames={seasonNames} agentNames={agentNames} mapNames={mapNames} agentVisuals={agentVisuals} mapVisuals={mapVisuals} /> : null}
                 {view === "progression" ? <Progression data={missions} accountXP={accountXP} dailyTicket={dailyTicket} dailyTicketError={dailyTicketError} contracts={contractMeta} missionMeta={missionMeta} currencies={currencies} events={events} itemUpgrades={itemUpgrades} seasonId={seasonId} rewardAssets={rewardAssets} agentVisuals={agentVisuals} loading={loading === "progression"} isOwn={isOwnProfile} updatedAt={progressionUpdatedAt} onRefresh={refreshProgression} /> : null}
                 {view === "leaderboard" ? <Leaderboard data={leaderboard} loading={loading === "leaderboard"} query={query} setQuery={setQuery} load={loadLeaderboard} cards={playerCardImages} close={onClose} openProfile={onViewProfile} /> : null}
             </div>
@@ -157,19 +159,27 @@ export default function ProfileExtras({ view, onClose, puuid, region, seasonId, 
     </div>, document.body);
 }
 
-function Analytics({ data, rrCount, agentNames, mapNames, agentVisuals, mapVisuals }: { data: { net: number; avgGain: number; avgLoss: number; recentWins: number; recentGames: number; soloWR: number | null; stackWR: number | null; soloGames: number; stackGames: number; bestAgent?: { id: string; games: number; wins: number }; bestMap?: { id: string; games: number; wins: number } }; rrCount: number; agentNames: Record<string, string>; mapNames: Record<string, string>; agentVisuals: Record<string, string>; mapVisuals: Record<string, string> }) {
+function Analytics({ data, rrCount, rankActs, seasonNames, agentNames, mapNames, agentVisuals, mapVisuals }: { data: { net: number; avgGain: number; avgLoss: number; recentWins: number; recentGames: number; soloWR: number | null; stackWR: number | null; soloGames: number; stackGames: number; bestAgent?: { id: string; games: number; wins: number }; bestMap?: { id: string; games: number; wins: number } }; rrCount: number; rankActs: ProfileRankActSummary[]; seasonNames: Record<string, string>; agentNames: Record<string, string>; mapNames: Record<string, string>; agentVisuals: Record<string, string>; mapVisuals: Record<string, string> }) {
     const agentImage = data.bestAgent ? agentVisuals[data.bestAgent.id.toLowerCase()] : "";
     const mapImage = data.bestMap ? mapVisuals[data.bestMap.id.toLowerCase()] : "";
     return <div className={s.analyticsVisual}>
         <section className={s.analyticsScore}><div><span>LAST {data.recentGames} MATCHES</span><strong>{data.recentWins}<i>W</i><em>{data.recentGames - data.recentWins}<i>L</i></em></strong><small>{data.stackWR == null ? "No party sample" : `${data.stackWR}% with a party`} · {data.soloWR == null ? "No solo sample" : `${data.soloWR}% solo`}</small></div><div><span>RANKED MOVEMENT</span><strong>{signed(data.net)} <i>RR</i></strong><small>{rrCount ? `${signed(data.avgGain)} average win · ${signed(data.avgLoss)} average loss` : "Sync ranked matches to populate RR"}</small></div></section>
         <section className={s.analyticsFeature} style={mapImage ? { backgroundImage: `linear-gradient(90deg,rgba(8,13,20,.12),rgba(8,13,20,.9)),url(${mapImage})` } : undefined}><div><span>STRONG RECENT MAP</span><strong>{data.bestMap ? labelKey(data.bestMap.id, mapNames, "Map") : "More matches needed"}</strong><small>{data.bestMap ? `${data.bestMap.wins} wins across ${data.bestMap.games} games` : "Play a map at least twice"}</small></div></section>
         <section className={s.analyticsAgent}><div className={s.analyticsAgentArt} style={agentImage ? { backgroundImage: `url(${agentImage})` } : undefined} /><div><span>STRONG RECENT AGENT</span><strong>{data.bestAgent ? labelKey(data.bestAgent.id, agentNames, "Agent") : "More matches needed"}</strong><small>{data.bestAgent ? `${data.bestAgent.wins} wins across ${data.bestAgent.games} games` : "Play an agent at least twice"}</small></div></section>
+        {rankActs.length ? <section className={s.actArchive}><header><div><span>COMPETITIVE ARCHIVE</span><strong>Your acts at a glance</strong></div><small>{rankActs.length} cached acts</small></header><div>{rankActs.slice(0, 8).map((act) => <article key={act.seasonId}><span>{seasonNames[act.seasonId.toLowerCase()] || `Act ${act.seasonId.slice(0, 6)}`}</span><strong>{act.games ? `${Math.round(act.wins / act.games * 100)}% WR` : "No games"}</strong><small>{act.wins}W · {act.games - act.wins}L</small><b>{act.rankedRating} RR</b></article>)}</div></section> : null}
     </div>;
 }
 
 function Progression({ data, accountXP, dailyTicket, dailyTicketError, contracts, missionMeta, currencies, events, itemUpgrades, seasonId, rewardAssets, agentVisuals, loading, isOwn, updatedAt, onRefresh }: { data: RiotMissionsResponse | null; accountXP: AccountXPResponse | null; dailyTicket: DailyTicketResponse | null; dailyTicketError: string; contracts: ContractMeta[]; missionMeta: MissionMeta[]; currencies: CurrencyMeta[]; events: EventMeta[]; itemUpgrades: ItemUpgradeDefinition[]; seasonId?: string; rewardAssets: Record<string, RewardAsset>; agentVisuals: Record<string, string>; loading: boolean; isOwn: boolean; updatedAt: number | null; onRefresh: () => void }) {
     const [section, setSection] = useState<"missions" | "battlepass" | "agent-contracts" | "custom-contracts" | "account">("missions");
     const canvasRef = useRef<HTMLElement>(null);
+    const lastExpiryRefresh = useRef(0);
+    const refreshExpiredProgress = useCallback(() => {
+        const now = Date.now();
+        if (now - lastExpiryRefresh.current < 60_000) return;
+        lastExpiryRefresh.current = now;
+        onRefresh();
+    }, [onRefresh]);
     useEffect(() => {
         canvasRef.current?.scrollTo({ top: 0 });
         if (section !== "battlepass") return;
@@ -196,7 +206,7 @@ function Progression({ data, accountXP, dailyTicket, dailyTicketError, contracts
     const recentXP = accountXP?.History?.slice(0, 5) || [];
     const contractMatches = [...(data.ProcessedMatches || [])].reverse().slice(0, 5);
     const nextFirstWin = accountXP?.NextTimeFirstWinAvailable ? new Date(accountXP.NextTimeFirstWinAvailable) : null;
-    const dailyReset = dailyTicket ? new Date(Date.now() + dailyTicket.RemainingLifetimeSeconds * 1000) : null;
+    const dailyReset = dailyTicket ? new Date((updatedAt || now) + dailyTicket.RemainingLifetimeSeconds * 1000) : null;
     const activeMissions = (data.Missions || []).filter((mission) => !mission.Complete);
     const completedMissions = (data.Missions || []).filter((mission) => mission.Complete);
     const weeklyCheckpoint = data.MissionMetadata?.WeeklyCheckpoint ? new Date(data.MissionMetadata.WeeklyCheckpoint).getTime() : 0;
@@ -227,11 +237,11 @@ function Progression({ data, accountXP, dailyTicket, dailyTicketError, contracts
         </aside>
         <main ref={canvasRef} className={s.progressionCanvas}>
         <header className={s.progressionModeHeader}><div className={s.progressionModeIdentity}><i><ProgressionIcon kind={currentMode.icon} /></i><div><span>{currentMode.label}</span><p>{currentMode.detail}</p></div></div><div className={s.progressionModeMeta}><b>{String(modes.findIndex(({ id }) => id === section) + 1).padStart(2, "0")} <span>/ {String(modes.length).padStart(2, "0")}</span></b><small>{updatedAt ? `Last synced ${new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Not synced yet"}</small></div></header>
-        {section === "account" ? <AccountXPView accountXP={accountXP} battlePassXP={totalXP} recent={recentXP} contractMatches={contractMatches} nextFirstWin={nextFirstWin} /> : null}
+        {section === "account" ? <AccountXPView accountXP={accountXP} battlePassXP={totalXP} recent={recentXP} contractMatches={contractMatches} nextFirstWin={nextFirstWin} missionMeta={missionMeta} contracts={contracts} /> : null}
         {section === "missions" ? <div className={s.missionsPage}>
             <div className={`${s.dailyFetchStatus} ${dailyTicket ? s.dailyFetchLive : dailyTicketError ? s.dailyFetchFailed : ""}`}><div><span>{dailyTicket ? "Daily checkpoints connected" : dailyTicketError ? "Daily checkpoints request failed" : "Connecting daily checkpoints"}</span><small>{dailyTicket ? `${dailyTicket.Milestones?.length || 0} milestones returned by Riot` : dailyTicketError || "Waiting for Riot response"}</small></div><button onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button></div>
-            <section className={s.dailyPanel}><header><div><span>DAILY ACTIVITIES</span><strong>First Win of the Day</strong></div><b>+1,000 XP</b></header><div className={s.firstWinState}><i /> <span>{nextFirstWin && nextFirstWin > new Date() ? "Claimed today" : "Available"}</span>{dailyReset ? <CountdownTimer target={dailyReset} label="RESET IN" className={s.dailyCountdown} /> : nextFirstWin && nextFirstWin > new Date() ? <CountdownTimer target={nextFirstWin} label="AVAILABLE IN" className={s.dailyCountdown} /> : <small>Win one match to claim</small>}</div><div className={s.checkpointHead}><strong>CHECKPOINTS</strong><span>+1,000 XP + 150 KC per checkpoint</span></div><div className={s.dailyCheckpoints}>{[0, 1, 2, 3].map((index) => { const milestone = dailyTicket?.Milestones?.[index]; const progress = Math.max(0, Math.min(4, milestone?.Progress || 0)); return <div key={index} className={progress >= 4 ? s.dailyCheckpointDone : progress > 0 ? s.dailyCheckpointActive : ""}><i style={{ "--checkpoint-progress": `${progress / 4 * 100}%` } as React.CSSProperties}><b>{index + 1}</b></i><small>{dailyTicket ? `${progress}/4 charges${milestone?.BonusApplied ? " · bonus" : ""}` : "Unavailable"}</small></div>; })}</div></section>
-            <section className={s.weeklyPanel}><header><strong>WEEKLY MISSIONS</strong>{data.MissionMetadata?.WeeklyRefillTime ? <CountdownTimer target={data.MissionMetadata.WeeklyRefillTime} label="REFILL IN" className={s.weeklyCountdown} /> : <span>Refill unavailable</span>}</header>{(data.Missions || []).length ? <div className={s.missionBoard}><div>{data.Missions.map((mission) => { const meta = missionDefinitions[mission.ID.toLowerCase()]; const objectives = meta?.objectives || []; return <article key={mission.ID} className={mission.Complete ? s.missionComplete : ""}><div><span>{(meta?.type || "MISSION").replace(/_/g, " ")}</span><strong>{meta?.displayName || "Active mission"}</strong>{mission.Complete ? <small>Complete</small> : <small>In progress</small>}</div><b>{meta?.xpGrant ? `+${meta.xpGrant.toLocaleString()} XP` : "XP REWARD"}</b>{objectives.map((objective) => { const current = mission.Objectives?.[objective.objectiveId] || 0; const pct = Math.min(100, current / Math.max(1, objective.value) * 100); return <div className={s.missionObjective} key={objective.objectiveId}><span>{objective.description}</span><strong>{current.toLocaleString()} / {objective.value.toLocaleString()}</strong><i><b style={{ width: `${pct}%` }} /></i></div>; })}</article>; })}</div></div> : <div className={s.weeklyEmpty}><i>◇</i><span>No active weekly missions.</span></div>}</section>
+            <section className={s.dailyPanel}><header><div><span>DAILY ACTIVITIES</span><strong>First Win of the Day</strong></div><b>+1,000 XP</b></header><div className={s.firstWinState}><i /> <span>{nextFirstWin && nextFirstWin > new Date() ? "Claimed today" : "Available"}</span>{dailyReset ? <CountdownTimer target={dailyReset} label="RESET IN" className={s.dailyCountdown} onExpire={refreshExpiredProgress} /> : nextFirstWin && nextFirstWin > new Date() ? <CountdownTimer target={nextFirstWin} label="AVAILABLE IN" className={s.dailyCountdown} onExpire={refreshExpiredProgress} /> : <small>Win one match to claim</small>}</div><div className={s.checkpointHead}><strong>CHECKPOINTS</strong><span>+1,000 XP + 150 KC per checkpoint</span></div><div className={s.dailyCheckpoints}>{[0, 1, 2, 3].map((index) => { const milestone = dailyTicket?.Milestones?.[index]; const progress = Math.max(0, Math.min(4, milestone?.Progress || 0)); return <div key={index} data-charges={progress} className={progress >= 4 ? s.dailyCheckpointDone : progress > 0 ? s.dailyCheckpointActive : ""}><i><b>{index + 1}</b></i><small>{dailyTicket ? `${progress}/4 charges${milestone?.BonusApplied ? " · bonus" : ""}` : "Unavailable"}</small></div>; })}</div></section>
+            <section className={s.weeklyPanel}><header><strong>WEEKLY MISSIONS</strong>{data.MissionMetadata?.WeeklyRefillTime ? <CountdownTimer target={data.MissionMetadata.WeeklyRefillTime} label="REFILL IN" className={s.weeklyCountdown} onExpire={refreshExpiredProgress} /> : <span>Refill unavailable</span>}</header>{(data.Missions || []).length ? <div className={s.missionBoard}><div>{data.Missions.map((mission) => { const meta = missionDefinitions[mission.ID.toLowerCase()]; const objectives = meta?.objectives || []; return <article key={mission.ID} className={mission.Complete ? s.missionComplete : ""}><div><span>{(meta?.type || "MISSION").replace(/_/g, " ")}</span><strong>{meta?.displayName || "Active mission"}</strong>{mission.Complete ? <small>Complete</small> : <small>In progress</small>}</div><b>{meta?.xpGrant ? `+${meta.xpGrant.toLocaleString()} XP` : "XP REWARD"}</b>{objectives.map((objective) => { const current = mission.Objectives?.[objective.objectiveId] || 0; const pct = Math.min(100, current / Math.max(1, objective.value) * 100); return <div className={s.missionObjective} key={objective.objectiveId}><span>{objective.description}</span><strong>{current.toLocaleString()} / {objective.value.toLocaleString()}</strong><i><b style={{ width: `${pct}%` }} /></i></div>; })}</article>; })}</div></div> : <div className={s.weeklyEmpty}><i>◇</i><span>No active weekly missions.</span></div>}</section>
             {completedWeeklyDefinitions.length ? <section className={s.completedMissions}><header><strong>LAST COMPLETED WEEKLY SET</strong><span>{new Date(data.MissionMetadata.WeeklyCheckpoint).toLocaleDateString()}</span></header><div>{completedWeeklyDefinitions.map((mission) => <article key={mission.uuid}><i>✓</i><div><strong>{mission.displayName || mission.title || "Weekly mission"}</strong><small>WEEKLY · +{(mission.xpGrant || 0).toLocaleString()} XP</small></div></article>)}</div></section> : null}
             {completedMissions.length ? <section className={s.completedMissions}><header><strong>COMPLETED MISSIONS RETURNED LIVE</strong><span>{completedMissions.length} records</span></header><div>{completedMissions.map((mission) => { const meta = missionDefinitions[mission.ID.toLowerCase()]; return <article key={mission.ID}><i>✓</i><div><strong>{meta?.displayName || "Completed mission"}</strong><small>{meta?.type?.replace(/_/g, " ") || "MISSION"}{meta?.xpGrant ? ` · +${meta.xpGrant.toLocaleString()} XP` : ""}</small></div></article>; })}</div></section> : null}
             {queuedWeeklies.length ? <MissionSchedule title="QUEUED WEEKLIES" detail="Released sets waiting behind your current missions" missions={queuedWeeklies} /> : null}
@@ -245,9 +255,10 @@ function Progression({ data, accountXP, dailyTicket, dailyTicketError, contracts
     </div>;
 }
 
-function CountdownTimer({ target, label, className = "" }: { target: Date | string | number; label: string; className?: string }) {
+function CountdownTimer({ target, label, className = "", onExpire }: { target: Date | string | number; label: string; className?: string; onExpire?: () => void }) {
     const targetTime = target instanceof Date ? target.getTime() : new Date(target).getTime();
     const [currentTime, setCurrentTime] = useState(() => Date.now());
+    const notifiedTarget = useRef<number | null>(null);
     useEffect(() => {
         if (!Number.isFinite(targetTime)) return;
         const update = () => setCurrentTime(Date.now());
@@ -255,6 +266,11 @@ function CountdownTimer({ target, label, className = "" }: { target: Date | stri
         const interval = window.setInterval(update, 1000);
         return () => window.clearInterval(interval);
     }, [targetTime]);
+    useEffect(() => {
+        if (!onExpire || !Number.isFinite(targetTime) || currentTime < targetTime || notifiedTarget.current === targetTime) return;
+        notifiedTarget.current = targetTime;
+        onExpire();
+    }, [currentTime, onExpire, targetTime]);
     if (!Number.isFinite(targetTime)) return <span className={s.countdownUnavailable}>Time unavailable</span>;
     const seconds = Math.max(0, Math.ceil((targetTime - currentTime) / 1000));
     const parts = [
@@ -279,10 +295,33 @@ function ProgressionIcon({ kind }: { kind: "valorant" | "missions" | "battlepass
     return <svg {...iconProps}><circle cx="12" cy="8" r="3.5" /><path d="M5 21a7 7 0 0 1 14 0M4 3h16v18H4z" /></svg>;
 }
 
-function AccountXPView({ accountXP, battlePassXP, recent, contractMatches, nextFirstWin }: { accountXP: AccountXPResponse | null; battlePassXP: number; recent: AccountXPResponse["History"]; contractMatches: RiotMissionsResponse["ProcessedMatches"]; nextFirstWin: Date | null }) {
+function AccountXPView({ accountXP, battlePassXP, recent, contractMatches, nextFirstWin, missionMeta, contracts }: { accountXP: AccountXPResponse | null; battlePassXP: number; recent: AccountXPResponse["History"]; contractMatches: RiotMissionsResponse["ProcessedMatches"]; nextFirstWin: Date | null; missionMeta: MissionMeta[]; contracts: ContractMeta[] }) {
     const ap = accountXP?.Progress.XP || 0;
     const available = !nextFirstWin || nextFirstWin <= new Date();
-    return <div className={s.accountXPPage}><section className={s.accountLevelHero}><div className={s.accountLevelBadge}><span>LEVEL</span><strong>{accountXP?.Progress.Level ?? "—"}</strong></div><div className={s.accountLevelProgress}><span>ACCOUNT POINTS</span><strong>{ap.toLocaleString()} <small>/ 5,000 AP</small></strong><i><b style={{ width: `${Math.min(100, ap / 5000 * 100)}%` }} /></i><p>{Math.max(0, 5000 - ap).toLocaleString()} AP until Level {(accountXP?.Progress.Level || 0) + 1}</p></div><div className={s.accountLevelFacts}><div><span>FIRST WIN</span><strong>{available ? "Available" : "Claimed"}</strong><small>{available ? "Bonus AP on your next win" : `Returns ${nextFirstWin?.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`}</small></div><div><span>BATTLE PASS XP</span><strong>{battlePassXP.toLocaleString()}</strong><small>Tracked separately from AP</small></div></div></section><section className={s.accountActivity}><header><div><span>RECENT ACCOUNT PROGRESS</span><strong>AP earned by match</strong></div><small>{recent.length} recent grants</small></header><div>{recent.map((entry) => <article key={entry.ID}><time>{new Date(entry.MatchStart).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time><div><strong>+{entry.XPDelta.toLocaleString()} AP</strong><span>{entry.XPSources?.map((source) => `${xpSourceLabel(source.ID)} +${source.Amount}`).join(" · ") || "Match AP"}</span></div><small>Level {entry.StartProgress.Level}{entry.EndProgress.Level > entry.StartProgress.Level ? ` → ${entry.EndProgress.Level}` : ""}</small></article>)}</div></section>{contractMatches.length ? <section className={s.contractGrantSummary}><span>CONTRACT PROGRESSION</span><strong>{contractMatches.length} processed match grants available</strong><small>Battle Pass and event XP details are kept separate from Account AP.</small></section> : null}</div>;
+    const missionById = new Map(missionMeta.map((mission) => [mission.uuid.toLowerCase(), mission]));
+    const contractById = new Map(contracts.map((contract) => [contract.uuid.toLowerCase(), contract]));
+    const receipts = contractMatches.slice(0, 5).map((match) => {
+        const grants = match.XPGrants;
+        const baseXP = grants ? grants.GamePlayed + grants.GameWon + grants.RoundPlayed + grants.RoundWon : 0;
+        const missionXP = grants ? Object.values(grants.Missions || {}).reduce((sum, value) => sum + value, 0) : 0;
+        const totalXP = Math.round((baseXP + missionXP) * (grants?.Modifier?.Value || 1));
+        const contractXP = Object.values(match.ContractDeltas || {}).reduce((sum, delta) => sum + Math.max(0, delta.TotalXPAfter - delta.TotalXPBefore), 0);
+        const missionSteps = Object.values(match.MissionDeltas || {}).reduce((sum, mission) => sum + Object.values(mission.ObjectiveDeltas || {}).filter((objective) => objective.ProgressAfter > objective.ProgressBefore).length, 0);
+        const missionLabels = Object.values(match.MissionDeltas || {}).flatMap((mission) => {
+            const meta = missionById.get((mission.ID || "").toLowerCase());
+            const progressedObjectives = Object.values(mission.ObjectiveDeltas || {}).filter((objective) => objective.ProgressAfter > objective.ProgressBefore);
+            const objectiveLabels = progressedObjectives.map((objective) => meta?.objectives?.find((definition) => definition.objectiveId.toLowerCase() === objective.ID.toLowerCase() || definition.objectiveUuid.toLowerCase() === objective.ID.toLowerCase())?.description).filter(Boolean);
+            if (objectiveLabels.length) return objectiveLabels as string[];
+            return progressedObjectives.length ? [meta?.displayName || meta?.title || "Mission progress"] : [];
+        });
+        const contractLabels = Object.values(match.ContractDeltas || {}).flatMap((delta) => {
+            if (delta.TotalXPAfter <= delta.TotalXPBefore) return [];
+            return [contractById.get((delta.ID || "").toLowerCase())?.displayName || "Contract progress"];
+        });
+        const progressLabels = [...new Set([...missionLabels, ...contractLabels])];
+        return { ...match, totalXP, baseXP, missionXP, contractXP, missionSteps, progressLabels, afkRounds: grants?.NumAFKRounds || 0 };
+    });
+    return <div className={s.accountXPPage}><section className={s.accountLevelHero}><div className={s.accountLevelBadge}><span>LEVEL</span><strong>{accountXP?.Progress.Level ?? "—"}</strong></div><div className={s.accountLevelProgress}><span>ACCOUNT POINTS</span><strong>{ap.toLocaleString()} <small>/ 5,000 AP</small></strong><i><b style={{ width: `${Math.min(100, ap / 5000 * 100)}%` }} /></i><p>{Math.max(0, 5000 - ap).toLocaleString()} AP until Level {(accountXP?.Progress.Level || 0) + 1}</p></div><div className={s.accountLevelFacts}><div><span>FIRST WIN</span><strong>{available ? "Available" : "Claimed"}</strong><small>{available ? "Bonus AP on your next win" : `Returns ${nextFirstWin?.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}`}</small></div><div><span>BATTLE PASS XP</span><strong>{battlePassXP.toLocaleString()}</strong><small>Tracked separately from AP</small></div></div></section><section className={s.accountActivity}><header><div><span>RECENT ACCOUNT PROGRESS</span><strong>AP earned by match</strong></div><small>{recent.length} recent grants</small></header><div>{recent.map((entry) => <article key={entry.ID}><time>{new Date(entry.MatchStart).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time><div><strong>+{entry.XPDelta.toLocaleString()} AP</strong><span>{entry.XPSources?.map((source) => `${xpSourceLabel(source.ID)} +${source.Amount}`).join(" · ") || "Match AP"}</span></div><small>Level {entry.StartProgress.Level}{entry.EndProgress.Level > entry.StartProgress.Level ? ` → ${entry.EndProgress.Level}` : ""}</small></article>)}</div></section>{receipts.length ? <section className={s.xpReceipts}><header><div><span>MATCH XP RECEIPTS</span><strong>Where your progression came from</strong></div><small>{receipts.length} recent matches</small></header><div>{receipts.map((receipt) => <article key={receipt.ID}><time>{new Date(receipt.StartTime).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time><div><strong>{receipt.totalXP ? `+${receipt.totalXP.toLocaleString()} XP` : "XP processed"}</strong><small>{receipt.afkRounds ? `${receipt.afkRounds} AFK round${receipt.afkRounds === 1 ? "" : "s"} reported` : "No AFK rounds reported"}</small>{receipt.progressLabels.length ? <small title={receipt.progressLabels.join(" · ")}>{receipt.progressLabels.join(" · ")}</small> : null}</div><dl><div><dt>Match</dt><dd>{receipt.baseXP.toLocaleString()}</dd></div><div><dt>Missions</dt><dd>{receipt.missionXP.toLocaleString()}</dd></div><div><dt>Contract</dt><dd>{receipt.contractXP.toLocaleString()}</dd></div><div><dt>Objectives</dt><dd>{receipt.missionSteps}</dd></div></dl></article>)}</div></section> : null}</div>;
 }
 
 function MissionSchedule({ title, detail, missions, groupByDate = false }: { title: string; detail: string; missions: MissionMeta[]; groupByDate?: boolean }) {

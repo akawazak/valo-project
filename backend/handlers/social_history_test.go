@@ -171,6 +171,47 @@ func TestRemoteCancelFriendRequestUsesRiotRosterRemoval(t *testing.T) {
 	}
 }
 
+func TestRemoteCancelResolvesRiotIDRequestToRosterJID(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	session := &xmppSocialSession{
+		state:  "live",
+		conn:   client,
+		roster: map[string]xmppRosterItem{},
+		requests: map[string]SocialFriendRequest{
+			"riot-id:player#tag": {Puuid: "riot-id:player#tag", Name: "Player#TAG", Direction: "outgoing"},
+			"resolved-puuid":     {Puuid: "resolved-puuid", Name: "Player#TAG", Direction: "outgoing"},
+		},
+		requestJIDs:        map[string]string{"resolved-puuid": "resolved-puuid@eu2.pvp.net"},
+		optimisticRequests: map[string]time.Time{"riot-id:player#tag": time.Now()},
+	}
+	stanza := make(chan string, 1)
+	go func() {
+		buffer := make([]byte, 1024)
+		n, _ := server.Read(buffer)
+		stanza <- string(buffer[:n])
+	}()
+	confirmed, err := session.actOnFriendRequest("riot-id:player#tag", "cancel")
+	if err != nil || !confirmed {
+		t.Fatalf("Riot ID cancel was not confirmed: confirmed=%v err=%v", confirmed, err)
+	}
+	if sent := <-stanza; !strings.Contains(sent, `jid="resolved-puuid@eu2.pvp.net" subscription="remove"`) {
+		t.Fatalf("cancel did not use Riot's resolved roster JID: %s", sent)
+	}
+	if _, exists := session.requests["riot-id:player#tag"]; exists {
+		t.Fatal("optimistic Riot ID request remained after cancellation")
+	}
+}
+
+func TestRemoteCancelAlreadyRemovedRequestIsIdempotent(t *testing.T) {
+	session := &xmppSocialSession{requests: map[string]SocialFriendRequest{}, requestJIDs: map[string]string{}}
+	confirmed, err := session.actOnFriendRequest("already-removed", "cancel")
+	if err != nil || !confirmed {
+		t.Fatalf("already removed cancellation should succeed: confirmed=%v err=%v", confirmed, err)
+	}
+}
+
 func TestRemoteSendFriendRequestUsesRiotRosterMutationAndWaitsForOutgoingState(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

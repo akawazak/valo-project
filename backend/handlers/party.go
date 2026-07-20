@@ -11,12 +11,13 @@ import (
 )
 
 type PartyResponse struct {
-	Phase   string         `json:"phase"`
-	PartyID string         `json:"partyId,omitempty"`
-	QueueID string         `json:"queueId,omitempty"`
-	Members []*PartyMember `json:"members,omitempty"`
-	Source  string         `json:"source,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	Phase          string         `json:"phase"`
+	PartyID        string         `json:"partyId,omitempty"`
+	QueueID        string         `json:"queueId,omitempty"`
+	QueueStartedAt int64          `json:"queueStartedAt,omitempty"`
+	Members        []*PartyMember `json:"members,omitempty"`
+	Source         string         `json:"source,omitempty"`
+	Error          string         `json:"error,omitempty"`
 }
 
 type PartyMember struct {
@@ -46,6 +47,7 @@ type partyDetailsResponse struct {
 	ID              string `json:"ID"`
 	PartyID         string `json:"PartyID"`
 	QueueID         string `json:"QueueID"`
+	QueueEntryTime  string `json:"QueueEntryTime"`
 	State           string `json:"State"`
 	PreviousState   string `json:"PreviousState"`
 	MatchmakingData struct {
@@ -236,6 +238,9 @@ func (h *Handler) buildPartyResponse(val *valclient.ValClient, source string, de
 		Source:  source,
 		Members: make([]*PartyMember, 0, len(details.Members)),
 	}
+	if phase == "matchmaking" {
+		resp.QueueStartedAt = parseQueueEntryTime(details.QueueEntryTime)
+	}
 
 	for _, member := range details.Members {
 		name := h.getPlayerNameCached(val, member.Subject)
@@ -256,6 +261,23 @@ func (h *Handler) buildPartyResponse(val *valclient.ValClient, source string, de
 		})
 	}
 	return resp
+}
+
+func parseQueueEntryTime(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UnixMilli()
+		}
+	}
+	// Older local-client payloads can use Riot's dotted UTC timestamp.
+	if parsed, err := time.ParseInLocation("2006.01.02-15.04.05", value, time.UTC); err == nil {
+		return parsed.UnixMilli()
+	}
+	return 0
 }
 
 func partyPhase(state string) string {

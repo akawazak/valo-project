@@ -10,6 +10,7 @@ import {
 } from "@/lib/types";
 import { getStorefront, getWallet } from "@/services/api";
 import { useData } from "@/context/DataContext";
+import { publishAppNotification } from "@/lib/appNotifications";
 
 const VP_ID = "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741";
 const RP_ID = "e59aa87c-4cbf-517a-5983-6e81511be9b7";
@@ -70,6 +71,14 @@ function formatDuration(totalSeconds: number) {
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
     const sec = String(s % 60).padStart(2, "0");
     return `${h}:${m}:${sec}`;
+}
+
+function formatOfferWindow(totalSeconds: number) {
+    const s = Math.max(0, totalSeconds);
+    const days = Math.floor(s / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    return days > 0 ? `${days}d ${hours}h ${minutes}m` : formatDuration(s);
 }
 
 function findSkinOffer(
@@ -167,7 +176,9 @@ function cardFromOffer(
     ownedLevelIDs: string[], discount?: number, discountedCost?: Record<string, number>
 ) {
     const rewardId = offer.Rewards?.[0]?.ItemID || offer.OfferID;
-    return findSkinOffer(rewardId, weapons, tierMap, firstCost(discountedCost || offer.Cost), ownedLevelIDs, discount);
+    const card = findSkinOffer(rewardId, weapons, tierMap, firstCost(discountedCost || offer.Cost), ownedLevelIDs, discount);
+    if (!card || !discountedCost) return card;
+    return { ...card, basePrice: firstCost(offer.Cost) };
 }
 
 function accessoryFromOffer(
@@ -196,6 +207,9 @@ function accessoryFromOffer(
 function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOfferCard; wished: boolean; onToggleWishlist: (offer: StoreOfferCard) => void; onOpen: (offer: StoreOfferCard) => void }) {
     const tc = offer.tierColor || "ffffff";
     const categoryClass = offer.weaponName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const discountPercent = offer.discount == null
+        ? 0
+        : Math.round(offer.discount <= 1 ? offer.discount * 100 : offer.discount);
     return (
         <div
             className={`store-card store-card--${categoryClass}${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
@@ -244,13 +258,19 @@ function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOf
                             </div>
                         )}
                     </div>
-                ) : offer.discount != null && offer.discount > 0 ? (
-                    <div className="d-flex align-items-center gap-2">
+                ) : discountPercent > 0 ? (
+                    <div className="store-card-price-row">
                         <div className="store-card-price-pill">
                             <Image src={VP_ICON} alt="VP" width={14} height={14} unoptimized className="currency-icon" />
                             {offer.priceValue.toLocaleString()}
                         </div>
-                        <div className="store-card-discount-badge">-{Math.round(offer.discount * 100)}%</div>
+                        {offer.basePrice != null && offer.basePrice > offer.priceValue && (
+                            <div className="store-card-base-price">
+                                <Image src={VP_ICON} alt="VP" width={11} height={11} unoptimized className="currency-icon" />
+                                {offer.basePrice.toLocaleString()}
+                            </div>
+                        )}
+                        <div className="store-card-discount-badge">-{discountPercent}%</div>
                     </div>
                 ) : (
                     <div className="store-card-price-pill">
@@ -347,8 +367,10 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     const [storeResetAt, setStoreResetAt] = useState(0);
     const [bundleSeconds, setBundleSeconds] = useState<Record<string, number>>({});
     const [nightMarketSeconds, setNightMarketSeconds] = useState(0);
+    const [accessorySeconds, setAccessorySeconds] = useState(0);
     const [openBundles, setOpenBundles] = useState<Record<string, boolean>>({});
     const [activeBundleIndex, setActiveBundleIndex] = useState(0);
+    const [nightMarketOpen, setNightMarketOpen] = useState(false);
     const [previewOffer, setPreviewOffer] = useState<StoreOfferCard | null>(null);
     const [wishlist, setWishlist] = useState<Record<string, string>>({});
 
@@ -441,6 +463,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     return [key, bundle.DurationRemainingInSeconds || 0];
                 })));
                 setNightMarketSeconds(sf.BonusStore?.BonusStoreRemainingDurationInSeconds || 0);
+                setAccessorySeconds(sf.AccessoryStore?.AccessoryStoreRemainingDurationInSeconds || 0);
             })
             .catch(e => {
                 setStorefront(null);
@@ -465,9 +488,19 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 Object.entries(current).map(([key, seconds]) => [key, Math.max(0, seconds - 1)])
             ));
             setNightMarketSeconds(s => Math.max(0, s - 1));
+            setAccessorySeconds(s => Math.max(0, s - 1));
         }, 1000);
         return () => clearInterval(t);
     }, []);
+
+    useEffect(() => {
+        if (!nightMarketOpen) return;
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setNightMarketOpen(false);
+        };
+        window.addEventListener("keydown", closeOnEscape);
+        return () => window.removeEventListener("keydown", closeOnEscape);
+    }, [nightMarketOpen]);
 
     useEffect(() => {
         if (secondsUntilReset > 0) {
@@ -494,6 +527,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             .map(o => ({ ...o, nightMarket: true })),
         [storefront, weapons, tierMap, ownedLevelIDs]
     );
+    const unseenNightOffers = storefront?.BonusStore?.BonusStoreOffers?.filter((offer) => offer.IsSeen === false).length || 0;
 
     const accessories = useMemo(() =>
         (storefront?.AccessoryStore?.AccessoryStoreOffers ?? [])
@@ -569,7 +603,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     }, [resolvedBundles.length]);
 
     useEffect(() => {
-        if (!storefront || !Object.keys(wishlist).length || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+        if (!storefront || !Object.keys(wishlist).length) return;
         const visibleOffers = [...dailyOffers, ...nightMarket];
         const matches = visibleOffers.filter(offer => wishlist[offer.wishlistId]);
         if (!matches.length) return;
@@ -577,8 +611,20 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         const noticeKey = `${wishlistStorageKey}:notified:${signature}:${Math.round(storeResetAt / 60_000)}`;
         if (window.sessionStorage.getItem(noticeKey)) return;
         window.sessionStorage.setItem(noticeKey, "1");
-        new Notification("Wishlist item available", { body: matches.map(offer => offer.name).join(", ") });
-    }, [dailyOffers, nightMarket, storeResetAt, storefront, wishlist, wishlistStorageKey]);
+        const names = matches.map(offer => offer.name).join(", ");
+        publishAppNotification({
+            id: `wishlist:${activeAccount?.puuid || "guest"}:${Math.round(storeResetAt / 60_000)}:${signature}`,
+            kind: "wishlist",
+            title: matches.length === 1 ? `${matches[0].name} is available` : `${matches.length} wishlist items are available`,
+            body: names,
+            image: matches[0]?.image,
+            action: "store",
+            accountPuuid: activeAccount?.puuid,
+        });
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            new Notification("Wishlist item available", { body: names });
+        }
+    }, [activeAccount?.puuid, dailyOffers, nightMarket, storeResetAt, storefront, wishlist, wishlistStorageKey]);
 
     const vpBalance = wallet?.[VP_ID] ?? 0;
     const rpBalance = wallet?.[RP_ID] ?? 0;
@@ -673,7 +719,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     <button type="button" className="storefront-bundle-toggle" onClick={() => setOpenBundles(current => ({ ...current, [bundle.key]: !current[bundle.key] }))}>
                         {bundle.banner && (
                             <div className="storefront-bundle-banner">
-                                <Image src={bundle.banner} alt={bundle.name} fill unoptimized style={{ objectFit: "contain", objectPosition: "center" }} />
+                                <Image src={bundle.banner} alt={bundle.name} fill unoptimized style={{ objectFit: "cover", objectPosition: "center" }} />
                                 <div className="storefront-bundle-banner-overlay" />
                             </div>
                         )}
@@ -729,19 +775,20 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             )}
 
             {nightMarket.length > 0 && !isTokenExpired && (
-                <div className="mb-5 night-market-container p-3">
-                    <div className="d-flex justify-content-between align-items-center mb-3">
-                        <div>
-                            <h3 className="night-market-title mb-0">Night Market</h3>
-                        </div>
-                        {nightMarketSeconds > 0 && (
-                            <span className="night-market-timer">{nightMarket.length} offers active — ends in {formatDuration(nightMarketSeconds)}</span>
-                        )}
-                    </div>
-                    <div className="store-grid">
-                        {nightMarket.map(o => <OfferCard key={o.uuid} offer={o} wished={Boolean(wishlist[o.wishlistId])} onToggleWishlist={toggleWishlist} onOpen={setPreviewOffer} />)}
-                    </div>
-                </div>
+                <button
+                    type="button"
+                    className="night-market-launcher"
+                    onClick={() => setNightMarketOpen(true)}
+                    aria-haspopup="dialog"
+                    aria-label={`Open Night Market, ${nightMarket.length} offers`}
+                    data-label="Night Market"
+                >
+                    <span className="night-market-seal" aria-hidden="true">
+                        <i />
+                        <b><svg viewBox="0 0 32 32"><path d="m16 4 2.7 9.3L28 16l-9.3 2.7L16 28l-2.7-9.3L4 16l9.3-2.7L16 4Z" /></svg></b>
+                    </span>
+                    <span className="night-market-launch-badge" aria-hidden="true">{unseenNightOffers || nightMarket.length}</span>
+                </button>
             )}
 
             {accessories.length > 0 && !isTokenExpired && (
@@ -749,6 +796,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     <div className="section-row">
                         <div>
                             <h3 className="mb-0 section-title">Accessories</h3>
+                            {accessorySeconds > 0 ? <small className="accessory-reset">Rotates in {formatOfferWindow(accessorySeconds)}</small> : null}
                         </div>
                     </div>
                     <div className="accessory-grid">
@@ -764,6 +812,41 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                         ))}
                     </div>
                 </div>
+            )}
+            {nightMarketOpen && typeof document !== "undefined" && createPortal(
+                <div className="night-market-backdrop" role="presentation" onMouseDown={() => setNightMarketOpen(false)}>
+                    <section className="night-market-container" role="dialog" aria-modal="true" aria-labelledby="night-market-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+                        <button type="button" className="night-market-close" onClick={() => setNightMarketOpen(false)} aria-label="Close Night Market">×</button>
+                        <header className="night-market-header">
+                            <div className="night-market-mark" aria-hidden="true">
+                                <svg viewBox="0 0 32 32"><path d="m16 4 2.7 9.3L28 16l-9.3 2.7L16 28l-2.7-9.3L4 16l9.3-2.7L16 4Z" /></svg>
+                            </div>
+                            <div className="night-market-heading">
+                                <span>Personal offers</span>
+                                <h3 id="night-market-dialog-title" className="night-market-title">Night Market</h3>
+                                <p>Discounted skins selected for this rotation.</p>
+                            </div>
+                            {nightMarketSeconds > 0 && (
+                                <span className="night-market-timer">{nightMarket.length} offers active — {formatOfferWindow(nightMarketSeconds)} remaining</span>
+                            )}
+                        </header>
+                        <div className="night-market-grid">
+                            {nightMarket.map(offer => (
+                                <OfferCard
+                                    key={offer.uuid}
+                                    offer={offer}
+                                    wished={Boolean(wishlist[offer.wishlistId])}
+                                    onToggleWishlist={toggleWishlist}
+                                    onOpen={(selectedOffer) => {
+                                        setNightMarketOpen(false);
+                                        setPreviewOffer(selectedOffer);
+                                    }}
+                                />
+                            ))}
+                        </div>
+                    </section>
+                </div>,
+                document.body,
             )}
             {previewOffer && typeof document !== "undefined" && (
                 <StoreItemPreviewModal

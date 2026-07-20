@@ -798,6 +798,7 @@ export interface ProfileRRSnapshot {
     rrAfter: number;
     rrEarned: number;
     afkPenalty: number;
+    performanceBonus: number;
     matchStartTime: number;
 }
 
@@ -899,6 +900,8 @@ export interface ProfilePlayerStats {
     legshots: number;
     damageDealt: number;
     roundsPlayed: number;
+    playtimeMillis?: number;
+    abilityCasts?: { grenade: number; ability1: number; ability2: number; ultimate: number };
     isLocal: boolean;
     competitiveTier: number;
     kd: number;
@@ -946,6 +949,8 @@ export interface ProfileMatchSummary {
     redRoundsWon: number;
     tierAfter: number;
     rrEarned: number;
+    afkPenalty?: number;
+    performanceBonus?: number;
     localPlayer: ProfilePlayerStats;
     partyMembers?: ProfileMatchPartyMember[];
 }
@@ -975,6 +980,7 @@ export interface ProfileMatchDetails {
         damageType?: string;
         damageItem?: string;
         secondaryFire?: boolean;
+        assistants?: string[];
         playerLocations?: Array<{
             subject?: string;
             viewRadians?: number;
@@ -992,6 +998,18 @@ export interface ProfileMatchDetails {
         plantRoundTime?: number;
         plantSite?: string;
         defuseRoundTime?: number;
+        plantLocation?: { x: number; y: number };
+        defuseLocation?: { x: number; y: number };
+        playerStats?: Array<{
+            subject: string;
+            score: number;
+            damage?: Array<{ receiver: string; damage: number; legshots: number; bodyshots: number; headshots: number }>;
+            economy: { loadoutValue: number; weapon?: string; armor?: string; remaining: number; spent: number };
+            ability: { grenade: number; ability1: number; ability2: number; ultimate: number };
+            wasAfk?: boolean;
+            wasPenalized?: boolean;
+            stayedInSpawn?: boolean;
+        }>;
     }>;
     servedFrom: string;
 }
@@ -1378,6 +1396,7 @@ export interface PartyStatusResponse {
     phase: "none" | "party" | "matchmaking" | "pregame" | "coregame" | "error";
     partyId?: string;
     queueId?: string;
+    queueStartedAt?: number;
     members?: PartyMember[];
     source?: "remote" | "local";
     error?: string;
@@ -1419,7 +1438,13 @@ export interface LiveLoadoutsResponse {
 export interface LiveLoadoutPlayer {
     puuid?: string;
     skinIds?: string[];
+    items?: LiveLoadoutItem[];
     gunCount: number;
+}
+
+export interface LiveLoadoutItem {
+    weaponId: string;
+    itemIds?: string[];
 }
 
 export async function getLiveLoadouts(phase?: "pregame" | "coregame", matchId?: string): Promise<LiveLoadoutsResponse> {
@@ -1582,7 +1607,9 @@ export async function getFlexes(): Promise<FlexAsset[]> {
 
 export async function getSocialStatus(): Promise<SocialStatusResponse> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + `/social${hasActiveRemoteAuth() ? '?remoteOnly=true' : ''}`, undefined, { forceRemoteAuth: true });
+        // Supply remote credentials, but let the backend use the local Riot
+        // Client as a same-account fallback when token XMPP is temporarily down.
+        const response = await fetchWithAuth(LOCAL_URL + "/social", undefined, { forceRemoteAuth: true });
         if (!response.ok) {
             const text = await response.text().catch(() => "");
             return { status: "unavailable", friendCount: 0, onlineCount: 0, inGameCount: 0, error: text || "Failed to fetch social status." };
@@ -1593,18 +1620,54 @@ export async function getSocialStatus(): Promise<SocialStatusResponse> {
     }
 }
 
-export async function subscribeSocialEvents(onSocial: () => void, signal: AbortSignal): Promise<void> {
-    const response = await appFetch(LOCAL_URL + '/social/events', { signal });
-    if (!response.ok || !response.body) throw new Error('Social event stream unavailable.');
-    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+function waitForEventRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+        const timer = window.setTimeout(done, delayMs);
+        function done() {
+            window.clearTimeout(timer);
+            signal.removeEventListener('abort', done);
+            resolve();
+        }
+        signal.addEventListener('abort', done, { once: true });
+    });
+}
+
+async function subscribeEventStream(path: string, eventNames: ReadonlySet<string>, onEvent: () => void, signal: AbortSignal): Promise<void> {
+    let retryDelay = 500;
     while (!signal.aborted) {
-        const { value, done } = await reader.read(); if (done) return;
-        buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() || '';
-        // Refetch on ready as well as on changes. This closes the startup race
-        // where XMPP can load the roster just before the SSE subscription is
-        // registered, without introducing a polling loop.
-        for (const event of events) if (event.includes('event: ready') || event.includes('event: social')) onSocial();
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        try {
+            const response = await appFetch(LOCAL_URL + path, { signal });
+            if (!response.ok || !response.body) throw new Error('Event stream unavailable.');
+            reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (!signal.aborted) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                retryDelay = 500;
+                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || '';
+                for (const event of events) {
+                    const eventName = event.split('\n').find((line) => line.startsWith('event:'))?.slice(6).trim();
+                    if (eventName && eventNames.has(eventName)) onEvent();
+                }
+            }
+        } catch {
+            if (signal.aborted) return;
+        } finally {
+            if (reader) void reader.cancel().catch(() => undefined);
+        }
+        if (signal.aborted) return;
+        await waitForEventRetry(retryDelay, signal);
+        retryDelay = Math.min(retryDelay * 2, 5_000);
     }
+}
+
+export async function subscribeSocialEvents(onSocial: () => void, signal: AbortSignal): Promise<void> {
+    return subscribeEventStream('/social/events', new Set(['ready', 'social']), onSocial, signal);
 }
 
 export async function actOnSocialRequest(puuid: string, action: "accept" | "deny" | "cancel" | "send"): Promise<{ status: "confirmed" | "pending"; confirmed: boolean }> {
@@ -1709,12 +1772,5 @@ export async function clearChatHistory(conversationKey?: string, accountPuuid?: 
 }
 
 export async function subscribeChatEvents(onChat: () => void, signal: AbortSignal): Promise<void> {
-    const response = await appFetch(LOCAL_URL + '/chat/events', { signal });
-    if (!response.ok || !response.body) throw new Error('Chat event stream unavailable.');
-    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
-    while (!signal.aborted) {
-        const { value, done } = await reader.read(); if (done) return;
-        buffer += decoder.decode(value, { stream: true }); const events = buffer.split('\n\n'); buffer = events.pop() || '';
-        for (const event of events) if (event.includes('event: chat')) onChat();
-    }
+    return subscribeEventStream('/chat/events', new Set(['ready', 'chat']), onChat, signal);
 }

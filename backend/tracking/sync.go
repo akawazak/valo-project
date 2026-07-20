@@ -500,15 +500,16 @@ func (m *SyncManager) resolveMissingNames(puuid, region string) (int, error) {
 func (m *SyncManager) ingestCompetitiveUpdates(puuid string, raw []byte) {
 	var resp struct {
 		Matches []struct {
-			MatchID                  string `json:"MatchID"`
-			SeasonID                 string `json:"SeasonID"`
-			MatchStartTime           int64  `json:"MatchStartTime"`
-			TierAfterUpdate          int    `json:"TierAfterUpdate"`
-			TierBeforeUpdate         int    `json:"TierBeforeUpdate"`
-			RankedRatingAfterUpdate  int    `json:"RankedRatingAfterUpdate"`
-			RankedRatingBeforeUpdate int    `json:"RankedRatingBeforeUpdate"`
-			RankedRatingEarned       int    `json:"RankedRatingEarned"`
-			AFKPenalty               int    `json:"AFKPenalty"`
+			MatchID                      string `json:"MatchID"`
+			SeasonID                     string `json:"SeasonID"`
+			MatchStartTime               int64  `json:"MatchStartTime"`
+			TierAfterUpdate              int    `json:"TierAfterUpdate"`
+			TierBeforeUpdate             int    `json:"TierBeforeUpdate"`
+			RankedRatingAfterUpdate      int    `json:"RankedRatingAfterUpdate"`
+			RankedRatingBeforeUpdate     int    `json:"RankedRatingBeforeUpdate"`
+			RankedRatingEarned           int    `json:"RankedRatingEarned"`
+			AFKPenalty                   int    `json:"AFKPenalty"`
+			RankedRatingPerformanceBonus int    `json:"RankedRatingPerformanceBonus"`
 		} `json:"Matches"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -520,16 +521,17 @@ func (m *SyncManager) ingestCompetitiveUpdates(puuid string, raw []byte) {
 			continue
 		}
 		snap := RRSnapshot{
-			Puuid:          puuid,
-			MatchID:        r.MatchID,
-			SeasonID:       r.SeasonID,
-			TierBefore:     r.TierBeforeUpdate,
-			TierAfter:      r.TierAfterUpdate,
-			RRBefore:       r.RankedRatingBeforeUpdate,
-			RRAfter:        r.RankedRatingAfterUpdate,
-			RREarned:       r.RankedRatingEarned,
-			AFKPenalty:     r.AFKPenalty,
-			MatchStartTime: r.MatchStartTime,
+			Puuid:            puuid,
+			MatchID:          r.MatchID,
+			SeasonID:         r.SeasonID,
+			TierBefore:       r.TierBeforeUpdate,
+			TierAfter:        r.TierAfterUpdate,
+			RRBefore:         r.RankedRatingBeforeUpdate,
+			RRAfter:          r.RankedRatingAfterUpdate,
+			RREarned:         r.RankedRatingEarned,
+			AFKPenalty:       r.AFKPenalty,
+			PerformanceBonus: r.RankedRatingPerformanceBonus,
+			MatchStartTime:   r.MatchStartTime,
 		}
 		if err := InsertRRSnapshotIfAbsent(m.db, snap); err != nil {
 			slog.Warn("tracking: InsertRRSnapshotIfAbsent failed", "matchID", r.MatchID, "err", err)

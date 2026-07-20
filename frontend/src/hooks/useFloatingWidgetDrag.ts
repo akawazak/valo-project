@@ -118,8 +118,6 @@ export function useFloatingWidgetDrag(storageKey: string) {
             height: rect.height,
             moved: false,
         };
-        event.currentTarget.setPointerCapture(event.pointerId);
-
         const onMove = (moveEvent: PointerEvent) => {
             const drag = dragState.current;
             if (!drag) return;

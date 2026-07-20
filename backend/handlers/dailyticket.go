@@ -15,8 +15,8 @@ type dailyTicketResponse struct {
 	DailyRewards dailyTicketProgress `json:"DailyRewards"`
 }
 
-// GetDailyTicket returns Riot's read-only daily checkpoint state. We avoid the
-// /renew mutation: viewing progress must not change the player's Riot state.
+// GetDailyTicket mirrors Riot's DailyRewards_RENEW initialization request. The
+// endpoint returns the active ticket unchanged or rolls an expired one forward.
 func (h *Handler) GetDailyTicket(w http.ResponseWriter, r *http.Request) {
 	val, err := h.getClient(r)
 	if err != nil || val == nil {
@@ -24,9 +24,9 @@ func (h *Handler) GetDailyTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url := val.BuildUrl("https://pd.{shard}.a.pvp.net/daily-ticket/v1/{puuid}")
+	url := val.BuildUrl("https://pd.{shard}.a.pvp.net/daily-ticket/v1/{puuid}/renew")
 	var response dailyTicketResponse
-	if err := runRiotJSON(http.MethodGet, url, val.Header, nil, &response); err != nil {
+	if err := runRiotJSON(http.MethodPost, url, val.Header, map[string]any{}, &response); err != nil {
 		h.returnError(w, err)
 		return
 	}

@@ -982,17 +982,80 @@ func bareJID(value string) string {
 	return strings.TrimSpace(value)
 }
 
+func (s *xmppSocialSession) friendRequestForAction(peer string) (string, SocialFriendRequest, string, bool) {
+	peer = strings.ToLower(strings.TrimSpace(peer))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	request, exists := s.requests[peer]
+	jid := s.requestJIDs[peer]
+	if exists && jid != "" {
+		return peer, request, jid, true
+	}
+	targetName := strings.TrimSpace(request.Name)
+	if targetName == "" && strings.HasPrefix(peer, "riot-id:") {
+		targetName = strings.TrimPrefix(peer, "riot-id:")
+	}
+	if targetName != "" {
+		for candidatePeer, candidate := range s.requests {
+			candidateJID := s.requestJIDs[candidatePeer]
+			if candidateJID == "" || !strings.EqualFold(strings.TrimSpace(candidate.Name), targetName) {
+				continue
+			}
+			if exists && request.Direction != "" && candidate.Direction != request.Direction {
+				continue
+			}
+			return candidatePeer, candidate, candidateJID, true
+		}
+	}
+	return peer, request, jid, exists
+}
+
 func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error) {
 	peer = strings.ToLower(strings.TrimSpace(peer))
 	action = strings.ToLower(strings.TrimSpace(action))
+	requestPeer, request, jid, exists := s.friendRequestForAction(peer)
 	s.mu.RLock()
-	request, exists := s.requests[peer]
-	jid := s.requestJIDs[peer]
 	conn := s.conn
 	state := s.state
 	s.mu.RUnlock()
 	if !exists {
+		// Cancelling/denying an already-removed request has already reached the
+		// requested state. Treat it as an idempotent success instead of leaving a
+		// stale card stuck behind a conflict response.
+		if action == "cancel" || action == "deny" {
+			return true, nil
+		}
 		return false, fmt.Errorf("friend request is no longer pending")
+	}
+	if conn == nil || state != "live" {
+		return false, fmt.Errorf("remote Riot social session is not connected")
+	}
+	// A request sent by Riot ID is temporarily keyed by name#tag until Riot's
+	// roster supplies its PUUID/JID. Ask for a fresh roster and briefly resolve
+	// that real entry before issuing the removal. Never invent a JID from user
+	// input or report success before a real Riot target exists.
+	if action == "cancel" && jid == "" && strings.HasPrefix(peer, "riot-id:") {
+		refreshID := fmt.Sprintf("vv_friend_refresh_%d", time.Now().UnixNano())
+		s.writeMu.Lock()
+		_, refreshErr := io.WriteString(conn, `<iq type="get" id="`+refreshID+`"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq>`)
+		s.writeMu.Unlock()
+		if refreshErr != nil {
+			return false, fmt.Errorf("refresh Riot friend requests: %w", refreshErr)
+		}
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			requestPeer, request, jid, exists = s.friendRequestForAction(peer)
+			if !exists {
+				return true, nil
+			}
+			if jid != "" {
+				break
+			}
+		}
+		if jid == "" {
+			return false, nil
+		}
 	}
 	id := fmt.Sprintf("vv_friend_%d", time.Now().UnixNano())
 	var mutation string
@@ -1001,7 +1064,7 @@ func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error
 		if request.Direction != "incoming" {
 			return false, fmt.Errorf("only incoming requests can be accepted")
 		}
-		mutation = `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item subscription="pending_out" puuid="` + xmlEscapeAttribute(peer) + `"/></query></iq>`
+		mutation = `<iq type="set" id="` + id + `"><query xmlns="jabber:iq:riotgames:roster"><item subscription="pending_out" puuid="` + xmlEscapeAttribute(requestPeer) + `"/></query></iq>`
 	case "deny":
 		if request.Direction != "incoming" {
 			return false, fmt.Errorf("only incoming requests can be denied")
@@ -1021,9 +1084,6 @@ func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error
 	default:
 		return false, fmt.Errorf("unsupported friend request action")
 	}
-	if conn == nil || state != "live" {
-		return false, fmt.Errorf("remote Riot social session is not connected")
-	}
 	stanza := mutation + `<iq type="get" id="` + id + `_roster"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq>`
 	s.writeMu.Lock()
 	_, err := io.WriteString(conn, stanza)
@@ -1036,10 +1096,16 @@ func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error
 		if s.suppressedRequests == nil {
 			s.suppressedRequests = map[string]time.Time{}
 		}
-		delete(s.requests, peer)
-		delete(s.requestJIDs, peer)
-		delete(s.optimisticRequests, peer)
-		s.suppressedRequests[peer] = time.Now().Add(30 * time.Second)
+		delete(s.requests, requestPeer)
+		delete(s.requestJIDs, requestPeer)
+		delete(s.optimisticRequests, requestPeer)
+		s.suppressedRequests[requestPeer] = time.Now().Add(30 * time.Second)
+		if requestPeer != peer {
+			delete(s.requests, peer)
+			delete(s.requestJIDs, peer)
+			delete(s.optimisticRequests, peer)
+			s.suppressedRequests[peer] = time.Now().Add(30 * time.Second)
+		}
 		s.mu.Unlock()
 		remoteSocialHub.broadcast()
 		return true, nil
@@ -1049,8 +1115,8 @@ func (s *xmppSocialSession) actOnFriendRequest(peer, action string) (bool, error
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 		s.mu.RLock()
-		_, stillPending := s.requests[peer]
-		_, nowFriend := s.roster[peer]
+		_, stillPending := s.requests[requestPeer]
+		_, nowFriend := s.roster[requestPeer]
 		s.mu.RUnlock()
 		if !stillPending && (action != "accept" || nowFriend) {
 			return true, nil

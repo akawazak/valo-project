@@ -17,6 +17,8 @@ type Settings struct {
 	ShowLiveMatch        bool               `json:"showLiveMatch"`
 	ShowPartyWidget      bool               `json:"showPartyWidget"`
 	ShowUnownedCosmetics bool               `json:"showUnownedCosmetics"`
+	SoundEnabled         bool               `json:"soundEnabled"`
+	SoundVolume          int                `json:"soundVolume"`
 	Theme                string             `json:"theme"`
 	AccentTheme          string             `json:"accentTheme"`
 	InterfaceTheme       string             `json:"interfaceTheme"`
@@ -48,6 +50,8 @@ var DefaultSettings = &Settings{
 	ShowLiveMatch:        true,
 	ShowPartyWidget:      true,
 	ShowUnownedCosmetics: false,
+	SoundEnabled:         true,
+	SoundVolume:          28,
 	Theme:                "dark",
 	AccentTheme:          "valorant",
 	InterfaceTheme:       "default",
@@ -93,6 +97,9 @@ func SaveRaw(data []byte) error {
 func (s Settings) Validate() error {
 	switch s.MatchRetentionDays {
 	case 0, 30, 90, 180, 365:
+		if s.SoundVolume < 0 || s.SoundVolume > 100 {
+			return fmt.Errorf("sound volume is out of range")
+		}
 		if s.Appearance.Strength < 0 || s.Appearance.Strength > 100 || s.Appearance.Blur < 0 || s.Appearance.Blur > 30 || s.Appearance.Saturation < 0 || s.Appearance.Saturation > 200 || s.Appearance.PanelOpacity < 0 || s.Appearance.PanelOpacity > 100 {
 			return fmt.Errorf("appearance values are out of range")
 		}

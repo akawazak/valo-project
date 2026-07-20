@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { applyLoadout, ApplyLoadoutRequest } from '@/services/api';
 import { LocalClientError } from '@/lib/errors';
+import { playUiSound } from '@/lib/uiSounds';
 
 export function useLoadout() {
     const [showToast, setShowToast] = useState(false);
@@ -13,8 +14,10 @@ export function useLoadout() {
             await applyLoadout(request);
             setToastMessage(`Successfully applied ${presetName}.`);
             setShowToast(true);
+			playUiSound("success");
             return true;
         } catch (error) {
+			playUiSound("error");
             if (error instanceof LocalClientError) {
                 setErrorMessage(error.message);
                 setShowErrorModal(true);

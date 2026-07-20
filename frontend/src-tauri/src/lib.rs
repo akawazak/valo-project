@@ -408,28 +408,60 @@ fn read_discord_frame(pipe: &mut std::fs::File) -> std::io::Result<(u32, serde_j
     Ok((opcode, payload))
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DiscordActivity {
     details: String,
     state: String,
+    activity_key: String,
+    #[serde(default)]
+    large_image: String,
+    #[serde(default)]
+    large_text: String,
+    #[serde(default)]
+    small_image: String,
+    #[serde(default)]
+    small_text: String,
+    #[serde(default)]
+    party_current: u8,
+    #[serde(default)]
+    party_max: u8,
+    end_at: Option<u64>,
 }
 
 #[cfg(target_os = "windows")]
 fn discord_activity_payload(activity: &DiscordActivity, started_at: u64) -> serde_json::Value {
+    let mut assets = serde_json::json!({
+        "large_image": if activity.large_image.is_empty() { "https://raw.githubusercontent.com/akawazak/valo-project/main/frontend/src-tauri/icons/icon.png" } else { &activity.large_image },
+        "large_text": if activity.large_text.is_empty() { "VantaVault - VALORANT companion" } else { &activity.large_text },
+    });
+    if !activity.small_image.is_empty() {
+        assets["small_image"] = serde_json::json!(activity.small_image);
+        assets["small_text"] = serde_json::json!(activity.small_text);
+    }
+    let mut rich_activity = serde_json::json!({
+        "details": activity.details,
+        "state": activity.state,
+        "timestamps": { "start": started_at },
+        "assets": assets,
+        "buttons": [
+            { "label": "Download VantaVault", "url": "https://github.com/akawazak/valo-project/releases/latest" },
+            { "label": "View on GitHub", "url": "https://github.com/akawazak/valo-project" }
+        ]
+    });
+    if let Some(end_at) = activity.end_at {
+        rich_activity["timestamps"] = serde_json::json!({ "end": end_at });
+    }
+    if activity.party_current > 1 && activity.party_max >= activity.party_current {
+        rich_activity["party"] = serde_json::json!({
+            "size": [activity.party_current, activity.party_max]
+        });
+    }
     serde_json::json!({
         "cmd": "SET_ACTIVITY",
         "args": {
             "pid": std::process::id(),
-            "activity": {
-                "details": activity.details,
-                "state": activity.state,
-                "timestamps": { "start": started_at },
-                "assets": { "large_image": "logo", "large_text": "VantaVault - VALORANT companion" },
-                "buttons": [
-                    { "label": "VantaVault Info", "url": "https://github.com/akawazak/valo-project" }
-                ]
-            }
+            "activity": rich_activity
         },
         "nonce": uuid::Uuid::new_v4().to_string()
     })
@@ -438,102 +470,116 @@ fn discord_activity_payload(activity: &DiscordActivity, started_at: u64) -> serd
 #[cfg(target_os = "windows")]
 fn start_discord_presence(client_id: String) -> std::sync::mpsc::Sender<DiscordActivity> {
     let (sender, receiver) = std::sync::mpsc::channel::<DiscordActivity>();
-    std::thread::spawn(move || loop {
+    std::thread::spawn(move || {
         let mut current = DiscordActivity {
             details: "Browsing VantaVault".to_string(),
             state: "Desktop companion".to_string(),
+            activity_key: "app:startup".to_string(),
+            large_image: String::new(),
+            large_text: String::new(),
+            small_image: String::new(),
+            small_text: String::new(),
+            party_current: 0,
+            party_max: 0,
+            end_at: None,
         };
         let mut started_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        while let Ok(update) = receiver.try_recv() {
-            if update.details != current.details {
-                started_at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+        loop {
+            while let Ok(update) = receiver.try_recv() {
+                if update.activity_key != current.activity_key {
+                    started_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                }
+                current = update;
             }
-            current = update;
-        }
-        let mut pipe = None;
-        for index in 0..10 {
-            let path = format!(r"\\.\pipe\discord-ipc-{index}");
-            let Ok(candidate) = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path)
-            else {
+            let mut pipe = None;
+            for index in 0..10 {
+                let path = format!(r"\\.\pipe\discord-ipc-{index}");
+                let Ok(candidate) = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                else {
+                    continue;
+                };
+                pipe = Some(candidate);
+                break;
+            }
+            let Some(mut pipe) = pipe else {
+                log::debug!("Discord Rich Presence: IPC pipe not found; retrying");
+                std::thread::sleep(std::time::Duration::from_secs(15));
                 continue;
             };
-            pipe = Some(candidate);
-            break;
-        }
-        let Some(mut pipe) = pipe else {
-            log::debug!("Discord Rich Presence: IPC pipe not found; retrying");
-            std::thread::sleep(std::time::Duration::from_secs(15));
-            continue;
-        };
-        let handshake = serde_json::json!({"v": 1, "client_id": client_id});
-        if let Err(error) = write_discord_frame(&mut pipe, 0, &handshake) {
-            log::warn!("Discord Rich Presence handshake write failed: {error}");
-            continue;
-        }
-        match read_discord_frame(&mut pipe) {
-            Ok((1, payload))
-                if payload.get("evt").and_then(|value| value.as_str()) == Some("READY") => {}
-            Ok((opcode, payload)) => {
-                log::warn!("Discord Rich Presence handshake rejected (opcode {opcode}): {payload}");
+            let handshake = serde_json::json!({"v": 1, "client_id": client_id});
+            if let Err(error) = write_discord_frame(&mut pipe, 0, &handshake) {
+                log::warn!("Discord Rich Presence handshake write failed: {error}");
                 continue;
             }
-            Err(error) => {
-                log::warn!("Discord Rich Presence handshake read failed: {error}");
-                continue;
-            }
-        }
-        if let Err(error) = write_discord_frame(
-            &mut pipe,
-            1,
-            &discord_activity_payload(&current, started_at),
-        ) {
-            log::warn!("Discord Rich Presence initial activity failed: {error}");
-            continue;
-        }
-        if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
-            if opcode == 2 || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR") {
-                log::warn!("Discord Rich Presence activity rejected: {payload}");
-                continue;
-            }
-        }
-        log::info!("Discord Rich Presence connected");
-        loop {
-            match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
-                Ok(update) => {
-                    if update.details != current.details {
-                        started_at = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                    }
-                    current = update;
+            match read_discord_frame(&mut pipe) {
+                Ok((1, payload))
+                    if payload.get("evt").and_then(|value| value.as_str()) == Some("READY") => {}
+                Ok((opcode, payload)) => {
+                    log::warn!(
+                        "Discord Rich Presence handshake rejected (opcode {opcode}): {payload}"
+                    );
+                    continue;
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(error) => {
+                    log::warn!("Discord Rich Presence handshake read failed: {error}");
+                    continue;
+                }
             }
             if let Err(error) = write_discord_frame(
                 &mut pipe,
                 1,
                 &discord_activity_payload(&current, started_at),
             ) {
-                log::warn!("Discord Rich Presence update failed: {error}");
-                break;
+                log::warn!("Discord Rich Presence initial activity failed: {error}");
+                continue;
             }
             if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
                 if opcode == 2
                     || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR")
                 {
-                    log::warn!("Discord Rich Presence update rejected: {payload}");
+                    log::warn!("Discord Rich Presence activity rejected: {payload}");
+                    continue;
+                }
+            }
+            log::info!("Discord Rich Presence connected");
+            loop {
+                match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+                    Ok(update) => {
+                        if update.activity_key != current.activity_key {
+                            started_at = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                        }
+                        current = update;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+                if let Err(error) = write_discord_frame(
+                    &mut pipe,
+                    1,
+                    &discord_activity_payload(&current, started_at),
+                ) {
+                    log::warn!("Discord Rich Presence update failed: {error}");
                     break;
+                }
+                if let Ok((opcode, payload)) = read_discord_frame(&mut pipe) {
+                    if opcode == 2
+                        || payload.get("evt").and_then(|value| value.as_str()) == Some("ERROR")
+                    {
+                        log::warn!("Discord Rich Presence update rejected: {payload}");
+                        break;
+                    }
                 }
             }
         }
@@ -929,20 +975,17 @@ fn portable_restart_to_update(app: AppHandle) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
-fn set_discord_presence(state: State<'_, AppState>, details: String, activity_state: String) {
+fn set_discord_presence(state: State<'_, AppState>, activity: DiscordActivity) {
     if let Ok(sender) = state.discord_sender.lock() {
         if let Some(sender) = sender.as_ref() {
-            let _ = sender.send(DiscordActivity {
-                details,
-                state: activity_state,
-            });
+            let _ = sender.send(activity);
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-fn set_discord_presence(_state: State<'_, AppState>, _details: String, _activity_state: String) {}
+fn set_discord_presence(_state: State<'_, AppState>, _activity: DiscordActivity) {}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1766,6 +1809,43 @@ mod tests {
         assert_eq!(
             strip_chromium_host_key_hash(".riotgames.com", cookie_value),
             cookie_value
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn discord_activity_includes_live_match_context() {
+        let payload = super::discord_activity_payload(
+            &super::DiscordActivity {
+                details: "Competitive · 5–3".to_string(),
+                state: "Yoru on Ascent".to_string(),
+                activity_key: "match:coregame".to_string(),
+                large_image: "https://example.com/ascent.png".to_string(),
+                large_text: "Ascent".to_string(),
+                small_image: "https://example.com/yoru.png".to_string(),
+                small_text: "Yoru".to_string(),
+                party_current: 2,
+                party_max: 5,
+                end_at: None,
+            },
+            1234,
+        );
+        let activity = &payload["args"]["activity"];
+
+        assert_eq!(activity["details"], "Competitive · 5–3");
+        assert_eq!(activity["assets"]["large_text"], "Ascent");
+        assert_eq!(activity["assets"]["small_text"], "Yoru");
+        assert_eq!(activity["party"]["size"], serde_json::json!([2, 5]));
+        assert_eq!(activity["timestamps"]["start"], 1234);
+        assert_eq!(activity["buttons"][0]["label"], "Download VantaVault");
+        assert_eq!(
+            activity["buttons"][0]["url"],
+            "https://github.com/akawazak/valo-project/releases/latest"
+        );
+        assert_eq!(activity["buttons"][1]["label"], "View on GitHub");
+        assert_eq!(
+            activity["buttons"][1]["url"],
+            "https://github.com/akawazak/valo-project"
         );
     }
 

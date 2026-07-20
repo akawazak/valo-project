@@ -238,6 +238,37 @@
   border-color: rgba(245, 197, 66, 0.42);
 }
 
+.live-party-widget-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 48%, transparent) transparent;
+}
+
+.live-party-widget-scroll::-webkit-scrollbar { width: 7px; }
+.live-party-widget-scroll::-webkit-scrollbar-track { background: transparent; }
+.live-party-widget-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 999px;
+}
+
+/* One scroll owner prevents the party roster, friend list, requests and
+   activity tabs from becoming separate scroll traps inside the same panel. */
+.live-party-widget-scroll .live-party-friends {
+  flex: none;
+  min-height: auto;
+}
+
+.live-party-widget-scroll :is(.live-party-friend-scroll, .live-party-social-scroll) {
+  flex: none;
+  min-height: auto;
+  overflow: visible;
+}
+
 .live-party-refresh {
   height: 2px;
   width: 100%;
@@ -274,6 +305,21 @@
   border-radius: 6px;
   box-shadow: none;
   touch-action: auto;
+}
+
+[data-theme="light"] .topbar-social-slot .live-party-pill,
+[data-theme="light"] .topbar-social-slot .live-party-pill:is(.is-pregame, .is-matchmaking, .is-coregame) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .topbar-social-slot .live-party-pill-title {
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .topbar-social-slot .live-party-pill-sub {
+  color: var(--text-secondary);
 }
 
 .topbar-social-slot .live-party-pill:hover {
@@ -855,6 +901,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.live-party-member:hover {
+  border-color: rgba(79, 209, 181, 0.34);
+  background-color: #0c2230;
 }
 
 .live-party-member.is-local {
@@ -974,6 +1027,28 @@
   }
 }
 
+.live-party-ready-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: max-content;
+  margin-top: 4px;
+  color: #83929c;
+  font: 700 8px/1 var(--font-mono, monospace);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.live-party-ready-state i {
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.live-party-ready-state.is-ready { color: #23d3aa; }
+.live-party-ready-state.is-ready i { border-color: #23d3aa; background: #23d3aa; box-shadow: 0 0 8px rgba(35, 211, 170, .42); }
+
 .live-party-friend-row.is-away {
   background: #171b20;
   border-color: rgba(211, 167, 78, 0.18);
@@ -1069,10 +1144,19 @@
 
 .live-party-profile-content {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
   padding-top: 0;
   overscroll-behavior: contain;
+}
+
+.live-party-profile-content > * {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .live-party-profile-close {
@@ -1465,7 +1549,9 @@
 .live-party-chat-date::after { content: ""; height: 1px; flex: 1; background: #30373d; }
 .live-party-chat-date span { flex: 0 0 auto; }
 .live-party-chat-notice { position: fixed; right: 18px; bottom: 18px; z-index: 10020; display: grid; grid-template-columns: 38px minmax(0,1fr) auto; align-items: center; gap: 11px; width: min(360px, calc(100vw - 36px)); padding: 12px; border: 1px solid rgba(75,214,180,.4); border-radius: 12px; background: rgba(9,18,27,.97); box-shadow: 0 18px 55px rgba(0,0,0,.45); color: #eef7f8; text-align: left; cursor: pointer; }
-.live-party-chat-notice-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(75,214,180,.14); color: #4bd6b4; font-weight: 800; }
+.live-party-chat-notice-icon { display: grid; place-items: center; width: 38px; height: 38px; overflow: hidden; border: 1px solid rgba(75,214,180,.42); border-radius: 9px; background: rgba(75,214,180,.14); color: #4bd6b4; font-weight: 800; }
+.live-party-chat-notice-avatar { width: 100%; height: 100%; object-fit: cover; }
+.live-party-chat-notice-fallback { display: grid; width: 100%; height: 100%; place-items: center; }
 .live-party-chat-notice > span:nth-child(2) { min-width: 0; }
 .live-party-chat-notice strong, .live-party-chat-notice small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .live-party-chat-notice small { margin-top: 3px; color: #aebbc5; }
@@ -1595,3 +1681,164 @@
 .live-party-activity-row.is-request_received > i, .live-party-activity-row.is-friend_readded > i, .live-party-activity-row.is-request_accepted > i { color: #4fd1b5; background: currentColor; }
 .live-party-activity-row.is-friendship_ended > i, .live-party-activity-row.is-request_closed_unknown > i { color: #f59e6a; }
 .live-party-activity-row time { color: var(--text-dim); font-size: 0.56rem; }
+
+/* Light mode keeps social and chat surfaces in the same crisp shell as Store. */
+[data-theme="light"] .live-party-widget,
+[data-theme="light"] .live-party-chat-modal {
+  --text: var(--text-primary);
+}
+
+[data-theme="light"] .live-party-widget {
+  background: rgba(250, 252, 253, 0.985);
+  border-color: var(--border-strong);
+  box-shadow: 0 24px 64px rgba(25, 36, 45, 0.18);
+}
+
+[data-theme="light"] .live-party-header {
+  border-bottom-color: var(--border);
+}
+
+[data-theme="light"] :is(
+  .live-party-overview-stat,
+  .live-party-member,
+  .live-party-friend-row,
+  .live-party-friend-empty
+) {
+  color: var(--text-primary);
+  background: #fff;
+  border-color: var(--border);
+}
+
+[data-theme="light"] .live-party-friend-row.is-game {
+  background: rgba(11, 143, 119, 0.07);
+  border-color: rgba(11, 143, 119, 0.25);
+}
+
+[data-theme="light"] .live-party-friend-row.is-offline {
+  background: #f3f5f7;
+  opacity: 0.7;
+}
+
+[data-theme="light"] :is(
+  .live-party-minimize,
+  .live-party-inbox,
+  .live-party-profile-button,
+  .live-party-open-chat,
+  .live-party-offline-toggle,
+  .live-party-friend-tools input,
+  .live-party-friend-tools button
+) {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+[data-theme="light"] .live-party-social-tabs button:hover,
+[data-theme="light"] .live-party-social-tabs button.active {
+  color: var(--text-primary);
+  background: rgba(16, 27, 37, 0.06);
+}
+
+[data-theme="light"] .live-party-friend-request-form {
+  background: #f6f8fa;
+  border-color: var(--border);
+}
+
+[data-theme="light"] .live-party-friend-request-form input {
+  color: var(--text-primary);
+  background: #fff;
+  border-color: var(--border-strong);
+}
+
+[data-theme="light"] .live-party-chat-backdrop {
+  background: rgba(24, 32, 40, 0.48);
+  backdrop-filter: blur(7px);
+}
+
+[data-theme="light"] .live-party-chat-modal {
+  color: var(--text-primary);
+  background: #fff;
+  border-color: var(--border-strong);
+  box-shadow: 0 28px 80px rgba(20, 30, 38, 0.24);
+}
+
+[data-theme="light"] .live-party-chat-list {
+  color: var(--text-primary);
+  background: #f4f6f8;
+  border-right-color: var(--border);
+}
+
+[data-theme="light"] .live-party-chat-list header,
+[data-theme="light"] .live-party-chat-view > header,
+[data-theme="light"] .live-party-chat-compose {
+  border-color: var(--border);
+}
+
+[data-theme="light"] .live-party-chat-list > input,
+[data-theme="light"] .live-party-chat-compose textarea {
+  color: var(--text-primary);
+  background: #fff;
+  border-color: var(--border-strong);
+}
+
+[data-theme="light"] .live-party-chat-conversations > button {
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .live-party-chat-conversations > button:hover {
+  background: rgba(16, 27, 37, 0.055);
+}
+
+[data-theme="light"] .live-party-chat-conversations > button.is-active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, #fff);
+}
+
+[data-theme="light"] :is(
+  .live-party-chat-avatar,
+  .live-party-chat-header-avatar,
+  .live-party-chat-empty > span
+) {
+  color: var(--text-primary);
+  background: #e8edf1;
+  border-color: var(--border-strong);
+}
+
+[data-theme="light"] .live-party-chat-avatar > i {
+  border-color: #f4f6f8;
+}
+
+[data-theme="light"] .live-party-chat-header-avatar > i {
+  border-color: #fff;
+}
+
+[data-theme="light"] .live-party-chat-view {
+  color: var(--text-primary);
+  background: #fff;
+}
+
+[data-theme="light"] .live-party-chat-view > header small b,
+[data-theme="light"] .live-party-chat-empty strong {
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .live-party-chat-message > div {
+  color: var(--text-primary);
+  background: #f0f3f5;
+  border-color: var(--border);
+}
+
+[data-theme="light"] .live-party-chat-message.is-outgoing > div {
+  background: #e6f1f3;
+  border-color: #bdd8de;
+}
+
+[data-theme="light"] .live-party-chat-date::before,
+[data-theme="light"] .live-party-chat-date::after {
+  background: var(--border);
+}
+
+[data-theme="light"] .live-party-chat-compose button,
+[data-theme="light"] .live-party-chat-new {
+  background: var(--accent);
+}

@@ -80,8 +80,22 @@ func (h *Handler) PostSocialRequestAction(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if err := localCancelFriendRequest(peer); err != nil {
-			http.Error(w, fmt.Sprintf("Riot friend request action failed: %s", err), http.StatusConflict)
-			return
+			// Riot may remove the request just before our DELETE reaches the local
+			// client. Confirm its absence before treating that race as an error.
+			status, statusErr := h.fetchLocalSocialStatus()
+			stillPending := statusErr != nil
+			if statusErr == nil {
+				for _, request := range status.Requests {
+					if strings.EqualFold(request.Puuid, peer) {
+						stillPending = true
+						break
+					}
+				}
+			}
+			if stillPending {
+				http.Error(w, fmt.Sprintf("Riot friend request action failed: %s", err), http.StatusConflict)
+				return
+			}
 		}
 		h.NotifySocialChanged()
 		writeSocialRequestActionResponse(w, true)
@@ -116,7 +130,7 @@ func (h *Handler) PostSocialRequestAction(w http.ResponseWriter, r *http.Request
 	}
 	if action == "send" {
 		h.recordSocialRequestAction(auth.Puuid, peer, firstNonEmpty(requestBeforeAction.Name, input.GameName), "outgoing", "request_sent")
-	} else if action == "cancel" {
+	} else if action == "cancel" && confirmed {
 		h.recordSocialRequestAction(auth.Puuid, peer, requestBeforeAction.Name, "outgoing", "request_cancelled")
 	}
 	h.NotifySocialChanged()

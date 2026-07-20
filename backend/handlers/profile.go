@@ -112,9 +112,22 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	tracking.HydratePeakRankEvidence(db, puuid, &overview.PeakRank)
 	overview.PeakRank.SeasonID = tracking.NormalizeSeasonID(overview.PeakRank.SeasonID)
+	overview.LastDeltas = currentSeasonRRSnapshots(overview.LastDeltas, overview.CurrentSeasonID)
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
+}
+
+func currentSeasonRRSnapshots(snapshots []tracking.RRSnapshot, seasonID string) []tracking.RRSnapshot {
+	seasonID = tracking.NormalizeSeasonID(seasonID)
+	current := snapshots[:0]
+	for _, snapshot := range snapshots {
+		snapshot.SeasonID = tracking.NormalizeSeasonID(snapshot.SeasonID)
+		if seasonID != "" && snapshot.SeasonID == seasonID {
+			current = append(current, snapshot)
+		}
+	}
+	return current
 }
 
 func (h *Handler) applyCachedLiveRankToOverview(db *sql.DB, overview *tracking.Overview, puuid string) bool {
@@ -125,7 +138,12 @@ func (h *Handler) applyCachedLiveRankToOverview(db *sql.DB, overview *tracking.O
 	if !ok {
 		return false
 	}
-	if rank.CompetitiveTier > 0 {
+	// The overlay cache intentionally contains only the compact rank values,
+	// not Riot's current-act game count. A carried rank from a previous act is
+	// therefore not authoritative for an account with no current competitive
+	// games. Let the full MMR response resolve that case instead.
+	currentRankIsEstablished := overview.CurrentRank.NumberOfGames > 0
+	if currentRankIsEstablished && rank.CompetitiveTier > 0 {
 		overview.CurrentRank.CompetitiveTier = rank.CompetitiveTier
 		overview.CurrentRank.RankedRating = rank.RankedRating
 	}
@@ -133,7 +151,7 @@ func (h *Handler) applyCachedLiveRankToOverview(db *sql.DB, overview *tracking.O
 		overview.PeakRank.CompetitiveTier = rank.PeakTier
 	}
 	hydrateOverviewRankNames(db, overview)
-	return true
+	return currentRankIsEstablished
 }
 
 func hydrateOverviewRankNames(db *sql.DB, overview *tracking.Overview) {
@@ -229,15 +247,16 @@ func riotFailureReason(err error) string {
 
 type competitiveUpdatesResponse struct {
 	Matches []struct {
-		MatchID                  string `json:"MatchID"`
-		SeasonID                 string `json:"SeasonID"`
-		MatchStartTime           int64  `json:"MatchStartTime"`
-		TierAfterUpdate          int    `json:"TierAfterUpdate"`
-		TierBeforeUpdate         int    `json:"TierBeforeUpdate"`
-		RankedRatingAfterUpdate  int    `json:"RankedRatingAfterUpdate"`
-		RankedRatingBeforeUpdate int    `json:"RankedRatingBeforeUpdate"`
-		RankedRatingEarned       int    `json:"RankedRatingEarned"`
-		AFKPenalty               int    `json:"AFKPenalty"`
+		MatchID                      string `json:"MatchID"`
+		SeasonID                     string `json:"SeasonID"`
+		MatchStartTime               int64  `json:"MatchStartTime"`
+		TierAfterUpdate              int    `json:"TierAfterUpdate"`
+		TierBeforeUpdate             int    `json:"TierBeforeUpdate"`
+		RankedRatingAfterUpdate      int    `json:"RankedRatingAfterUpdate"`
+		RankedRatingBeforeUpdate     int    `json:"RankedRatingBeforeUpdate"`
+		RankedRatingEarned           int    `json:"RankedRatingEarned"`
+		AFKPenalty                   int    `json:"AFKPenalty"`
+		RankedRatingPerformanceBonus int    `json:"RankedRatingPerformanceBonus"`
 	} `json:"Matches"`
 }
 
@@ -248,16 +267,17 @@ func (response competitiveUpdatesResponse) snapshots(puuid string) []tracking.RR
 			continue
 		}
 		snapshots = append(snapshots, tracking.RRSnapshot{
-			Puuid:          puuid,
-			MatchID:        match.MatchID,
-			SeasonID:       match.SeasonID,
-			TierBefore:     match.TierBeforeUpdate,
-			TierAfter:      match.TierAfterUpdate,
-			RRBefore:       match.RankedRatingBeforeUpdate,
-			RRAfter:        match.RankedRatingAfterUpdate,
-			RREarned:       match.RankedRatingEarned,
-			AFKPenalty:     match.AFKPenalty,
-			MatchStartTime: match.MatchStartTime,
+			Puuid:            puuid,
+			MatchID:          match.MatchID,
+			SeasonID:         match.SeasonID,
+			TierBefore:       match.TierBeforeUpdate,
+			TierAfter:        match.TierAfterUpdate,
+			RRBefore:         match.RankedRatingBeforeUpdate,
+			RRAfter:          match.RankedRatingAfterUpdate,
+			RREarned:         match.RankedRatingEarned,
+			AFKPenalty:       match.AFKPenalty,
+			PerformanceBonus: match.RankedRatingPerformanceBonus,
+			MatchStartTime:   match.MatchStartTime,
 		})
 	}
 	return snapshots
@@ -382,11 +402,6 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 		seasonID = tracking.NormalizeSeasonID(latest.SeasonID)
 		overview.CurrentSeasonID = seasonID
 	}
-	if latest.SeasonID != "" && tracking.NormalizeSeasonID(latest.SeasonID) == seasonID && latest.TierAfterUpdate > 0 {
-		overview.CurrentRank.CompetitiveTier = latest.TierAfterUpdate
-		overview.CurrentRank.RankedRating = latest.RankedRatingAfterUpdate
-	}
-
 	comp, ok := live.QueueSkills["competitive"]
 	if !ok {
 		return
@@ -399,14 +414,27 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 		}
 	}
 
-	if season, ok := comp.SeasonalInfoBySeasonID[seasonID]; ok {
+	season, hasCurrentSeason := competitiveSeason(comp.SeasonalInfoBySeasonID, seasonID)
+	if hasCurrentSeason {
 		overview.CurrentRank.NumberOfGames = season.NumberOfGames
 		overview.CurrentRank.NumberOfWins = season.NumberOfWins
-		overview.CurrentRank.CompetitiveTier = season.CompetitiveTier
-		if season.CompetitiveTier == 0 {
+		if season.NumberOfGames > 0 && season.CompetitiveTier > 0 {
+			overview.CurrentRank.CompetitiveTier = season.CompetitiveTier
+			overview.CurrentRank.RankedRating = season.RankedRating
+		} else {
+			overview.CurrentRank.CompetitiveTier = 0
+			overview.CurrentRank.RankedRating = 0
 			overview.CurrentRank.TierName = "Unranked"
 		}
-		overview.CurrentRank.RankedRating = season.RankedRating
+	} else if seasonID != "" {
+		// Riot omits the active act until the player has competitive evidence in
+		// it. Absence is authoritative here: do not keep a tier carried by a
+		// Swiftplay match, a previous act, or the live-overlay cache.
+		overview.CurrentRank.CompetitiveTier = 0
+		overview.CurrentRank.RankedRating = 0
+		overview.CurrentRank.NumberOfGames = 0
+		overview.CurrentRank.NumberOfWins = 0
+		overview.CurrentRank.TierName = "Unranked"
 	}
 
 	acts := make([]tracking.RankActSummary, 0, len(comp.SeasonalInfoBySeasonID))
@@ -443,6 +471,20 @@ func mergeLiveMMR(overview *tracking.Overview, live playerMMRResponse) {
 	if overview.PeakRank.CompetitiveTier > 0 && overview.PeakRank.TierName == "" {
 		overview.PeakRank.TierName = fmt.Sprintf("Tier %d", overview.PeakRank.CompetitiveTier)
 	}
+}
+
+func competitiveSeason[T any](seasons map[string]T, seasonID string) (T, bool) {
+	if season, ok := seasons[seasonID]; ok {
+		return season, true
+	}
+	normalized := tracking.NormalizeSeasonID(seasonID)
+	for id, season := range seasons {
+		if tracking.NormalizeSeasonID(id) == normalized {
+			return season, true
+		}
+	}
+	var zero T
+	return zero, false
 }
 
 // GetRRHistory — `GET /v1/profile/rr-history` (design doc §2.2).
@@ -748,6 +790,8 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 			Bodyshots:       p.Bodyshots,
 			Legshots:        p.Legshots,
 			DamageDealt:     p.DamageDealt,
+			PlaytimeMillis:  p.PlaytimeMillis,
+			AbilityCasts:    p.AbilityCasts,
 			RoundsPlayed:    p.RoundsPlayed,
 			IsLocal:         p.IsLocal,
 			CompetitiveTier: p.CompetitiveTier,
@@ -897,7 +941,7 @@ func (h *Handler) GetProfileMatchDetails(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	if (analyticsRequested && (cache == nil || cache.Match.AnalyticsVersion < 2)) || missingPlayerNames {
+	if (analyticsRequested && (cache == nil || cache.Match.AnalyticsVersion < 3)) || missingPlayerNames {
 		client, clientErr := h.getClient(r)
 		if clientErr != nil {
 			h.returnError(w, clientErr)

@@ -4,15 +4,18 @@
   <p>A private, open-source Windows VALORANT companion app for loadouts, the storefront, profiles, friends, parties, and live-match context.</p>
   <p>
     <a href="https://github.com/akawazak/valo-project/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/akawazak/valo-project?style=flat-square&color=ff4655" /></a>
+    <a href="https://github.com/akawazak/valo-project"><img alt="Star VantaVault on GitHub" src="https://img.shields.io/github/stars/akawazak/valo-project?style=flat-square&logo=github&label=Stars" /></a>
+    <a href="https://discord.gg/gxGQwWyECE"><img alt="Join the VantaVault Discord community" src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
     <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1923?style=flat-square" /></a>
     <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-0078d4?style=flat-square" />
     <img alt="Tauri" src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" />
   </p>
   <p>
+    <a href="https://github.com/akawazak/valo-project/releases/latest"><strong>Download for Windows</strong></a> ·
     <a href="#screenshots">Screenshots</a> ·
     <a href="#features">Features</a> ·
     <a href="#installation">Installation</a> ·
-    <a href="#development">Development</a>
+    <a href="https://github.com/akawazak/valo-project/issues">Report an issue</a>
   </p>
 </div>
 
@@ -25,7 +28,14 @@ VantaVault is a native Windows companion for VALORANT players who want their loa
 
 Use it as a VALORANT loadout manager, skin-store companion, match-history viewer, party and friends monitor, and live-match companion. Availability of Riot Client data varies by game phase and by the fields Riot exposes.
 
-## What's new in 0.5.24
+## What's new in 0.5.26
+
+- **Match review:** interactive post-match fight maps now connect duel positions, weapons or abilities, repeat locations, and round impact without requiring recorded video.
+- **Progression:** profile tools now include daily checkpoints, missions, contracts, account XP, and Battle Pass progress.
+- **Appearance and community:** Settings has clearer sections, local Valorant wallpapers, accent choices, Discord community access, and a readable light palette across the main application shell.
+- **Reliability:** current-act RR, hidden-player names, party evidence, mission renewal, signed portable updates, and backend replacement were hardened.
+
+## Previous release: 0.5.24
 
 - **Portable-first releases:** the main download is now a single VantaVault portable EXE with the app and backend bundled together.
 - Portable builds can check for updates from Settings, download the signed new portable EXE in the background, and switch to it with **Restart now** without showing a setup wizard.
@@ -87,6 +97,22 @@ Use it as a VALORANT loadout manager, skin-store companion, match-history viewer
 | Live Match | View agent picks, teams, map, queue type, live score when Riot presence provides it, direct rank refreshes, current and peak ranks where available, confirmed own-party markers, and clearly marked likely stacks from recent-match evidence. Agent select and **Alt + T** can reveal the existing app without starting a second data-loading window. |
 | Discord | Show Browsing Store, Building a Loadout, Agent Select, agent, queue, map, and In Match activity through Rich Presence. |
 | Privacy | Keep match history locally with configurable retention and sanitized diagnostics export. |
+
+### Remote account and local Riot Client support
+
+| Feature | Remote account | Local Riot Client / lockfile |
+| --- | :---: | :---: |
+| Storefront, wallet, owned cosmetics and loadout changes | Yes | Yes |
+| Profile, match history, map review and progression | Yes | Yes |
+| Party state and direct-message presence | Yes | Yes |
+| Direct messages | Yes | Yes |
+| Party chat and friend-request actions | No | Yes |
+| Pregame and live-match teams | Yes, when Riot exposes the active session | Yes |
+| Exact live score and automatic local game detection | No | Yes |
+| Automatic custom-match preset apply/restore | No | Yes |
+| Wishlist checks and Discord Rich Presence | While VantaVault is running | While VantaVault is running |
+
+VantaVault prefers the selected remote account when it has a valid session and falls back to the local Riot Client only when that client is signed into the same account. It never substitutes data from a different local account.
 
 ## Installation
 

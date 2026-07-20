@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/truearken/valclient/valclient"
@@ -20,9 +21,19 @@ type LiveLoadoutsResponse struct {
 }
 
 type LiveLoadoutPlayer struct {
-	Puuid    string   `json:"puuid,omitempty"`
-	SkinIDs  []string `json:"skinIds,omitempty"`
-	GunCount int      `json:"gunCount"`
+	Puuid    string            `json:"puuid,omitempty"`
+	SkinIDs  []string          `json:"skinIds,omitempty"`
+	Items    []LiveLoadoutItem `json:"items,omitempty"`
+	GunCount int               `json:"gunCount"`
+}
+
+// LiveLoadoutItem preserves the relationship Riot returns between a weapon
+// slot and the nested cosmetic IDs equipped in that slot. Skin levels,
+// chromas, and buddies are all nested "Item" records in Riot's payload; a
+// flat ID list cannot tell the frontend which variant belongs to which gun.
+type LiveLoadoutItem struct {
+	WeaponID string   `json:"weaponId"`
+	ItemIDs  []string `json:"itemIds,omitempty"`
 }
 
 type AccountHealthResponse struct {
@@ -179,7 +190,20 @@ func normalizeLoadoutPlayers(raw map[string]any) []LiveLoadoutPlayer {
 			loadout = m
 		}
 		items := firstMap(loadout, "Items", "items")
-		skins := uniqueStrings(collectStringFields(items, "ID"))
+		structuredItems := make([]LiveLoadoutItem, 0, len(items))
+		allItemIDs := make([]string, 0, len(items)*2)
+		for weaponID, rawItem := range items {
+			itemIDs := uniqueStrings(collectStringFields(rawItem, "ID"))
+			structuredItems = append(structuredItems, LiveLoadoutItem{
+				WeaponID: weaponID,
+				ItemIDs:  itemIDs,
+			})
+			allItemIDs = append(allItemIDs, itemIDs...)
+		}
+		sort.Slice(structuredItems, func(i, j int) bool {
+			return strings.ToLower(structuredItems[i].WeaponID) < strings.ToLower(structuredItems[j].WeaponID)
+		})
+		skins := uniqueStrings(allItemIDs)
 		puuid := firstString(loadout, "Subject", "subject")
 		if puuid == "" {
 			puuid = firstString(m, "Subject", "subject")
@@ -187,6 +211,7 @@ func normalizeLoadoutPlayers(raw map[string]any) []LiveLoadoutPlayer {
 		players = append(players, LiveLoadoutPlayer{
 			Puuid:    puuid,
 			SkinIDs:  skins,
+			Items:    structuredItems,
 			GunCount: len(items),
 		})
 	}
