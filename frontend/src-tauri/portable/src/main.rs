@@ -1,5 +1,10 @@
 #![windows_subsystem = "windows"]
 
+#[cfg(all(target_env = "msvc", not(target_feature = "crt-static")))]
+compile_error!(
+    "the VantaVault portable launcher must be built with -C target-feature=+crt-static"
+);
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use minisign_verify::{PublicKey, Signature};
 use reqwest::blocking::Client;

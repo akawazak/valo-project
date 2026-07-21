@@ -57,24 +57,25 @@ import { publishAppNotification, useAppNotifications } from '@/lib/appNotificati
 import type { AppTab } from '@/lib/appTabs';
 
 const CURRENT_RELEASE: ReleaseNotes = {
-    version: "0.5.26",
+    version: "0.5.27",
     title: "What’s new",
-    summary: "A clearer match review, a stronger profile, and a more reliable social experience.",
+    summary: "A more polished desktop experience with richer activity, live-match, profile, and social tools.",
     added: [
-        "Interactive post-match fight maps with duel positions, weapons, abilities, zoom, and pan.",
-        "Profile progression views for account XP, missions, contracts, and Battle Pass progress.",
-        "Riot chat, conversation history, social requests, and skin video previews.",
+        "A notification center for wishlist matches, Riot messages, and app errors, plus configurable interface sounds.",
+        "Keyboard shortcuts, new Viper, Harbor, and Gekko wallpapers, and direct GitHub and Discord community links.",
+        "Richer live-player loadouts, Discord match presence, and stored match analytics.",
     ],
     improved: [
-        "Match history now keeps your team on the left and makes parties, players, and round impact easier to read.",
-        "Map reviews highlight the areas you fought in and turn match data into direct, factual takeaways.",
-        "The Profile identity card now stays with you while you browse the full page.",
+        "Redesigned Settings, loading, storefront, party, live-match, and Profile experiences.",
+        "Profile analytics now make current-act RR, placements, competitive history, maps, and agents easier to understand.",
+        "Live match and party views show clearer teams, scores, queue timing, ranks, identities, and equipped cosmetics.",
     ],
     fixed: [
-        "Restored party detection and post-match player names where Riot returns them.",
-        "Hardened portable updates with signed manifests and SHA-256 verification.",
-        "Fixed Windows updates so the backend releases its file lock before installation begins.",
-        "Fixed account, presence, match sync, and UI state issues found during the redesign.",
+        "Previous-act ranks and RR deltas no longer leak into the current act, including during placements.",
+        "Corrected party queue timers, remote friend-request cancellation, and same-account local fallback behavior.",
+        "Kept live cosmetics attached to the correct weapon and improved incomplete Riot-data handling.",
+        "Updated image processing dependencies to the patched release required by the production security audit.",
+        "Made the portable launcher self-contained so it starts without a separately installed Visual C++ Redistributable.",
     ],
 };
 

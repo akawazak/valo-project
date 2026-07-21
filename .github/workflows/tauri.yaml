@@ -10,6 +10,7 @@ jobs:
   build:
     name: ${{ matrix.settings.name }}
     permissions:
+      actions: write
       contents: write
     strategy:
       fail-fast: false
@@ -21,6 +22,80 @@ jobs:
     runs-on: ${{ matrix.settings.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release metadata
+        id: release
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -ne "tag") {
+            throw "Production releases must run from a tag ref. Select an existing v* tag when dispatching manually."
+          }
+
+          $tag = "${{ github.ref_name }}"
+          $package = Get-Content "frontend/package.json" -Raw | ConvertFrom-Json
+          $packageLock = Get-Content "frontend/package-lock.json" -Raw
+          $tauri = Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $cargoManifest = Get-Content "frontend/src-tauri/Cargo.toml" -Raw
+          $cargoLock = Get-Content "frontend/src-tauri/Cargo.lock" -Raw
+          $appPage = Get-Content "frontend/src/app/page.tsx" -Raw
+
+          $cargoVersionMatch = [regex]::Match($cargoManifest, '(?m)^version\s*=\s*"([^"]+)"')
+          $cargoLockVersionMatch = [regex]::Match($cargoLock, '(?ms)^\[\[package\]\]\r?\nname = "app"\r?\nversion = "([^"]+)"')
+          $releaseVersionMatch = [regex]::Match($appPage, '(?s)const CURRENT_RELEASE: ReleaseNotes = \{.*?version:\s*"([^"]+)"')
+          $packageLockVersionMatch = [regex]::Match($packageLock, '(?s)^\s*\{\s*"name"\s*:\s*"frontend"\s*,\s*"version"\s*:\s*"([^"]+)"')
+          $rootLockVersionMatch = [regex]::Match($packageLock, '(?s)"packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"frontend"\s*,\s*"version"\s*:\s*"([^"]+)"')
+          if (!$cargoVersionMatch.Success -or !$cargoLockVersionMatch.Success -or !$releaseVersionMatch.Success -or !$packageLockVersionMatch.Success -or !$rootLockVersionMatch.Success) {
+            throw "Could not read every first-party release version."
+          }
+
+          $version = [string]$tauri.version
+          $versions = [ordered]@{
+            'frontend/package.json' = [string]$package.version
+            'frontend/package-lock.json' = $packageLockVersionMatch.Groups[1].Value
+            'frontend/package-lock.json root package' = $rootLockVersionMatch.Groups[1].Value
+            'frontend/src-tauri/tauri.conf.json' = $version
+            'frontend/src-tauri/Cargo.toml' = $cargoVersionMatch.Groups[1].Value
+            'frontend/src-tauri/Cargo.lock app package' = $cargoLockVersionMatch.Groups[1].Value
+            'frontend/src/app/page.tsx CURRENT_RELEASE' = $releaseVersionMatch.Groups[1].Value
+          }
+          foreach ($entry in $versions.GetEnumerator()) {
+            if ($entry.Value -ne $version) {
+              throw "Version mismatch: $($entry.Key) is $($entry.Value), expected $version."
+            }
+          }
+          if ($tag -ne "v$version") {
+            throw "Tag $tag does not match application version v$version."
+          }
+          if (!(Test-Path ".github/release-notes/$tag.md")) {
+            throw "Missing canonical release notes: .github/release-notes/$tag.md"
+          }
+          if ((Get-Content "README.md" -Raw) -notmatch [regex]::Escape("## What's new in $version")) {
+            throw "README does not contain the v$version What's new section."
+          }
+
+          $tagCommit = (git rev-list -n 1 $tag).Trim()
+          $checkoutCommit = (git rev-parse HEAD).Trim()
+          if ($tagCommit -ne $checkoutCommit) {
+            throw "Tag $tag resolves to $tagCommit but the workflow checked out $checkoutCommit."
+          }
+          git merge-base --is-ancestor d11cbe7bf7f9d1eefaeeb81404f5e1d929298213 HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag $tag does not contain the approved desktop improvements commit d11cbe7."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Load canonical release notes
+        id: release_notes
+        shell: pwsh
+        run: |
+          $delimiter = "VANTAVAULT_RELEASE_NOTES_EOF"
+          "body<<$delimiter" >> $env:GITHUB_OUTPUT
+          Get-Content ".github/release-notes/${{ steps.release.outputs.tag }}.md" -Raw >> $env:GITHUB_OUTPUT
+          $delimiter >> $env:GITHUB_OUTPUT
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -71,34 +146,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           projectPath: frontend
-          tagName: v__VERSION__
-          releaseName: VantaVault v__VERSION__
+          tagName: ${{ steps.release.outputs.tag }}
+          releaseName: VantaVault v${{ steps.release.outputs.version }}
           args: ${{ matrix.settings.tauri-args }}
-          releaseBody: |
-            ## VantaVault v__VERSION__
-
-            ### Added
-            - Interactive post-match fight maps with duel positions, weapons, abilities, zoom, and pan.
-            - Profile progression for account XP, missions, contracts, and Battle Pass progress.
-            - Riot chat, conversation history, social requests, and skin video previews.
-
-            ### Improved
-            - Clearer match history, party indicators, player names, map reviews, and round-impact insights.
-            - A polished Profile experience with a sticky identity card and denser performance views.
-
-            ### Fixed
-            - Restored party detection and post-match names where Riot returns them.
-            - Windows updates now stop the backend before replacing its executable.
-            - Hardened portable updates with signed manifests and SHA-256 verification.
-            - Fixed account, presence, match sync, and UI state issues found during the redesign.
-
-            ### Download
-            - **Windows Portable:** `VantaVault-portable.exe` - run directly with no setup. It can download and switch to later portable releases from Settings.
-            - **Windows Installer:** `VantaVault_*_x64-setup.exe` - optional per-user installation. No administrator rights are required.
-
-            ### Auto-update
-            Both release types update from inside VantaVault. Portable updates download a signed new portable file and restart without opening setup.
-          releaseDraft: false
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          releaseDraft: true
           prerelease: false
 
       - name: Package portable EXE (Windows)
@@ -131,6 +183,7 @@ jobs:
 
           $version = "${{ steps.tauri.outputs.appVersion }}"
           if (!$version) { throw "No application version was returned by the Tauri build." }
+          if ($version -ne "${{ steps.release.outputs.version }}") { throw "Tauri built version $version instead of ${{ steps.release.outputs.version }}." }
           $binariesDir = "frontend/src-tauri/binaries"
           $releaseDir  = "frontend/src-tauri/target/release"
           $builtSidecar = Get-ChildItem "$binariesDir/valovault-backend*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -142,9 +195,30 @@ jobs:
           $env:VV_APP_EXE = $appExe.FullName
           $env:VV_BACKEND_EXE = $builtSidecar.FullName
           $env:VV_VERSION = $version
-          Invoke-PortableCommand "cargo" @("build", "--manifest-path", "frontend/src-tauri/portable/Cargo.toml", "--release") 600
+          $previousRustFlags = $env:RUSTFLAGS
+          $env:RUSTFLAGS = (($previousRustFlags, "-C target-feature=+crt-static") | Where-Object { ![string]::IsNullOrWhiteSpace($_) }) -join " "
+          try {
+            Invoke-PortableCommand "cargo" @("build", "--manifest-path", "frontend/src-tauri/portable/Cargo.toml", "--release") 600
+          } finally {
+            if ($null -eq $previousRustFlags) {
+              Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+            } else {
+              $env:RUSTFLAGS = $previousRustFlags
+            }
+          }
           Copy-Item "frontend/src-tauri/portable/target/release/vantavault-portable.exe" VantaVault-portable.exe -Force
           if (!(Test-Path VantaVault-portable.exe)) { throw "Portable EXE was not created." }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "Visual Studio discovery tool was not found." }
+          $visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+          $dumpbin = Get-ChildItem "$visualStudio/VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe" -File | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$dumpbin) { throw "dumpbin.exe was not found in the Visual Studio toolchain." }
+          $portableDependencies = & $dumpbin.FullName /nologo /dependents VantaVault-portable.exe
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect portable launcher dependencies." }
+          $forbiddenRuntime = @($portableDependencies | Select-String -Pattern '(?i)(VCRUNTIME\S*\.dll|MSVCP\S*\.dll|ucrtbase\.dll|api-ms-win-crt-\S*\.dll)')
+          if ($forbiddenRuntime.Count -gt 0) {
+            throw "Portable launcher depends on a separately installed Visual C++ runtime: $($forbiddenRuntime.Line.Trim() -join ', ')"
+          }
           $env:TAURI_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY
           $tauriCli = Join-Path $PWD "frontend/node_modules/.bin/tauri.cmd"
           if (!(Test-Path $tauriCli)) { throw "Tauri CLI was not installed at $tauriCli." }
@@ -172,4 +246,94 @@ jobs:
             manifest_signature = (Get-Content portable-update-payload.txt.sig -Raw).Trim()
           } | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("latest-portable.json", $portableManifest, [System.Text.UTF8Encoding]::new($false))
-          Invoke-PortableCommand "gh" @("release", "upload", "v$version", "VantaVault-portable.exe", "VantaVault-portable.exe.sig", "latest-portable.json", "--repo", "akawazak/valo-project", "--clobber") 300
+          Invoke-PortableCommand "gh" @("release", "upload", "${{ steps.release.outputs.tag }}", "VantaVault-portable.exe", "VantaVault-portable.exe.sig", "latest-portable.json", "--repo", "akawazak/valo-project", "--clobber") 300
+
+      - name: Validate complete draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.release.outputs.tag }}"
+          $version = "${{ steps.release.outputs.version }}"
+          $setupAsset = "VantaVault_${version}_x64-setup.exe"
+          $requiredAssets = @(
+            "latest-portable.json",
+            "latest.json",
+            "VantaVault-portable.exe",
+            "VantaVault-portable.exe.sig",
+            $setupAsset,
+            "$setupAsset.sig"
+          )
+
+          $release = gh release view $tag --repo akawazak/valo-project --json tagName,isDraft,isPrerelease,body,assets | ConvertFrom-Json
+          if ($release.tagName -ne $tag -or !$release.isDraft -or $release.isPrerelease) {
+            throw "Expected a stable draft for $tag before publication."
+          }
+          $expectedBody = (Get-Content ".github/release-notes/$tag.md" -Raw).Trim()
+          if ($release.body.Trim() -ne $expectedBody) {
+            throw "The GitHub draft body does not match the canonical $tag release notes."
+          }
+
+          $assets = @($release.assets)
+          foreach ($name in $requiredAssets) {
+            $asset = $assets | Where-Object name -eq $name | Select-Object -First 1
+            if (!$asset) { throw "Required release asset is missing: $name" }
+            if ([int64]$asset.size -le 0) { throw "Release asset is empty: $name" }
+          }
+          $unexpectedAssets = @($assets | Where-Object name -notin $requiredAssets)
+          if ($unexpectedAssets.Count -gt 0) {
+            throw "Unexpected release assets: $($unexpectedAssets.name -join ', ')"
+          }
+
+          New-Item -ItemType Directory -Path "release-validation" -Force | Out-Null
+          gh release download $tag --repo akawazak/valo-project --pattern "latest.json" --pattern "latest-portable.json" --dir "release-validation"
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the updater manifests from the draft release." }
+
+          $installerManifest = Get-Content "release-validation/latest.json" -Raw | ConvertFrom-Json
+          if ([string]$installerManifest.version -ne $version) {
+            throw "Installer manifest version is $($installerManifest.version), expected $version."
+          }
+          $platforms = @($installerManifest.platforms.PSObject.Properties.Value)
+          if ($platforms.Count -eq 0) { throw "Installer manifest contains no platform entries." }
+          foreach ($platform in $platforms) {
+            if ([string]::IsNullOrWhiteSpace([string]$platform.signature)) {
+              throw "Installer manifest contains an empty signature."
+            }
+            if ([string]$platform.url -notlike "*/releases/download/$tag/$setupAsset") {
+              throw "Installer manifest URL does not target $tag/${setupAsset}: $($platform.url)"
+            }
+          }
+
+          $portableManifest = Get-Content "release-validation/latest-portable.json" -Raw | ConvertFrom-Json
+          $expectedPortableUrl = "https://github.com/akawazak/valo-project/releases/download/$tag/VantaVault-portable.exe"
+          if ([string]$portableManifest.version -ne $version) {
+            throw "Portable manifest version is $($portableManifest.version), expected $version."
+          }
+          if ([string]$portableManifest.url -ne $expectedPortableUrl) {
+            throw "Portable manifest URL does not target the $tag portable asset."
+          }
+          if ([string]::IsNullOrWhiteSpace([string]$portableManifest.signature) -or [string]::IsNullOrWhiteSpace([string]$portableManifest.manifest_signature)) {
+            throw "Portable manifest contains an empty signature."
+          }
+          $portableSha256 = (Get-FileHash "VantaVault-portable.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ([string]$portableManifest.sha256 -ne $portableSha256) {
+            throw "Portable manifest SHA-256 does not match VantaVault-portable.exe."
+          }
+
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ steps.release.outputs.tag }}" --repo akawazak/valo-project --draft=false --latest --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw "The verified draft could not be published." }
+          $published = gh release view "${{ steps.release.outputs.tag }}" --repo akawazak/valo-project --json isDraft,isPrerelease | ConvertFrom-Json
+          if ($published.isDraft -or $published.isPrerelease) { throw "The release was not published as stable." }
+
+      - name: Dispatch VirusTotal scan
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run virus_total.yaml --repo akawazak/valo-project --ref main -f tag="${{ steps.release.outputs.tag }}"
+          if ($LASTEXITCODE -ne 0) { throw "Could not dispatch the VirusTotal scan." }

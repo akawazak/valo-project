@@ -28,17 +28,19 @@ VantaVault is a native Windows companion for VALORANT players who want their loa
 
 Use it as a VALORANT loadout manager, skin-store companion, match-history viewer, party and friends monitor, and live-match companion. Availability of Riot Client data varies by game phase and by the fields Riot exposes.
 
-## What's new in 0.5.26
+## What's new in 0.5.27
+
+- **Activity and sound:** a persistent notification center now surfaces wishlist matches, Riot messages, and app errors, with configurable interface sounds and volume.
+- **Desktop polish:** Settings, loading, storefront, party, live-match, and Profile views were redesigned, with keyboard shortcuts and new Viper, Harbor, and Gekko wallpapers.
+- **Match intelligence:** richer live loadouts, Discord presence, current-act RR handling, competitive archives, and stored round analytics make Riot data clearer without guessing missing fields.
+- **Reliability:** fixed stale previous-act ranks, placement records, queue timers, friend-request cancellation, remote/local account fallback, cross-weapon cosmetic matching, the production image dependency audit, and portable startup on Windows systems without the Visual C++ Redistributable.
+
+## Previous release: 0.5.26
 
 - **Match review:** interactive post-match fight maps now connect duel positions, weapons or abilities, repeat locations, and round impact without requiring recorded video.
 - **Progression:** profile tools now include daily checkpoints, missions, contracts, account XP, and Battle Pass progress.
 - **Appearance and community:** Settings has clearer sections, local Valorant wallpapers, accent choices, Discord community access, and a readable light palette across the main application shell.
 - **Reliability:** current-act RR, hidden-player names, party evidence, mission renewal, signed portable updates, and backend replacement were hardened.
-
-## Previous release: 0.5.24
-
-- **Portable-first releases:** the main download is now a single VantaVault portable EXE with the app and backend bundled together.
-- Portable builds can check for updates from Settings, download the signed new portable EXE in the background, and switch to it with **Restart now** without showing a setup wizard.
 - Release packaging now publishes `VantaVault-portable.exe`, its signature, and a small portable update manifest alongside the normal Windows installer.
 - **In-app live match view:** VantaVault can reveal the already-loaded main app during agent select or with **Alt + T**, without launching a second overlay window or intentionally taking focus from VALORANT.
 - Alt + T shows the normal VantaVault app window centered at a fixed 1280 × 720 above VALORANT without activating it, then hides the same window when pressed again. Opening VantaVault normally restores its previous size and position. It does not make VantaVault fullscreen or inject code into the game.
