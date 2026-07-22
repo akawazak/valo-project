@@ -20,6 +20,8 @@ jobs:
             platform: 'windows-latest'
             tauri-args: '--bundles nsis'
     runs-on: ${{ matrix.settings.platform }}
+    env:
+      VT_API_KEY_CONFIGURED: ${{ secrets.VT_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -331,6 +333,7 @@ jobs:
           if ($published.isDraft -or $published.isPrerelease) { throw "The release was not published as stable." }
 
       - name: Dispatch VirusTotal scan
+        if: env.VT_API_KEY_CONFIGURED == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

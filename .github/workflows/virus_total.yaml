@@ -22,6 +22,15 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      - name: Require VirusTotal API key
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          if [[ -z "$VT_API_KEY" ]]; then
+            echo "VT_API_KEY is not configured; VirusTotal scanning is optional." >&2
+            exit 1
+          fi
+
       - name: Download stable release executables
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
