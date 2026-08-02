@@ -1,4 +1,2 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://vantavault.vercel.app/sitemap.xml
