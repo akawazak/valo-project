@@ -15,6 +15,7 @@
 <link rel="icon" href="/assets/app-icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/assets/app-icon.png">
 <link rel="manifest" href="/site.webmanifest">
+<link rel="preload" as="image" href="/assets/homepage-profile-detail.webp" type="image/webp" fetchpriority="high">
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="VantaVault">
@@ -336,7 +337,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
 
 <main id="top">
 <section class="hero shell">
-  <div class="hero-copy reveal">
+  <div class="hero-copy">
     <h1>Your VALORANT<br><em>account in one place.</em></h1>
     <p>Check your VALORANT store, manage skins and loadouts, follow rank stats and match history, and see your party and live lobby from one private Windows app.</p>
     <div class="actions">
@@ -352,7 +353,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
       <div><strong>Stored locally</strong><span>Sessions stay on your PC</span></div>
     </div>
   </div>
-  <div class="hero-visual reveal">
+  <div class="hero-visual">
     <div class="app-frame">
       <div class="windowbar">
         <span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span>
@@ -395,7 +396,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
     </article>
 
     <article class="card live-card reveal">
-      <span class="card-label">03 · LIVE MATCH</span>
+      <span class="card-label">LIVE MATCH</span>
       <div class="live-map" aria-hidden="true"><i class="ring"></i><i class="ping"></i></div>
       <h3>See who you are playing with</h3>
       <p>Map, queue, teams, agents, ranks, parties, recent form, and live score when the data is available.</p>
@@ -403,7 +404,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
     </article>
 
     <article class="card visual-card profile-card reveal">
-      <span class="card-label">04 · PROFILES</span>
+      <span class="card-label">PROFILES</span>
       <img src="assets/homepage-profile-detail.webp" width="1800" height="967" loading="lazy" decoding="async" alt="VantaVault detailed player profile and ranked progression">
       <div class="visual-copy"><h3>Ranks and matches that make sense</h3><p>Current RR, peak rank, win rate, agents, maps, and locally stored match history.</p></div>
     </article>
@@ -430,13 +431,13 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
     <p>These are real VantaVault screens, shown without replacement mockups.</p>
   </div>
   <div class="gallery reveal">
-    <div class="tabs" role="tablist">
-      <button class="tab active" data-screen="profile">Profile</button>
-      <button class="tab" data-screen="loadout">Loadouts</button>
-      <button class="tab" data-screen="customization">Customization</button>
-      <button class="tab" data-screen="social">Party & Friends</button>
+    <div class="tabs" role="tablist" aria-label="VantaVault app screens">
+      <button class="tab active" id="screen-tab-profile" role="tab" aria-selected="true" aria-controls="screen-panel" tabindex="0" data-screen="profile">Profile</button>
+      <button class="tab" id="screen-tab-loadout" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="loadout">Loadouts</button>
+      <button class="tab" id="screen-tab-customization" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="customization">Customization</button>
+      <button class="tab" id="screen-tab-social" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="social">Party & Friends</button>
     </div>
-    <div class="stage">
+    <div class="stage" id="screen-panel" role="tabpanel" aria-labelledby="screen-tab-profile" tabindex="0">
       <div class="stage-head"><span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span><span class="controls"><i></i><i></i><i></i></span></div>
       <img id="stage-image" src="assets/homepage-profile-detail.webp" width="1800" height="967" loading="lazy" decoding="async" alt="VantaVault profile screen">
     </div>
@@ -509,12 +510,69 @@ async function release(){
 }
 function tabs(){
   const image=$("#stage-image");
-  $$(".tab").forEach(b=>b.addEventListener("click",()=>{
-    if(b.classList.contains("active"))return;
-    $$(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");
-    const item=SCREENS[b.dataset.screen];image.classList.add("switch");
-    setTimeout(()=>{image.src=item.src;image.alt=item.alt;image.width=item.width||1800;image.height=item.height||967;image.classList.remove("switch")},150);
-  }));
+  const panel=$("#screen-panel");
+  const buttons=$$(".tab");
+  const activate=(button,{focus=false}={})=>{
+    const item=SCREENS[button.dataset.screen];
+    if(!item)return;
+    buttons.forEach(x=>{
+      const selected=x===button;
+      x.classList.toggle("active",selected);
+      x.setAttribute("aria-selected",String(selected));
+      x.tabIndex=selected?0:-1;
+    });
+    panel.setAttribute("aria-labelledby",button.id);
+    if(focus)button.focus();
+    if(image.getAttribute("src")===item.src)return;
+    panel.setAttribute("aria-busy","true");
+    image.classList.add("switch");
+    const next=new Image();
+    next.onload=()=>{
+      image.src=item.src;
+      image.alt=item.alt;
+      image.width=item.width||1800;
+      image.height=item.height||967;
+      image.classList.remove("switch");
+      panel.removeAttribute("aria-busy");
+    };
+    next.onerror=()=>{
+      image.classList.remove("switch");
+      panel.removeAttribute("aria-busy");
+    };
+    next.src=item.src;
+  };
+  buttons.forEach((button,index)=>{
+    button.addEventListener("click",()=>activate(button));
+    button.addEventListener("keydown",event=>{
+      let next=index;
+      if(event.key==="ArrowRight")next=(index+1)%buttons.length;
+      else if(event.key==="ArrowLeft")next=(index-1+buttons.length)%buttons.length;
+      else if(event.key==="Home")next=0;
+      else if(event.key==="End")next=buttons.length-1;
+      else return;
+      event.preventDefault();
+      activate(buttons[next],{focus:true});
+    });
+  });
+  const preload=()=>Object.values(SCREENS).forEach(item=>{const img=new Image();img.src=item.src});
+  if("requestIdleCallback"in window)requestIdleCallback(preload,{timeout:1800});
+  else setTimeout(preload,900);
+}
+function sectionNav(){
+  const links=$$(".nav a[href^='#']");
+  const sections=links.map(link=>document.querySelector(link.getAttribute("href"))).filter(Boolean);
+  if(!links.length||!sections.length||!("IntersectionObserver"in window))return;
+  const setCurrent=id=>links.forEach(link=>{
+    const active=link.getAttribute("href")===`#${id}`;
+    link.classList.toggle("is-current",active);
+    if(active)link.setAttribute("aria-current","location");
+    else link.removeAttribute("aria-current");
+  });
+  const observer=new IntersectionObserver(entries=>{
+    const visible=entries.filter(entry=>entry.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];
+    if(visible)setCurrent(visible.target.id);
+  },{rootMargin:"-25% 0px -58% 0px",threshold:[0,.2,.5]});
+  sections.forEach(section=>observer.observe(section));
 }
 function reveal(){
   const els=$$(".reveal");
@@ -522,7 +580,7 @@ function reveal(){
   const o=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add("visible");o.unobserve(x.target)}}),{threshold:.08});
   els.forEach(e=>o.observe(e));setTimeout(()=>els.forEach(e=>e.classList.add("visible")),1200);
 }
-document.addEventListener("DOMContentLoaded",()=>{tabs();reveal();release()});
+document.addEventListener("DOMContentLoaded",()=>{tabs();sectionNav();reveal();release()});
 </script>
 <script src="enhance.js"></script>
 <script>

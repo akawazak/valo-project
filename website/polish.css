@@ -1164,3 +1164,76 @@ h3,
   font-weight: 650;
   letter-spacing: -.01em;
 }
+
+/* Interaction polish that keeps the restored layout and palette intact. */
+#features,
+#screens,
+#download {
+  scroll-margin-top: 110px;
+}
+
+.nav a {
+  position: relative;
+}
+
+.nav a::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -8px;
+  left: 0;
+  height: 1px;
+  border-radius: 999px;
+  background: #ff4655;
+  opacity: 0;
+  transform: scaleX(.35);
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.nav a:hover::after,
+.nav a.is-current::after {
+  opacity: .9;
+  transform: scaleX(1);
+}
+
+.nav a.is-current {
+  color: #f3f5f7;
+}
+
+.stage {
+  outline: none;
+}
+
+.stage:focus-visible {
+  box-shadow: 0 0 0 2px #07090f, 0 0 0 4px rgba(255, 70, 85, .72);
+}
+
+.stage[aria-busy="true"] {
+  cursor: progress;
+}
+
+.tab[aria-selected="true"] {
+  color: #f5f7f9;
+}
+
+.tab:focus-visible {
+  outline: 2px solid rgba(255, 70, 85, .82);
+  outline-offset: 3px;
+}
+
+.stage img.switch {
+  opacity: .38;
+  transform: scale(.997);
+}
+
+.stage img {
+  transform-origin: center top;
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav a::after,
+  .stage img {
+    transition: none;
+  }
+}
