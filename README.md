@@ -6,7 +6,7 @@
     <a href="https://github.com/akawazak/valo-project/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/akawazak/valo-project?style=flat-square&color=ff4655" /></a>
     <a href="https://github.com/akawazak/valo-project"><img alt="Star VantaVault on GitHub" src="https://img.shields.io/github/stars/akawazak/valo-project?style=flat-square&logo=github&label=Stars" /></a>
     <a href="https://discord.gg/gxGQwWyECE"><img alt="Join the VantaVault Discord community" src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-    <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0f1923?style=flat-square" /></a>
+    <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/license-Apache--2.0-0f1923?style=flat-square" /></a>
     <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-0078d4?style=flat-square" />
     <img alt="Tauri" src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" />
   </p>
@@ -138,7 +138,7 @@ GitHub releases distribute Windows files; they do not host a web version of Vant
 - Party, loadout, presence, and live-match data depend on a running Riot client, the active Riot session, and the current game phase.
 - Riot does not expose every field consistently; VantaVault does not guess private identities or unknown party relationships.
 - Live score requires the local Riot client presence feed.
-- Flex cosmetics are not supported because no authoritative catalog/type is currently available.
+- Flex cosmetics are supported when Riot and the current community metadata catalog expose the item. Newly released artwork can briefly appear as cached or pending while the catalog refreshes in the background.
 
 ## Development
 
@@ -209,6 +209,71 @@ npm.cmd run dev
 
 This is only useful for interface work. Riot accounts, the private backend, Discord Rich Presence, updates, and other Tauri features require `npm.cmd run desktop`.
 
+### Android development target
+
+Android is a second native Tauri target; it does not replace or reduce the Windows app. It has a separate phone-oriented interface under `frontend/src/mobile` while reusing the same data contracts and remote-account backend routes. Android embeds the Go backend as an in-process ARM library; Windows continues to build and launch the Go `.exe` sidecar.
+
+The Android target is installable for device testing and has a production signing path, but it is not yet published on Google Play. Riot sign-in runs in an isolated native Android WebView, and persistent Riot session secrets are encrypted with an app-owned AES-256-GCM key in Android Keystore. The encrypted envelopes are stored under Android's no-backup application directory. Short-lived Riot access is renewed silently from that saved session before expiry and once after startup if the app was closed while it expired; the Accounts sheet exposes Renew/Repair when Riot requires sign-in again. The local chat archive uses a separate random Android key wrapped by the same Keystore-backed key, so saved Riot conversations survive app restarts without storing the archive key in plaintext. Windows-only features such as the Riot lockfile, local game detection, Alt+T overlay, tray, autostart, Discord Rich Presence, and desktop updater are intentionally excluded from Android.
+
+The mobile interface currently includes the daily and featured stores, Night Market, wallet, party, contracts and Battle Pass progress, player identity and sprays, owned weapon/skin/variant/buddy loadouts, full preset editing and application, a unified friends/chat view, conditional live-match data, player and friend profiles, rank progression, profile statistics, and locally cached match history. Daily checkpoints display Riot's real four-charge progress for all four milestones. Night Market opens as a focused bottom sheet instead of expanding the Home feed, while equipped sprays use the same shared four-direction Riot slot model as Windows and VALORANT. Tapping the Home player card or an individual spray wedge deep-links directly into that live-loadout picker. Existing encrypted conversations load their newest page immediately, visibly report Riot-history sync state, and can page backward through older cached messages without sending another Riot archive request or losing scroll position. Recent matches expose queue/act filters and a lazy cached ten-player scoreboard; any non-local scoreboard player can be opened as another profile. The preset screen keeps the equipped loadout as its editable baseline, exposes explicit Edit and Apply actions, and uses compact bottom-sheet pickers for owned cards, owned titles, and individual spray-wheel slots; agent auto-switch assignments reject agents that the current account does not own. Desktop and Android call the same preset payload builder, including variant inheritance for weapons, identity, sprays, flexes, and expressions. It exposes the useful desktop account data in a phone-oriented layout instead of copying the desktop window structure.
+
+Install Android Studio and use SDK Manager to install:
+
+- Android SDK Platform 36
+- Android SDK Platform-Tools
+- Android SDK Build-Tools 36
+- Android SDK Command-line Tools
+- A stable Android NDK (Side by side)
+
+Set `JAVA_HOME`, `ANDROID_HOME`, and `NDK_HOME` to the Android Studio JDK, SDK, and installed NDK. Then install the Rust Android targets:
+
+```powershell
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+```
+
+Connect an Android phone with USB debugging enabled and accepted, then verify it is available:
+
+```powershell
+& "$env:ANDROID_HOME\platform-tools\adb.exe" devices
+```
+
+Windows Developer Mode is recommended because Tauri creates a JNI symbolic link during Android builds. With Developer Mode enabled, run:
+
+```powershell
+cd path\to\valo-project\frontend
+npm install
+npm run android:dev -- --open
+```
+
+Keep the Tauri command running while Android Studio is open. To build an ARM64 debug APK:
+
+```powershell
+npm run android:build -- --debug --apk --target aarch64
+```
+
+The generated Android Studio project is under `frontend\src-tauri\gen\android`.
+
+Pull requests that touch the frontend or backend run an ARM64 Android build, Gradle unit tests, and Android lint in GitHub Actions. Production keystore and Windows publisher-certificate setup is documented in [Release signing](docs/RELEASE_SIGNING.md); private keys are never stored in the repository.
+
+If Windows Developer Mode is disabled, Tauri can still compile the Rust and Go libraries but stops at the JNI symlink step. For an ARM64 phone, copy the compiled library, let Gradle package it without rebuilding Rust, and install the APK:
+
+```powershell
+Copy-Item `
+  .\src-tauri\target\aarch64-linux-android\debug\libapp_lib.so `
+  .\src-tauri\gen\android\app\src\main\jniLibs\arm64-v8a\libapp_lib.so `
+  -Force
+
+cd .\src-tauri\gen\android
+.\gradlew.bat :app:assembleArm64Debug -x :app:rustBuildArm64Debug --no-daemon
+
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r `
+  .\app\build\outputs\apk\arm64\debug\app-arm64-debug.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" shell monkey `
+  -p com.akawazak.valovault -c android.intent.category.LAUNCHER 1
+```
+
+This workaround does not require the Windows C++ workload. The C++ workload listed above is still a Windows-from-source requirement for Rust's MSVC linker; it is not an Android app dependency.
+
 ### Discord Rich Presence
 
 The official VantaVault Discord Application ID and `logo` asset are already configured. Keep the Discord desktop app running and VantaVault connects automatically, including when Discord starts after VantaVault. Forks can override the ID with `VANTAVAULT_DISCORD_CLIENT_ID` or a `discord_client_id.txt` file in the VantaVault app configuration directory.
@@ -239,4 +304,4 @@ Fork the repository, branch from the latest `main`, keep changes focused, run th
 - [truearken/valovault](https://github.com/truearken/valovault) — original loadout workflow, local-client integration, and Tauri foundation.
 - [victorxia18/valorant-shop-checker](https://github.com/victorxia18/valorant-shop-checker) — inspiration for Riot OAuth and remote storefront retrieval.
 
-Released under the [MIT License](LICENSE).
+Released under the [Apache License 2.0](LICENSE).

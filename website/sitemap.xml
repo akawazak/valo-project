@@ -1,8 +1,68 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
   <url>
     <loc>https://vanta-vault-app.vercel.app/</loc>
+    <lastmod>2026-08-02</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/storefront.png</image:loc>
+      <image:title>VantaVault VALORANT storefront and featured bundle</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/current-loadout.png</image:loc>
+      <image:title>VantaVault VALORANT loadout manager</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/profile.png</image:loc>
+      <image:title>VantaVault VALORANT profile, rank, and match history</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-store-checker</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/storefront.png</image:loc>
+      <image:title>VantaVault VALORANT store checker</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-loadout-manager</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/current-loadout.png</image:loc>
+      <image:title>VantaVault VALORANT loadout manager and presets</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-match-history</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/profile.png</image:loc>
+      <image:title>VantaVault VALORANT rank and match history</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-live-match</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/live-match-fracture.png</image:loc>
+      <image:title>VantaVault VALORANT party and live match companion</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/privacy-and-security</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
   </url>
 </urlset>

@@ -1,10 +1,14 @@
 {
   "name": "VantaVault",
   "short_name": "VantaVault",
-  "description": "A free open-source VALORANT companion for Windows.",
+  "description": "A free open-source VALORANT store, loadout, stats, match history, party, and friends companion for Windows.",
+  "id": "/",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "categories": ["games", "utilities", "entertainment"],
   "background_color": "#07090f",
   "theme_color": "#07090f",
   "icons": [

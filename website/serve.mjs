@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname);
@@ -15,7 +15,7 @@ const mimeTypes = {
 http.createServer(async (request, response) => {
   const requestPath = decodeURIComponent(request.url?.split("?")[0] || "/");
   const relativePath = requestPath === "/" ? "index.html" : requestPath.replace(/^\/+/, "");
-  const filePath = path.resolve(root, relativePath);
+  let filePath = path.resolve(root, relativePath);
 
   if (!filePath.startsWith(root)) {
     response.writeHead(403);
@@ -24,6 +24,8 @@ http.createServer(async (request, response) => {
   }
 
   try {
+    const fileStats = await stat(filePath);
+    if (fileStats.isDirectory()) filePath = path.join(filePath, "index.html");
     const body = await readFile(filePath);
     response.writeHead(200, {
       "Cache-Control": "no-store",

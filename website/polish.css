@@ -542,6 +542,28 @@ body::after {
   object-position: top center;
 }
 
+.detail-link {
+  position: relative;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin-top: 16px;
+  color: #eef1f7;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.detail-link span {
+  color: var(--red2);
+  transition: transform .2s ease;
+}
+
+.detail-link:hover span {
+  transform: translateX(3px);
+}
+
 .visual-copy {
   right: auto;
   width: min(520px, calc(100% - 54px));
