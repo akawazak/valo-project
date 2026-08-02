@@ -1,0 +1,17 @@
+{
+  "name": "VantaVault",
+  "short_name": "VantaVault",
+  "description": "A free open-source VALORANT companion for Windows.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07090f",
+  "theme_color": "#07090f",
+  "icons": [
+    {
+      "src": "/assets/app-icon.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    }
+  ]
+}
