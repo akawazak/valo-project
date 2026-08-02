@@ -3,11 +3,11 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "redirects": [
-    { "source": "/valorant-store-checker", "destination": "/#features", "permanent": false },
-    { "source": "/valorant-loadout-manager", "destination": "/#features", "permanent": false },
-    { "source": "/valorant-match-history", "destination": "/#features", "permanent": false },
-    { "source": "/valorant-live-match", "destination": "/#features", "permanent": false },
-    { "source": "/privacy-and-security", "destination": "/#download", "permanent": false }
+    { "source": "/valorant-store-checker", "destination": "/#features", "permanent": true },
+    { "source": "/valorant-loadout-manager", "destination": "/#features", "permanent": true },
+    { "source": "/valorant-match-history", "destination": "/#features", "permanent": true },
+    { "source": "/valorant-live-match", "destination": "/#features", "permanent": true },
+    { "source": "/privacy-and-security", "destination": "/#download", "permanent": true }
   ],
   "headers": [
     {

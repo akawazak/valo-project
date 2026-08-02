@@ -1237,3 +1237,178 @@ h3,
     transition: none;
   }
 }
+
+/* Premium finish: the same composition, with clearer depth and hierarchy. */
+.header {
+  border-color: rgba(179, 188, 201, .23);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .035),
+    0 20px 55px rgba(0, 0, 0, .28);
+}
+
+.brand-badge {
+  border-color: rgba(255, 94, 107, .26);
+  background: #0b0e14;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .025),
+    0 0 24px rgba(255, 70, 85, .09);
+}
+
+.brand-word {
+  letter-spacing: -.025em;
+}
+
+.hero-copy h1 {
+  color: #f7f8fa;
+  text-shadow: 0 18px 58px rgba(0, 0, 0, .32);
+  text-wrap: balance;
+}
+
+.hero-copy h1 em,
+.heading h2 em,
+.download-box h2 em {
+  color: #aeb5c0;
+  -webkit-text-stroke: 0;
+}
+
+.hero-meta div {
+  position: relative;
+  padding-left: 13px;
+}
+
+.hero-meta div::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 1px;
+  background: rgba(255, 70, 85, .55);
+}
+
+.app-frame {
+  border-color: rgba(181, 191, 205, .3);
+  background: #0a0d13;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .05),
+    0 36px 95px rgba(0, 0, 0, .5),
+    0 0 0 1px rgba(255, 70, 85, .035);
+}
+
+.app-frame img {
+  filter: saturate(1.08) contrast(1.035) brightness(1.02);
+}
+
+.windowbar,
+.stage-head {
+  background: #11151d;
+}
+
+.btn.primary {
+  background: #ff4655;
+  border-color: rgba(255, 126, 137, .72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .2),
+    0 16px 35px rgba(255, 70, 85, .2);
+}
+
+.btn.primary:hover {
+  background: #ff5260;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .22),
+    0 20px 42px rgba(255, 70, 85, .26);
+}
+
+.btn.secondary {
+  border-color: rgba(171, 181, 195, .2);
+  background: rgba(255, 255, 255, .035);
+}
+
+.card,
+.privacy-card {
+  border-color: rgba(167, 177, 191, .2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .028),
+    0 24px 60px rgba(0, 0, 0, .16);
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.card:hover,
+.privacy-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(207, 215, 226, .3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .04),
+    0 30px 70px rgba(0, 0, 0, .22);
+}
+
+.card-label {
+  color: #929ba7;
+}
+
+.visual-copy {
+  border-color: rgba(176, 186, 199, .22);
+  border-left-color: #ff4655;
+  background: rgba(7, 10, 14, .96);
+}
+
+.privacy-list div {
+  border-color: rgba(170, 180, 193, .19);
+  background: rgba(255, 255, 255, .022);
+  transition: border-color .18s ease, background .18s ease;
+}
+
+.privacy-list div:hover {
+  border-color: rgba(255, 70, 85, .32);
+  background: rgba(255, 70, 85, .025);
+}
+
+.gallery {
+  border-color: rgba(183, 193, 207, .24);
+  background: #0c1016;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .035),
+    0 40px 105px rgba(0, 0, 0, .42);
+}
+
+.stage {
+  border-color: rgba(191, 201, 214, .25);
+  background: #070a0f;
+}
+
+.stage img {
+  filter: saturate(1.06) contrast(1.025);
+}
+
+.download-box {
+  border-color: rgba(181, 191, 204, .23);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .035),
+    0 34px 90px rgba(0, 0, 0, .24);
+}
+
+.release {
+  border-color: rgba(188, 198, 212, .22);
+  background: #0a0e14;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+@media (max-width: 760px) {
+  .hero-meta div {
+    min-width: 92px;
+    padding-left: 10px;
+  }
+
+  .card:hover,
+  .privacy-card:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .privacy-card,
+  .privacy-list div {
+    transition: none;
+  }
+}

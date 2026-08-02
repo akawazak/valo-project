@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#07090f">
+<meta name="color-scheme" content="dark">
 <meta name="description" content="Download VantaVault, a free open-source VALORANT companion for Windows: store checker, skin and loadout manager, rank stats, match history, live party, and friends.">
 <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
 <meta name="author" content="VantaVault">
 <meta name="application-name" content="VantaVault">
+<meta name="google-site-verification" content="lT8tHICuZrDdK3foyXBpgu0lUsu2eSzZVy_X3CcFYds">
 <link rel="canonical" href="https://vanta-vault-app.vercel.app/">
 <link rel="alternate" hreflang="en" href="https://vanta-vault-app.vercel.app/">
 <link rel="alternate" hreflang="x-default" href="https://vanta-vault-app.vercel.app/">
@@ -16,11 +18,12 @@
 <link rel="apple-touch-icon" href="/assets/app-icon.png">
 <link rel="manifest" href="/site.webmanifest">
 <link rel="preload" as="image" href="/assets/homepage-profile-detail.webp" type="image/webp" fetchpriority="high">
+<link rel="preconnect" href="https://api.github.com" crossorigin>
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="VantaVault">
 <meta property="og:locale" content="en_US">
-<meta property="og:title" content="VantaVault — Free VALORANT Store & Stats Companion">
+<meta property="og:title" content="VantaVault — VALORANT Store Checker, Loadouts & Stats">
 <meta property="og:description" content="Check your VALORANT store, manage skins and loadouts, track rank and matches, and follow your party from one private Windows app.">
 <meta property="og:url" content="https://vanta-vault-app.vercel.app/">
 <meta property="og:image" content="https://vanta-vault-app.vercel.app/assets/social-preview.png">
@@ -31,12 +34,12 @@
 <meta property="og:image:alt" content="VantaVault showing a VALORANT storefront and featured bundle">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="VantaVault — Free VALORANT Store & Stats Companion">
+<meta name="twitter:title" content="VantaVault — VALORANT Store Checker, Loadouts & Stats">
 <meta name="twitter:description" content="Check your VALORANT store, manage skins and loadouts, track rank and matches, and follow your party from one private Windows app.">
 <meta name="twitter:image" content="https://vanta-vault-app.vercel.app/assets/social-preview.png">
 <meta name="twitter:image:alt" content="VantaVault showing a VALORANT storefront and featured bundle">
 
-<title>VantaVault — Free VALORANT Store & Stats Companion</title>
+<title>VantaVault — VALORANT Store Checker, Loadouts & Stats</title>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -574,13 +577,26 @@ function sectionNav(){
   },{rootMargin:"-25% 0px -58% 0px",threshold:[0,.2,.5]});
   sections.forEach(section=>observer.observe(section));
 }
+function analytics(){
+  const send=(name,data)=>{
+    if(typeof window.va==="function")window.va("event",{name,data});
+  };
+  $$(".download-link").forEach(link=>link.addEventListener("click",()=>{
+    const location=link.classList.contains("mini-download")?"header":link.id==="main-download"?"release":"hero";
+    send("Download",{location});
+  }));
+  $$('a[href*="github.com/akawazak/valo-project"]:not(.download-link)').forEach(link=>link.addEventListener("click",()=>{
+    send("GitHub",{location:link.closest("footer")?"footer":link.closest(".release")?"release":"page"});
+  }));
+  $$(".tab").forEach(tab=>tab.addEventListener("click",()=>send("Screen preview",{screen:tab.dataset.screen})));
+}
 function reveal(){
   const els=$$(".reveal");
   if(!("IntersectionObserver"in window)){els.forEach(e=>e.classList.add("visible"));return}
   const o=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add("visible");o.unobserve(x.target)}}),{threshold:.08});
   els.forEach(e=>o.observe(e));setTimeout(()=>els.forEach(e=>e.classList.add("visible")),1200);
 }
-document.addEventListener("DOMContentLoaded",()=>{tabs();sectionNav();reveal();release()});
+document.addEventListener("DOMContentLoaded",()=>{tabs();sectionNav();analytics();reveal();release()});
 </script>
 <script src="enhance.js"></script>
 <script>

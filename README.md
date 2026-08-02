@@ -11,6 +11,7 @@
     <img alt="Tauri" src="https://img.shields.io/badge/desktop-Tauri-24c8db?style=flat-square" />
   </p>
   <p>
+    <a href="https://vanta-vault-app.vercel.app/"><strong>Website</strong></a> ·
     <a href="https://github.com/akawazak/valo-project/releases/latest"><strong>Download for Windows</strong></a> ·
     <a href="#screenshots">Screenshots</a> ·
     <a href="#features">Features</a> ·
