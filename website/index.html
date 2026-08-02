@@ -579,7 +579,11 @@ function sectionNav(){
 }
 function analytics(){
   const send=(name,data)=>{
-    if(typeof window.va==="function")window.va("event",{name,data});
+    if(typeof window.va==="function"){
+      window.va("event",{name,data});
+      return;
+    }
+    (window.vaq=window.vaq||[]).push(["event",{name,data}]);
   };
   $$(".download-link").forEach(link=>link.addEventListener("click",()=>{
     const location=link.classList.contains("mini-download")?"header":link.id==="main-download"?"release":"hero";
