@@ -3,13 +3,6 @@ import { readFile, stat } from "node:fs/promises";
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const sitemap = await readFile(new URL("./sitemap.xml", import.meta.url), "utf8");
 const manifestText = await readFile(new URL("./site.webmanifest", import.meta.url), "utf8");
-const featureRoutes = [
-  "valorant-store-checker",
-  "valorant-loadout-manager",
-  "valorant-match-history",
-  "valorant-live-match",
-  "privacy-and-security",
-];
 const required = [
   '<meta name="description"',
   '<meta property="og:title"',
@@ -55,20 +48,8 @@ if (!sitemap.includes("<lastmod>2026-08-02</lastmod>") || !sitemap.includes("<im
   throw new Error("Sitemap is missing freshness or image discovery metadata.");
 }
 
-for (const route of featureRoutes) {
-  const page = await readFile(new URL(`./${route}/index.html`, import.meta.url), "utf8");
-  const expectedCanonical = `https://vanta-vault-app.vercel.app/${route}`;
-  if (!page.includes(`<link rel="canonical" href="${expectedCanonical}">`)) {
-    throw new Error(`${route} is missing its canonical URL.`);
-  }
-  if (!page.includes("application/ld+json") || !page.includes("/_vercel/insights/script.js")) {
-    throw new Error(`${route} is missing structured data or analytics.`);
-  }
-  const pageSchema = [...page.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
-  for (const [, json] of pageSchema) JSON.parse(json);
-  if (!sitemap.includes(`<loc>${expectedCanonical}</loc>`)) {
-    throw new Error(`${route} is missing from sitemap.xml.`);
-  }
+if ((sitemap.match(/<loc>/g) || []).length !== 1) {
+  throw new Error("The restored single-page website sitemap must contain only the homepage.");
 }
 
 if (/data:image\/webp;base64/i.test(html)) {
