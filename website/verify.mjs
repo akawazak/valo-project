@@ -19,6 +19,10 @@ const required = [
   '"featureList"',
   'store checker',
   'loadout manager',
+  'id="download-dialog"',
+  'Choose a platform',
+  'Android .apk',
+  'releases?per_page=30',
   'https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe',
 ];
 
@@ -35,8 +39,34 @@ if (!html.includes('/_vercel/speed-insights/script.js') || !html.includes('windo
   throw new Error('Vercel Speed Insights is not installed in website/index.html.');
 }
 
-if (/lorem ipsum|example\.com|TODO|coming soon/i.test(html)) {
+if (/lorem ipsum|example\.com|TODO/i.test(html)) {
   throw new Error("Website contains prototype placeholder copy.");
+}
+
+const releaseLogicStart = html.indexOf("function versionParts");
+const releaseLogicEnd = html.indexOf("async function release", releaseLogicStart);
+if (releaseLogicStart < 0 || releaseLogicEnd < 0) {
+  throw new Error("Release comparison logic is missing.");
+}
+const releaseLogicSource = html.slice(releaseLogicStart, releaseLogicEnd);
+const { compareReleases, newestRelease } = new Function(
+  `${releaseLogicSource}; return { compareReleases, newestRelease };`,
+)();
+const releaseFixtures = [
+  { tag_name: "v0.9.9", published_at: "2026-08-03T00:00:00Z", assets: [{ name: "VantaVault-portable.exe" }] },
+  { tag_name: "v0.10.0", published_at: "2026-07-01T00:00:00Z", assets: [{ name: "VantaVault-portable.exe" }] },
+  { tag_name: "v0.11.0-beta.1", prerelease: true, published_at: "2026-08-04T00:00:00Z", assets: [{ name: "VantaVault.apk" }] },
+];
+const orderedVersions = [...releaseFixtures].sort(compareReleases).map((release) => release.tag_name);
+if (orderedVersions.join(",") !== "v0.11.0-beta.1,v0.10.0,v0.9.9") {
+  throw new Error(`Release semantic version ordering is incorrect: ${orderedVersions.join(",")}`);
+}
+const stableWindows = newestRelease(releaseFixtures, {
+  stableOnly: true,
+  assetTest: (asset) => asset.name.endsWith(".exe"),
+});
+if (stableWindows?.tag_name !== "v0.10.0") {
+  throw new Error("Release selection did not choose the highest stable Windows version.");
 }
 
 const schemaBlocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
@@ -45,7 +75,7 @@ if (!schemaBlocks.length) {
 }
 for (const [, json] of schemaBlocks) JSON.parse(json);
 
-if (!sitemap.includes("<lastmod>2026-08-02</lastmod>") || !sitemap.includes("<image:image>")) {
+if (!sitemap.includes("<lastmod>2026-08-03</lastmod>") || !sitemap.includes("<image:image>")) {
   throw new Error("Sitemap is missing freshness or image discovery metadata.");
 }
 
