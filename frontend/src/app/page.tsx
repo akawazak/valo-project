@@ -59,7 +59,7 @@ import type { AppTab } from '@/lib/appTabs';
 import MobileApp from '@/mobile/MobileAppV2';
 
 const CURRENT_RELEASE: ReleaseNotes = {
-    version: "0.5.28",
+    version: "0.5.29",
     title: "What’s new",
     summary: "A stability release for saved accounts, cached live-match context, and the shared desktop and Android experience.",
     added: [

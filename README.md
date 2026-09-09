@@ -113,7 +113,7 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.28
+## What's new in 0.5.29
 
 - Account Manager preserves its saved order while it is open, scrolls to the current account, and applies favorite ordering only after it is reopened.
 - Account rows can retain their player-card previews and communicate ready, expired, and sign-in-required states more clearly.
