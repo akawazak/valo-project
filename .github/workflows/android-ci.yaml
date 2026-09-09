@@ -34,8 +34,8 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.77.2 --profile minimal --target aarch64-linux-android
-          rustup default 1.77.2
+          rustup toolchain install 1.86.0 --profile minimal --target aarch64-linux-android
+          rustup default 1.86.0
       - uses: actions/setup-java@b36c23c0d998641eff861008f374ee103c25ac73 # v4.4.0
         with:
           distribution: temurin
