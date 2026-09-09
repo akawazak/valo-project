@@ -43,9 +43,13 @@ jobs:
       - name: Install Android SDK and NDK
         shell: pwsh
         run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
-          "NDK_HOME=$env:ANDROID_HOME\ndk\27.2.12479018" >> $env:GITHUB_ENV
-          "ANDROID_NDK_HOME=$env:ANDROID_HOME\ndk\27.2.12479018" >> $env:GITHUB_ENV
+          $sdkManager = Get-ChildItem (Join-Path $env:ANDROID_HOME "cmdline-tools") -Recurse -Filter "sdkmanager.bat" | Select-Object -First 1
+          if (!$sdkManager) { throw "sdkmanager.bat was not found under ANDROID_HOME." }
+          & $sdkManager.FullName "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          if ($LASTEXITCODE -ne 0) { throw "Android SDK installation failed." }
+          $ndkHome = Join-Path $env:ANDROID_HOME "ndk\27.2.12479018"
+          "NDK_HOME=$ndkHome" >> $env:GITHUB_ENV
+          "ANDROID_NDK_HOME=$ndkHome" >> $env:GITHUB_ENV
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
