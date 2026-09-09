@@ -27,7 +27,7 @@ tauri-plugin-http = "2"
 tauri-plugin-shell = "2"
 url = "2"
 rusqlite = { version = "0.31", features = ["bundled"] }
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 base64 = "0.22"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
