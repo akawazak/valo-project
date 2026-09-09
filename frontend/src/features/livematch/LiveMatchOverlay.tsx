@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, getLivePlayerStats, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutItem, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer, LivePlayerStats } from '@/services/api';
+import { fetchCachedPublicJson, getLiveLoadouts, getLiveMatch, refreshLiveMatchRanks, scanLiveMatchLikelyStacks, LiveLoadoutItem, LiveLoadoutsResponse, LiveMatchResponse, LivePlayer } from '@/services/api';
 import { useData } from '@/context/DataContext';
 import { useFloatingWidgetDrag } from '@/hooks/useFloatingWidgetDrag';
 import { GunBuddy, Weapon } from '@/lib/types';
@@ -252,7 +252,7 @@ export default function LiveMatchOverlay() {
                     }
                 }
                 setMapCache(m);
-            }).catch(err => console.error("Error loading maps API", err));
+            }).catch(err => console.warn("Error loading maps API", err instanceof Error ? err.message : String(err)));
 
         fetchCachedPublicJson<{ data?: LivePublicAgent[] }>("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
             .then(d => {
@@ -267,7 +267,7 @@ export default function LiveMatchOverlay() {
                     }
                 }
                 setAgentCache(a);
-            }).catch(err => console.error("Error loading agents API", err));
+            }).catch(err => console.warn("Error loading agents API", err instanceof Error ? err.message : String(err)));
 
         fetchCachedPublicJson<{ data?: LivePublicTierSet[] }>("https://valorant-api.com/v1/competitivetiers")
             .then(d => {
@@ -280,7 +280,7 @@ export default function LiveMatchOverlay() {
                     };
                 }
                 setTierCache(t);
-            }).catch(err => console.error("Error loading competitive tiers API", err));
+            }).catch(err => console.warn("Error loading competitive tiers API", err instanceof Error ? err.message : String(err)));
 
         fetchCachedPublicJson<{ data?: LivePublicGameMode[] }>("https://valorant-api.com/v1/gamemodes")
             .then(d => {
@@ -292,7 +292,7 @@ export default function LiveMatchOverlay() {
                     if (mode.displayName) modes[modeLookupKey(mode.displayName)] = icon;
                 }
                 setGameModeCache(modes);
-            }).catch(err => console.error("Error loading game modes API", err));
+            }).catch(err => console.warn("Error loading game modes API", err instanceof Error ? err.message : String(err)));
     }, []);
 
     if (!activeAccount) return null;
@@ -376,6 +376,7 @@ export default function LiveMatchOverlay() {
     const sortedAllies = stablePlayerSort(match.allyTeam);
     const sortedEnemies = stablePlayerSort(match.enemyTeam);
     const partySizes = partyGroupSizes([...sortedAllies, ...sortedEnemies]);
+    const historyPartySizes = historyGroupSizes([...sortedAllies, ...sortedEnemies]);
     const partyColors = partyGroupColors(partySizes);
     const yourPartySize = partySizes.get("your-party") || 0;
     const yourPartyColor = partyColors.get("your-party");
@@ -389,14 +390,14 @@ export default function LiveMatchOverlay() {
         setMatch(refreshed);
         setRankRefreshState("idle");
     };
-    const scanLikelyStacks = async () => {
+    const rescanParties = async () => {
         setStackScanState("loading");
-        const scanned = await scanLiveMatchLikelyStacks();
-        if (scanned.phase === "none") {
+        const rescanned = await scanLiveMatchLikelyStacks();
+        if (rescanned.phase === "none") {
             setStackScanState("error");
             return;
         }
-        setMatch(scanned);
+        setMatch(rescanned);
         setStackScanState("idle");
     };
     return (
@@ -418,24 +419,25 @@ export default function LiveMatchOverlay() {
                         <span>{queueName}</span>
                     </div>
                     {match.source && <div className="game-source-tag">{match.source}</div>}
-                    <button
-                        type="button"
-                        className={`live-match-ranks-button${rankRefreshState === "error" ? " is-error" : ""}`}
-                        onClick={() => void refreshRanks()}
-                        disabled={rankRefreshState === "loading"}
-                        title="Retry the automatic current-rank lookup for identifiable players"
-                    >
-                        {rankRefreshState === "loading" ? "Refreshing ranks…" : rankRefreshState === "error" ? "Ranks unavailable" : "Refresh ranks"}
-                    </button>
-                    <button
-                        type="button"
-                        className={`live-match-ranks-button${stackScanState === "error" ? " is-error" : ""}`}
-                        onClick={() => void scanLikelyStacks()}
-                        disabled={stackScanState === "loading"}
-                        title="Retry the automatic likely-stack scan using recent completed matches"
-                    >
-                        {stackScanState === "loading" ? "Scanning stacks…" : stackScanState === "error" ? "Stacks unavailable" : "Rescan likely stacks"}
-                    </button>
+                    <div className="live-match-refresh-actions">
+                        <button
+                            type="button"
+                            className={rankRefreshState === "error" ? "is-error" : ""}
+                            onClick={() => void refreshRanks()}
+                            disabled={rankRefreshState === "loading"}
+                        >
+                            {rankRefreshState === "loading" ? "Refreshing…" : rankRefreshState === "error" ? "Ranks unavailable" : "Refresh ranks"}
+                        </button>
+                        <button
+                            type="button"
+                            className={stackScanState === "error" ? "is-error" : ""}
+                            onClick={() => void rescanParties()}
+                            disabled={stackScanState === "loading"}
+                            title="Re-read prior-party evidence from saved completed matches"
+                        >
+                            {stackScanState === "loading" ? "Checking cache…" : stackScanState === "error" ? "Cache unavailable" : "Rescan likely stacks"}
+                        </button>
+                    </div>
                 </div>
                 <h1 className="map-display-name">{currentMap.name}</h1>
                 {match.phase === "pregame" && displayedTimeLeft > 0 && (
@@ -478,11 +480,10 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
-                                peakTier={tierCache[player.peakTier || 0]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
-                                partyConfidence={player.partyConfidence}
+                                historyPartySize={player.historyPartyGroup ? historyPartySizes.get(player.historyPartyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -503,11 +504,10 @@ export default function LiveMatchOverlay() {
                                 agent={agentCache[player.agentId?.toLowerCase()]}
                                 cardIcon={playerCardIcons.get(player.cardId?.toLowerCase())}
                                 tier={tierCache[player.competitiveTier]}
-                                peakTier={tierCache[player.peakTier || 0]}
                                 partySize={player.partyGroup ? partySizes.get(player.partyGroup) : undefined}
                                 partyColor={player.partyGroup ? partyColors.get(player.partyGroup) : undefined}
                                 partyGroup={player.partyGroup}
-                                partyConfidence={player.partyConfidence}
+                                historyPartySize={player.historyPartyGroup ? historyPartySizes.get(player.historyPartyGroup) : undefined}
                                 onSelect={setSelectedPlayer}
                             />
                         ))}
@@ -521,7 +521,7 @@ export default function LiveMatchOverlay() {
                     agent={agentCache[selectedPlayer.agentId?.toLowerCase()]}
                     cardIcon={playerCardIcons.get(selectedPlayer.cardId?.toLowerCase())}
                     tier={tierCache[selectedPlayer.competitiveTier]}
-                    peakTier={tierCache[selectedPlayer.peakTier || 0]}
+                    peakTier={tierCache[selectedPlayer.peakTier || selectedPlayer.cachedEvidence?.peakTier || 0]}
                     weapons={weapons}
                     buddies={allBuddies}
                     onClose={() => setSelectedPlayer(null)}
@@ -555,6 +555,14 @@ function partyGroupSizes(players: LivePlayer[]) {
     return sizes;
 }
 
+function historyGroupSizes(players: LivePlayer[]) {
+    const sizes = new Map<string, number>();
+    for (const player of players) {
+        if (player.historyPartyGroup) sizes.set(player.historyPartyGroup, (sizes.get(player.historyPartyGroup) || 0) + 1);
+    }
+    return sizes;
+}
+
 function partyGroupColors(sizes: Map<string, number>) {
     const colors = ["#31d8b2", "#e9a84b", "#b47cff", "#55a9ff", "#ff6f91"];
     const groups = new Map<string, string>();
@@ -572,35 +580,32 @@ function PlayerCard({
     agent,
     cardIcon,
     tier,
-    peakTier,
     partySize,
     partyColor,
     partyGroup,
-    partyConfidence,
+    historyPartySize,
     onSelect,
 }: {
     player: LivePlayer;
     agent?: { name: string; icon: string; full: string };
     cardIcon?: string;
     tier?: { name: string; icon: string };
-    peakTier?: { name: string; icon: string };
     partySize?: number;
     partyColor?: string;
     partyGroup?: string;
-    partyConfidence?: "likely";
+    historyPartySize?: number;
     onSelect: (player: LivePlayer) => void;
 }) {
     const isLocked = player.selectionState === "locked";
     const isSelecting = player.selectionState === "selected";
     const rankName = tier?.name || (player.puuid ? "Rank unavailable" : "Hidden");
     const rankShort = tier?.name ? tier.name.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : rankName;
-    const peakName = player.peakRankName || peakTier?.name || "";
-    const peakShort = peakName ? peakName.replace("Radiant", "Rad").replace("Immortal", "Imm").replace("Ascendant", "Asc") : "";
     const displayName = privatePlayerLabel(player, agent?.name);
     const partyPillText = partySize && partySize > 1
-        ? partyConfidence === "likely"
-            ? `LIKELY ${partySize === 2 ? "DUO" : `${partySize}-STACK`}`
-            : partyPillLabel(partySize, partyGroup, player.isLocal)
+        ? partyPillLabel(partySize, partyGroup, player.isLocal)
+        : null;
+    const priorPartyText = !partyPillText && historyPartySize && historyPartySize > 1
+        ? `PRIOR ${historyPartySize === 2 ? "DUO" : `${historyPartySize}-STACK`} · ${player.historyPartyMatches || 1}`
         : null;
 
     return (
@@ -632,11 +637,19 @@ function PlayerCard({
                         <span className="player-display-name">{displayName}</span>
                         {player.isLocal && <span className="local-user-pill">YOU</span>}
                         {partyPillText ? <span className="player-party-pill">{partyPillText}</span> : null}
+                        {priorPartyText ? (
+                            <span
+                                className="player-history-party-pill"
+                                title={`These players shared a Riot party in ${player.historyPartyMatches || 1} cached match${player.historyPartyMatches === 1 ? "" : "es"}. This does not claim they are grouped now.`}
+                            >
+                                {priorPartyText}
+                            </span>
+                        ) : null}
                     </div>
                     <span className="agent-name-display">
                         {agent ? agent.name : (isLocked || isSelecting ? "Agent Selection" : "Selecting...")}
                     </span>
-                    <PlayerStatsLine player={player} agentId={player.agentId} />
+                    <CachedStatsLine player={player} />
                 </div>
             </div>
 
@@ -646,21 +659,9 @@ function PlayerCard({
                         <img src={tier.icon} alt={tier.name} className="player-rank-icon" title={tier.name} />
                         {player.competitiveTier > 0 && (
                             <div className="rank-rating-text">
-                                <span className="tier-name">{rankShort}</span>
-                                <span className="rr-val">{player.rankedRating} RR</span>
-                                {player.peakTier && peakShort && (
-                                    <span className="peak-rank-mini">
-                                        {peakTier?.icon && <img src={peakTier.icon} alt="" aria-hidden="true" />}
-                                        Peak {peakShort}
-                                    </span>
-                                )}
+                                <span className="tier-name">{rankShort}{player.rankedRating !== undefined ? ` · ${player.rankedRating} RR` : ""}</span>
                             </div>
                         )}
-                    </div>
-                ) : player.peakTier && peakTier ? (
-                    <div className="player-rank-container unranked">
-                        {peakTier.icon && <img src={peakTier.icon} alt={peakTier.name} className="player-rank-icon" title={`Peak ${peakTier.name}`} />}
-                        <div className="unranked-placeholder">Peak {peakTier.name}</div>
                     </div>
                 ) : player.puuid ? (
                     <div className="player-rank-container unranked">
@@ -700,7 +701,6 @@ function LivePlayerModal({
     onClose: () => void;
     onViewProfile?: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
-    const [stats, setStats] = useState<LivePlayerStats | null>(null);
     const [showLoadout, setShowLoadout] = useState(false);
     const [loadoutAttempt, setLoadoutAttempt] = useState(0);
     const [loadoutState, setLoadoutState] = useState<LoadoutState>({
@@ -709,20 +709,6 @@ function LivePlayerModal({
         items: [],
         message: "",
     });
-
-    useEffect(() => {
-        if (!player.puuid || !player.agentId) {
-            setStats(null);
-            return;
-        }
-        let cancelled = false;
-        getLivePlayerStats(player.puuid, player.agentId).then((s) => {
-            if (!cancelled) setStats(s);
-        });
-        return () => {
-            cancelled = true;
-        };
-    }, [player.agentId, player.puuid]);
 
     useEffect(() => {
         if (!showLoadout) return;
@@ -836,13 +822,17 @@ function LivePlayerModal({
     }, [equippedSkins, weapons]);
 
     const rankName = tier?.name || (player.competitiveTier > 0 ? `Tier ${player.competitiveTier}` : "Rank unavailable");
-    const peakRankName = player.peakRankName || peakTier?.name || (player.peakTier ? `Tier ${player.peakTier}` : "");
+    const evidence = player.cachedEvidence;
+    const losses = evidence?.matches ? Math.max(0, evidence.matches - (evidence.wins || 0)) : 0;
+    const cachedAt = evidence?.cacheUpdatedAt || evidence?.lastMatchAt || 0;
+    const historyPartyDetail = player.historyPartyGroup
+        ? `${player.historyPartyMatches || 1} cached match${player.historyPartyMatches === 1 ? "" : "es"}${player.historyPartyLastSeenAt ? ` · last ${relativeEvidenceTime(player.historyPartyLastSeenAt)}` : ""}`
+        : "No prior shared-party evidence cached";
     const selection = player.selectionState === "locked"
         ? "Locked"
         : player.selectionState === "selected"
             ? "Selecting"
             : "Not selected";
-    const losses = stats?.loaded ? Math.max(0, stats.matches - stats.wins) : 0;
     const displayName = privatePlayerLabel(player, agent?.name);
     const [gameName, tagLine = ""] = player.name.split("#");
     const canViewProfile = Boolean(player.puuid && gameName && !["Agent", "Enemy"].includes(gameName));
@@ -888,7 +878,7 @@ function LivePlayerModal({
                             {agent?.name || "Agent unavailable"} · {selection}
                             <span className="live-player-modal-rank">
                                 {tier?.icon && <img src={tier.icon} alt="" aria-hidden="true" />}
-                                {rankName}{player.rankedRating > 0 ? ` · ${player.rankedRating} RR` : ""}
+                                {rankName}
                             </span>
                         </p>
                     </div>
@@ -914,8 +904,18 @@ function LivePlayerModal({
                         <small>{equippedSkins.length ? `${equippedSkins.length} equipped skins` : showLoadout && loadoutState.status === "loading" ? "Loading live cosmetics" : "View equipped weapons"}</small>
                     </button>
                     <InfoTile label="Level" value={player.accountLevel > 0 ? String(player.accountLevel) : "Hidden"} detail="Account level" />
-                    <InfoTile label="Peak Rank" value={peakRankName || "Unavailable"} detail="Highest cached rank" icon={peakTier?.icon} />
-                    <InfoTile label="Agent sample" value={stats?.loaded ? `${stats.wins}W-${losses}L` : "Unavailable"} detail={stats?.loaded ? `${Math.round(stats.winrate)}% WR · ${stats.kd.toFixed(2)} KD` : "No cached stat sample"} />
+                    <InfoTile label="Rank" value={rankName} detail={player.rankedRating !== undefined ? `${player.rankedRating} RR · refreshed live` : "Riot live-session tier"} icon={tier?.icon} />
+                    <InfoTile label="Peak rank" value={peakTier?.name || "Unavailable"} detail={cachedAt ? `Cached ${relativeEvidenceTime(cachedAt)}` : "No cached rank sample"} icon={peakTier?.icon} />
+                    <InfoTile
+                        label="Agent sample"
+                        value={evidence?.matches ? `${evidence.wins || 0}W-${losses}L` : "Unavailable"}
+                        detail={evidence?.matches ? `${Math.round(evidence.winrate || 0)}% WR · ${(evidence.kd || 0).toFixed(2)} KD · ${evidence.matches} cached` : "No cached matches on this agent"}
+                    />
+                    <InfoTile
+                        label="Prior party"
+                        value={player.historyPartyGroup ? `${player.historyPartyMatches || 1} match${player.historyPartyMatches === 1 ? "" : "es"}` : "None cached"}
+                        detail={historyPartyDetail}
+                    />
                 </div>
 
                 {showLoadout && <section className="live-player-loadout" aria-label={`${displayName} equipped skins`}>
@@ -965,7 +965,7 @@ function LivePlayerModal({
                 </section>}
 
                 <div className="live-player-modal-note">
-                    Only live endpoint fields and cached agent stats are shown here. Missing Riot fields stay hidden instead of being guessed.
+                    Live fields come from the current Riot session. Rank, agent sample, and prior-party details are labelled cached history; no missing value is guessed and opening this view makes no extra match-history requests.
                 </div>
             </section>
         </div>
@@ -1038,7 +1038,7 @@ function LiveProfileModal({
                         key={profile.puuid}
                         requestedProfile={profile}
                         onRequestedProfileChange={onProfileChange}
-                        autoSyncMatches={true}
+                        autoSyncMatches={false}
                     />
                 </div>
             </section>
@@ -1051,6 +1051,35 @@ function privatePlayerLabel(player: LivePlayer, agentName?: string) {
         return agentName || (player.selectionState === "none" ? "Selecting..." : "Hidden player");
     }
     return player.name;
+}
+
+function relativeEvidenceTime(timestamp: number) {
+    const delta = Math.max(0, Date.now() - timestamp);
+    const minutes = Math.floor(delta / 60_000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+}
+
+function CachedStatsLine({ player }: { player: LivePlayer }) {
+    const stats = player.cachedEvidence;
+    if (!stats?.matches) return null;
+    const losses = Math.max(0, stats.matches - (stats.wins || 0));
+    const winrate = Math.round(stats.winrate || 0);
+    const tone = winrate >= 55 ? "wr-good" : winrate <= 45 ? "wr-bad" : "wr-mid";
+    return (
+        <span className={`player-stats-line ${tone}`} title={`Cached agent history · ${stats.matches} matches · updated ${relativeEvidenceTime(stats.cacheUpdatedAt || stats.lastMatchAt || 0)}`}>
+            <span className="player-stats-record">{stats.wins || 0}W-{losses}L</span>
+            <span className="player-stats-sep">·</span>
+            <span className="player-stats-wr">{winrate}%</span>
+            <span className="player-stats-sep">·</span>
+            <span className="player-stats-kd">{(stats.kd || 0).toFixed(2)} KD</span>
+            <span className="player-stats-sample">cached</span>
+        </span>
+    );
 }
 
 // Label vocabulary for a player's party pill. The local user's own
@@ -1086,44 +1115,5 @@ function InfoTile({
             <strong>{value}</strong>
             <small>{detail}</small>
         </div>
-    );
-}
-
-// Lightweight inline stat line: "12W-8L · 60% · 1.4 KD" rendered
-// under the agent name. Fetches lazily (once per puuid+agent pair)
-// and silently stays empty for placeholder / private profiles.
-function PlayerStatsLine({ player, agentId }: { player: LivePlayer; agentId?: string }) {
-    const [stats, setStats] = useState<LivePlayerStats | null>(null);
-    const cacheKey = player.puuid && agentId ? `${player.puuid}:${agentId.toLowerCase()}` : "";
-
-    useEffect(() => {
-        if (!cacheKey) {
-            setStats(null);
-            return;
-        }
-        let cancelled = false;
-        getLivePlayerStats(player.puuid, agentId!).then((s) => {
-            if (!cancelled) setStats(s);
-        });
-        return () => { cancelled = true; };
-        // Re-fetch only when the (puuid, agent) key changes.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [cacheKey]);
-
-    if (!stats || !stats.loaded || stats.matches <= 0) return null;
-
-    const losses = stats.matches - stats.wins;
-    const pct = Math.round(stats.winrate);
-    const wrColor = pct >= 55 ? "wr-good" : pct <= 45 ? "wr-bad" : "wr-mid";
-
-    return (
-        <span className={`player-stats-line ${wrColor}`}>
-            <span className="player-stats-record">{stats.wins}W-{losses}L</span>
-            <span className="player-stats-sep">·</span>
-            <span className="player-stats-wr">{pct}%</span>
-            <span className="player-stats-sep">·</span>
-            <span className="player-stats-kd">{stats.kd.toFixed(2)} KD</span>
-            <span className="player-stats-sample">({stats.matches})</span>
-        </span>
     );
 }

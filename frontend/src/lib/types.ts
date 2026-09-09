@@ -9,10 +9,12 @@ export interface RiotAccount {
     puuid: string;
     accessToken: string;
     entitlementsToken: string;
+    authSource?: "oauth" | "lockfile";
     expiresAt?: number;
     region: string;
     gameName: string;
     tagLine: string;
+    playerCardId?: string;
     sessionId?: string;
     ssid?: string;      // Riot auth cookies used to renew short-lived access tokens
       favorite?: boolean; // user-pinned account
@@ -23,8 +25,18 @@ export interface RiotAccount {
     lastRefreshErrorCode?: string;
 }
 
+export function isLockfileAccount(account: RiotAccount) {
+    if (account.authSource === "lockfile") return true;
+    if (account.authSource === "oauth") return false;
+    const syntheticSessionId = `session_${account.puuid}`;
+    const hasOAuthCredentials = Boolean(account.accessToken || account.entitlementsToken || account.ssid);
+    return !hasOAuthCredentials
+        && Number(account.expiresAt || 0) === 0
+        && (!account.sessionId || account.sessionId === syntheticSessionId);
+}
+
 export function accountRequiresManualRepair(account: RiotAccount) {
-    return !account.ssid && !account.sessionId;
+    return !isLockfileAccount(account) && !account.ssid && !account.sessionId;
 }
 
 export interface IdentityV1 {

@@ -113,7 +113,7 @@ func (m *SyncManager) StartWithOptions(puuid, region string, refreshCached bool)
 			}
 		}()
 		if runErr = m.runOnce(puuid, region, refreshCached); runErr != nil {
-			slog.Error("tracking: sync run failed", "puuid", puuid, "err", runErr)
+			slog.Error("tracking: sync run failed")
 		}
 	}()
 	return true, nil
@@ -167,7 +167,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		return historyErr
 	}
 	if competitiveErr != nil {
-		slog.Warn("tracking: competitive match history fetch failed", "err", competitiveErr)
+		slog.Warn("tracking: competitive match history fetch failed")
 	} else {
 		history = append(history, competitiveHistory...)
 	}
@@ -186,7 +186,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		seenIDs[h.MatchID] = struct{}{}
 		cached, err := IsMatchCached(m.db, h.MatchID)
 		if err != nil {
-			slog.Warn("tracking: IsMatchCached error", "matchID", h.MatchID, "err", err)
+			slog.Warn("tracking: IsMatchCached error")
 			continue
 		}
 		if !cached {
@@ -206,7 +206,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	if cbody, ferr := m.fetchRiot("GET", compURL, nil); ferr == nil {
 		m.ingestCompetitiveUpdates(puuid, cbody)
 	} else {
-		slog.Warn("tracking: competitive updates fetch failed", "err", ferr)
+		slog.Warn("tracking: competitive updates fetch failed")
 	}
 
 	// Step 5: hydrate bounded groups concurrently. Six requests keep a fresh
@@ -241,13 +241,13 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		rateLimited := false
 		for i := start; i < end; i++ {
 			if fetchErr := fetchErrors[i-start]; fetchErr != nil {
-				slog.Warn("tracking: getMatchDetails failed", "matchID", newIDs[i], "err", fetchErr)
+				slog.Warn("tracking: getMatchDetails failed")
 				rateLimited = rateLimited || strings.Contains(fetchErr.Error(), "status 429")
 				results[i] = nil
 				continue
 			}
 			if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, results[i], nil); err != nil {
-				slog.Warn("tracking: early InsertMatchDetails failed", "matchID", newIDs[i], "err", err)
+				slog.Warn("tracking: early InsertMatchDetails failed")
 			} else {
 				insertedEarly[i] = true
 				inserted++
@@ -309,10 +309,10 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 					}
 				}
 			} else {
-				slog.Warn("tracking: failed to parse name-service response", "err", err)
+				slog.Warn("tracking: failed to parse name-service response")
 			}
 		} else {
-			slog.Warn("tracking: name-service fetch failed", "err", err)
+			slog.Warn("tracking: name-service fetch failed")
 		}
 	}
 
@@ -326,7 +326,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 			continue
 		}
 		if err := InsertMatchDetails(m.db, m.appDir, newIDs[i], puuid, raw, resolvedNames); err != nil {
-			slog.Warn("tracking: InsertMatchDetails failed", "matchID", newIDs[i], "err", err)
+			slog.Warn("tracking: InsertMatchDetails failed")
 			continue
 		}
 		if !insertedEarly[i] {
@@ -336,7 +336,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 
 	// Step 8: recompute aggregates for the local player.
 	if err := RecomputeAggregates(m.db, puuid); err != nil {
-		slog.Warn("tracking: RecomputeAggregates failed", "err", err)
+		slog.Warn("tracking: RecomputeAggregates failed")
 	}
 
 	// Step 8.5: resolve missing names from older matches and immediately retry
@@ -345,7 +345,7 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 	// this retry that single match remains anonymous until a later idle sync.
 	if inserted == 0 || len(resolvedNames) < len(emptyPUUIDs) {
 		if resolved, err := m.resolveMissingNames(puuid, region); err != nil {
-			slog.Warn("tracking: background name resolution failed", "err", err)
+			slog.Warn("tracking: background name resolution failed")
 		} else if resolved > 0 {
 			slog.Info("tracking: background name resolution complete", "resolvedCount", resolved)
 		}
@@ -359,11 +359,10 @@ func (m *SyncManager) runOnce(puuid, region string, refreshCached bool) error {
 		nextCompetitiveIndex = state.LastCompetitiveEndIndex
 	}
 	if err := MarkSynced(m.db, puuid, nextHistoryIndex, nextCompetitiveIndex); err != nil {
-		slog.Warn("tracking: MarkSynced failed", "err", err)
+		slog.Warn("tracking: MarkSynced failed")
 	}
 
 	slog.Info("tracking: sync complete",
-		"puuid", puuid,
 		"fetched", inserted,
 		"nextHistoryIndex", nextHistoryIndex,
 		"nextCompetitiveIndex", nextCompetitiveIndex)
@@ -513,7 +512,7 @@ func (m *SyncManager) ingestCompetitiveUpdates(puuid string, raw []byte) {
 		} `json:"Matches"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		slog.Warn("tracking: parse competitive updates", "err", err)
+		slog.Warn("tracking: parse competitive updates")
 		return
 	}
 	for _, r := range resp.Matches {
@@ -534,7 +533,7 @@ func (m *SyncManager) ingestCompetitiveUpdates(puuid string, raw []byte) {
 			MatchStartTime:   r.MatchStartTime,
 		}
 		if err := InsertRRSnapshotIfAbsent(m.db, snap); err != nil {
-			slog.Warn("tracking: InsertRRSnapshotIfAbsent failed", "matchID", r.MatchID, "err", err)
+			slog.Warn("tracking: InsertRRSnapshotIfAbsent failed")
 		}
 	}
 }

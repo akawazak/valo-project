@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useData } from '@/context/DataContext';
 import { SprayAsset, SpraySlot } from '@/lib/types';
+import { SPRAY_WHEEL_SLOTS as SPRAY_SLOTS } from '@/lib/spraySlots';
 
 interface SpraySelectorProps {
     currentSprays: SpraySlot[];
@@ -10,13 +11,6 @@ interface SpraySelectorProps {
     compact?: boolean;
     showUnownedCosmetics?: boolean;
 }
-
-const SPRAY_SLOTS = [
-    { id: '0812b14c-4120-ed47-5cc2-c6b49b951408', name: 'Pre-Round' },
-    { id: '04cbc83a-43cf-aa2a-ee40-a09869679f22', name: 'Mid-Round' },
-    { id: 'ee063def-4a6b-8254-8e39-16a7eb108e42', name: 'Post-Round' },
-    { id: 'd2b4e425-4a7b-3b3b-81d3-356c9a33bb58', name: 'Extra / Wheel' }
-];
 
 export default function SpraySelector({ currentSprays, onUpdateSprays, compact, showUnownedCosmetics = false }: SpraySelectorProps) {
     const { sprays, ownedSprayIDs } = useData();

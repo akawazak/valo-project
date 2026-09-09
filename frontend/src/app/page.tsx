@@ -10,10 +10,11 @@ import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
 import { getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
-import { LocalClientError } from '@/lib/errors';
+import { AppRequestError, LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { getStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
 import { configureUiSounds, playUiSound } from '@/lib/uiSounds';
+import { isAndroidRuntime } from '@/lib/platform';
 
 const DISCORD_QUEUE_LABELS: Record<string, string> = {
     competitive: "Competitive",
@@ -37,7 +38,7 @@ function discordQueueLabel(queueId: string) {
 }
 import { useData } from '@/context/DataContext';
 import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
-import { GameLoadoutMeta } from '@/lib/effectivePreset';
+import { buildPresetApplyRequest, GameLoadoutMeta } from '@/lib/effectivePreset';
 import { useLoadout } from '@/hooks/useLoadout';
 import RiotLoginCard from '@/components/RiotLoginCard';
 import StorePanels from '@/features/dashboard/StorePanels';
@@ -55,27 +56,27 @@ import ReleaseNotesModal, { type ReleaseNotes } from '@/components/ReleaseNotesM
 import NotificationCenter from '@/features/notifications/NotificationCenter';
 import { publishAppNotification, useAppNotifications } from '@/lib/appNotifications';
 import type { AppTab } from '@/lib/appTabs';
+import MobileApp from '@/mobile/MobileAppV2';
 
 const CURRENT_RELEASE: ReleaseNotes = {
-    version: "0.5.27",
+    version: "0.5.28",
     title: "What’s new",
-    summary: "A more polished desktop experience with richer activity, live-match, profile, and social tools.",
+    summary: "A stability release for saved accounts, cached live-match context, and the shared desktop and Android experience.",
     added: [
-        "A notification center for wishlist matches, Riot messages, and app errors, plus configurable interface sounds.",
-        "Keyboard shortcuts, new Viper, Harbor, and Gekko wallpapers, and direct GitHub and Discord community links.",
-        "Richer live-player loadouts, Discord match presence, and stored match analytics.",
+        "A phone-oriented Android companion surface using the same supported remote-account data contracts as desktop.",
+        "Persistent account player-card previews, safer account diagnostics, and clearer session states.",
+        "Cached per-agent match evidence in live match, sourced from already stored completed matches.",
     ],
     improved: [
-        "Redesigned Settings, loading, storefront, party, live-match, and Profile experiences.",
-        "Profile analytics now make current-act RR, placements, competitive history, maps, and agents easier to understand.",
-        "Live match and party views show clearer teams, scores, queue timing, ranks, identities, and equipped cosmetics.",
+        "Account Manager keeps its saved order while open, reveals the active account directly, and applies favorite sorting only after reopening.",
+        "Live match, profile, preset, spray, storefront, party, chat, and activity views handle incomplete Riot data more gracefully.",
+        "Rank progression and match analytics better distinguish cached history from live information.",
     ],
     fixed: [
-        "Previous-act ranks and RR deltas no longer leak into the current act, including during placements.",
-        "Corrected party queue timers, remote friend-request cancellation, and same-account local fallback behavior.",
-        "Kept live cosmetics attached to the correct weapon and improved incomplete Riot-data handling.",
-        "Updated image processing dependencies to the patched release required by the production security audit.",
-        "Made the portable launcher self-contained so it starts without a separately installed Visual C++ Redistributable.",
+        "A selected remote account no longer gets replaced by a different local Riot Client account after refresh.",
+        "Account switching no longer silently promotes the chosen account to the first row.",
+        "Live party evidence reuses durable match cache data instead of repeated live-match-history requests.",
+        "Desktop startup and recovery paths now contain errors rather than leaving a framework error screen.",
     ],
 };
 
@@ -106,7 +107,24 @@ type PortableUpdateState = {
 };
 
 export default function Home() {
-    return <HomeApp />;
+    const [android, setAndroid] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        setAndroid(isAndroidRuntime());
+    }, []);
+
+    if (android === null) {
+        return (
+            <div className="loading-screen" role="status" aria-label="Opening VantaVault">
+                <div className="loading-brand">
+                    <img src="/brand-mark.svg" alt="" width="42" height="42" />
+                    <span>VANTA<strong>VAULT</strong></span>
+                </div>
+            </div>
+        );
+    }
+
+    return android ? <MobileApp /> : <HomeApp />;
 }
 
 function HomeApp() {
@@ -133,6 +151,7 @@ function HomeApp() {
         handleResolveLocalAccount,
         refreshAccountsList,
         contentTiers,
+        playerCards,
         ownedLevelIDs,
         ownedChromaIDs,
     } = useData();
@@ -315,6 +334,7 @@ function HomeApp() {
     const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
     const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
     const [showReleaseNotes, setShowReleaseNotes] = useState(false);
+    const isAndroid = isAndroidRuntime();
 
     useEffect(() => {
         const onShortcut = (event: KeyboardEvent) => {
@@ -385,7 +405,9 @@ function HomeApp() {
             setErrorMessage(error.message);
             setShowErrorModal(true);
         } else {
-            console.error(error);
+            console.warn("Preset operation failed", error instanceof Error ? error.message : String(error));
+            setErrorMessage("The preset operation could not be completed. Your current edit was kept.");
+            setShowErrorModal(true);
         }
     }, initialData.gameMeta, dataRevision);
 
@@ -410,12 +432,16 @@ function HomeApp() {
     const [importError, setImportError] = useState('');
 
     useEffect(() => {
+        if (isAndroid) {
+            setLaunchAtStartupState(false);
+            return;
+        }
         import('@/services/autostart').then(async ({ syncLaunchAtStartup, readLaunchAtStartupState }) => {
             await syncLaunchAtStartup().catch(() => {});
             const enabled = await readLaunchAtStartupState();
             setLaunchAtStartupState(enabled);
         });
-    }, []);
+    }, [isAndroid]);
 
     useEffect(() => {
         if (appVersion !== CURRENT_RELEASE.version) return;
@@ -437,6 +463,11 @@ function HomeApp() {
         let alive = true;
         const checkForUpdates = async () => {
             try {
+                if (isAndroid) {
+                    const { getVersion } = await import("@tauri-apps/api/app");
+                    if (alive) setAppVersion(await getVersion());
+                    return;
+                }
                 const [{ getVersion }, { check }, { invoke }] = await Promise.all([
                     import("@tauri-apps/api/app"),
                     import("@tauri-apps/plugin-updater"),
@@ -476,9 +507,10 @@ function HomeApp() {
         return () => {
             alive = false;
         };
-    }, []);
+    }, [isAndroid]);
 
     const checkForUpdatesNow = useCallback(async () => {
+        if (isAndroid) return;
         if (isCheckingUpdate) return;
         setIsCheckingUpdate(true);
         setUpdateCheckError(null);
@@ -513,7 +545,7 @@ function HomeApp() {
         } finally {
             setIsCheckingUpdate(false);
         }
-    }, [isCheckingUpdate, isPortable]);
+    }, [isAndroid, isCheckingUpdate, isPortable]);
 
     useEffect(() => {
         const status = portableUpdate?.status;
@@ -538,13 +570,14 @@ function HomeApp() {
     // Background periodic re-check every 6 hours so users get notified
     // even if they leave the app running for days.
     useEffect(() => {
+        if (isAndroid) return;
         if (isPortable) return;
         const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
         const handle = setInterval(() => {
             void checkForUpdatesNow();
         }, SIX_HOURS_MS);
         return () => clearInterval(handle);
-    }, [checkForUpdatesNow, isPortable]);
+    }, [checkForUpdatesNow, isAndroid, isPortable]);
 
     const installUpdate = useCallback(async () => {
         if (!availableUpdate || isUpdating) return;
@@ -607,7 +640,7 @@ function HomeApp() {
                     identity: full.identity,
                 };
             } catch (error) {
-                if (!(error instanceof LocalClientError)) throw error;
+                if (!(error instanceof LocalClientError) && !(error instanceof AppRequestError)) throw error;
             }
             setInitialData({ playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [], gameMeta });
             setDataRevision(r => r + 1);
@@ -643,11 +676,15 @@ function HomeApp() {
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
         } catch (error) {
-            if (error instanceof LocalClientError) {
+            if (error instanceof LocalClientError || error instanceof AppRequestError) {
                 setInitialData({ playerLoadout: {}, presets: [], gameMeta: { sprays: [], flexes: [], expressions: [] } });
+                if (error instanceof AppRequestError) {
+                    console.warn("Initial account data is temporarily unavailable", { code: error.code, status: error.status });
+                    reportAppError(error.message);
+                }
                 setIsLoading(false);
             } else {
-                console.error(error);
+                console.warn("Unexpected startup failure", error instanceof Error ? error.message : String(error));
                 setErrorMessage("An unexpected error occurred while loading data.");
                 setShowErrorModal(true);
                 setIsLoading(false);
@@ -684,7 +721,7 @@ function HomeApp() {
         void saveSettings(next).then(() => {
             prevSettingsRef.current = next;
         }).catch((error) => {
-            console.error("Failed to save settings:", error);
+            console.warn("Failed to save settings", error instanceof Error ? error.message : String(error));
             reportAppError("Settings could not be saved. Please try again.");
         });
 	}, [accentTheme, appearance, autoSelectAgent, autoSyncMatches, interfaceTheme, matchRetentionDays, showOfflineFriends, showLiveMatch, showPartyWidget, showUnownedCosmetics, soundEnabled, soundVolume, theme, useLocalSso]);
@@ -735,8 +772,9 @@ function HomeApp() {
             }
             return acc;
         });
-        void saveStoredAccounts(updated);
-        refreshAccountsList();
+        void saveStoredAccounts(updated)
+            .then(refreshAccountsList)
+            .catch(() => reportAppError("The account preference could not be stored securely."));
     };
 
     const handleSkinSelect = (weaponId: string, skinId: string, levelId: string, chromaId: string) => {
@@ -775,26 +813,7 @@ function HomeApp() {
         return applied;
     };
 
-    const buildApplyRequest = (preset: Preset) => {
-        const loadoutToApply = { ...preset.loadout };
-        let identity = preset.identity;
-        let sprays = preset.sprays;
-        let flexes = preset.flexes;
-        let expressions = preset.expressions;
-        if (preset.parentUuid) {
-            const parent = presets.find(p => p.uuid === preset.parentUuid);
-            if (parent) {
-                for (const [gun, item] of Object.entries(parent.loadout)) {
-                    if (!loadoutToApply[gun]) loadoutToApply[gun] = item;
-                }
-                if (!identity) identity = parent.identity;
-                if (!sprays || sprays.length === 0) sprays = parent.sprays;
-                if (!flexes || flexes.length === 0) flexes = parent.flexes;
-                if (!expressions || expressions.length === 0) expressions = parent.expressions;
-            }
-        }
-        return { loadout: loadoutToApply, identity, sprays, flexes, expressions };
-    };
+    const buildApplyRequest = (preset: Preset) => buildPresetApplyRequest(preset, presets);
 
     const getParent = (preset: Preset | null | undefined) => {
         if (!preset?.parentUuid) return undefined;
@@ -809,7 +828,7 @@ function HomeApp() {
             setShowToast(true);
 			playUiSound("success");
         } catch (e) {
-            console.error(e);
+            console.warn("Preset export failed", e instanceof Error ? e.message : String(e));
             alert('Failed to copy share code.');
         }
     };
@@ -830,7 +849,9 @@ function HomeApp() {
     };
 
     const requestDeleteAccount = (puuid: string) => {
-        handleDeleteAccount(puuid); // Account delete without prompt since we removed the prompt earlier
+        void handleDeleteAccount(puuid).catch(() => {
+            // DataContext reports the actionable cleanup error to the user.
+        });
     };
 
     const onSelectPresetToEdit = (preset: Preset) => {
@@ -1002,6 +1023,11 @@ function HomeApp() {
                 onRefreshAccount={refreshAccountToken}
                 onCancelRefresh={cancelAccountRefresh}
                 onToggleFavorite={handleToggleFavorite}
+                activePlayerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
+                activePlayerCardIcon={playerCards.find((card) =>
+                    card.uuid.toLowerCase() === (gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId || "").toLowerCase()
+                )?.displayIcon}
+                playerCards={playerCards}
             />
 
             <SettingsModal
@@ -1037,6 +1063,7 @@ function HomeApp() {
                 onInterfaceThemeChange={setInterfaceTheme}
                 isLocalClientActive={isLocalClientActive}
                 activeAccount={activeAccount}
+                isAndroid={isAndroid}
                 appVersion={appVersion}
                 isPortable={isPortable}
                 updateAvailable={isPortable ? false : !!availableUpdate}

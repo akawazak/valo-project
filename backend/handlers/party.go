@@ -151,14 +151,22 @@ func (h *Handler) getPartyClient(r *http.Request) (*valclient.ValClient, string,
 			Shard:  valclient.Shard(shard),
 			Region: valclient.Region(region),
 			Player: &valclient.ValClientPlayer{Uuid: remoteAuth.Puuid},
-			Header: buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
+			Header: remoteClientHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
 		}, "remote", nil
 	}
 
+	selected := selectedAccountPuuid(r)
+	if selected != "" {
+		if local := h.localClientForPuuid(selected); local != nil {
+			return local, "local", nil
+		}
+		return nil, "", fmt.Errorf("authentication required: the selected Riot account is not available locally")
+	}
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.Val != nil {
-		return h.Val, "local", nil
+	local := h.Val
+	h.mu.RUnlock()
+	if local != nil {
+		return local, "local", nil
 	}
 	return nil, "", fmt.Errorf("authentication required: please log in first")
 }

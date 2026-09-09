@@ -1,0 +1,98 @@
+name: android signed release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_label:
+        description: Optional label used for the uploaded artifact
+        required: false
+        default: manual
+
+permissions:
+  contents: read
+
+jobs:
+  signed-arm64:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version-file: backend/go.mod
+      - uses: actions/setup-java@b36c23c0d998641eff861008f374ee103c25ac73 # v4.4.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.77.2 --profile minimal --target aarch64-linux-android
+          rustup default 1.77.2
+      - name: Install Android SDK and NDK
+        shell: pwsh
+        run: |
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          "NDK_HOME=$env:ANDROID_HOME\ndk\27.2.12479018" >> $env:GITHUB_ENV
+          "ANDROID_NDK_HOME=$env:ANDROID_HOME\ndk\27.2.12479018" >> $env:GITHUB_ENV
+      - name: Require signing secrets
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          $missing = @()
+          if (-not $env:KEYSTORE_BASE64) { $missing += "ANDROID_KEY_BASE64" }
+          if (-not $env:KEY_ALIAS) { $missing += "ANDROID_KEY_ALIAS" }
+          if (-not $env:KEY_PASSWORD) { $missing += "ANDROID_KEY_PASSWORD" }
+          if (-not $env:STORE_PASSWORD) { $missing += "ANDROID_STORE_PASSWORD" }
+          if ($missing.Count) { throw "Missing required repository secrets: $($missing -join ', ')" }
+      - name: Configure release keystore
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          $keystorePath = Join-Path $env:RUNNER_TEMP "vantavault-upload.jks"
+          [IO.File]::WriteAllBytes($keystorePath, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          $properties = @(
+            "keyAlias=$env:KEY_ALIAS"
+            "keyPassword=$env:KEY_PASSWORD"
+            "storePassword=$env:STORE_PASSWORD"
+            "storeFile=$($keystorePath.Replace('\', '/'))"
+          )
+          Set-Content -LiteralPath "frontend/src-tauri/gen/android/keystore.properties" -Value $properties -Encoding utf8
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Verify source
+        working-directory: frontend
+        run: |
+          npm test
+          npm run lint
+          npx tsc --noEmit
+      - name: Build signed APK and AAB
+        working-directory: frontend
+        run: npm run android:build -- --apk --aab --target aarch64
+      - name: Verify APK certificate
+        shell: pwsh
+        run: |
+          $apk = Get-ChildItem "frontend/src-tauri/gen/android/app/build/outputs/apk" -Recurse -Filter "*.apk" | Select-Object -First 1
+          if (-not $apk) { throw "Signed APK was not produced." }
+          & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --verbose --print-certs $apk.FullName
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: VantaVault-Android-${{ inputs.version_label }}
+          path: |
+            frontend/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            frontend/src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: error

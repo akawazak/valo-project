@@ -4,13 +4,8 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useData } from "@/context/DataContext";
 import { ExpressionSlot, SpraySlot } from "@/lib/types";
-
-const SPRAY_SLOTS = [
-    { id: "0812b14c-4120-ed47-5cc2-c6b49b951408", name: "Pre-Round", position: "top" as const },
-    { id: "04cbc83a-43cf-aa2a-ee40-a09869679f22", name: "Mid-Round", position: "right" as const },
-    { id: "ee063def-4a6b-8254-8e39-16a7eb108e42", name: "Post-Round", position: "bottom" as const },
-    { id: "d2b4e425-4a7b-3b3b-81d3-356c9a33bb58", name: "Extra / Wheel", position: "left" as const },
-];
+import { SPRAY_WHEEL_SLOTS as SPRAY_SLOTS } from "@/lib/spraySlots";
+import ResilientAssetImage from "@/components/ResilientAssetImage";
 
 type PickerTab = "sprays" | "flexes";
 
@@ -87,6 +82,10 @@ export default function SprayWheelPanel({
     const pendingFlexAsset = pendingAssetId
         ? flexAssetMap.get(pendingAssetId.toLowerCase())
         : undefined;
+    const flexIconSources = (uuid: string, displayIcon?: string) => [
+        displayIcon,
+        `https://media.valorant-api.com/flex/${uuid.toLowerCase()}/displayicon.png`,
+    ];
     const modalOpen = Boolean(activeSlot) || modalFlexTypeId !== null;
 
     const displayFlexes = useMemo(() => {
@@ -188,11 +187,10 @@ export default function SprayWheelPanel({
                     <div className="unified-modal-container spray-picker-modal expression-picker-modal">
                         <div className="unified-modal-header">
                             <div className="unified-modal-title-wrap">
-                                <span className="kicker">// Customize Expression</span>
                                 <h3 className="unified-modal-title">{activeTab === "sprays" ? activeSlot?.name || "Sprays" : "Flex"}</h3>
                             </div>
                             <button type="button" className="unified-modal-close-btn" onClick={handleCloseModal} aria-label="Close">
-                                x
+                                ×
                             </button>
                         </div>
 
@@ -207,12 +205,13 @@ export default function SprayWheelPanel({
                                             className="unified-modal-preview-img"
                                             style={{ maxHeight: "70%", maxWidth: "70%", objectFit: "contain" }}
                                         />
-                                    ) : activeTab === "flexes" && pendingFlexAsset?.displayIcon ? (
-                                        <img
-                                            src={pendingFlexAsset.displayIcon}
-                                            alt={pendingFlexAsset.displayName}
+                                    ) : activeTab === "flexes" && pendingAssetId ? (
+                                        <ResilientAssetImage
+                                            sources={flexIconSources(pendingFlexAsset?.uuid || pendingAssetId, pendingFlexAsset?.displayIcon)}
+                                            alt={pendingFlexAsset?.displayName || "Selected Flex"}
                                             className="unified-modal-preview-img"
                                             style={{ maxHeight: "68%", maxWidth: "68%", objectFit: "contain" }}
+                                            fallback={<div className="expression-asset-fallback" aria-hidden="true">FLEX</div>}
                                         />
                                     ) : (
                                         <div className="spray-picker-empty" aria-label="Empty expression slot">-</div>
@@ -223,7 +222,7 @@ export default function SprayWheelPanel({
                                     <h4>
                                         {activeTab === "sprays" && activeSlot
                                             ? pendingSprayAsset?.displayName || "Empty Slot"
-                                            : pendingFlexAsset?.displayName || "No Flex Selected"}
+                                            : pendingFlexAsset?.displayName || (pendingAssetId ? "Selected Flex" : "No Flex Selected")}
                                     </h4>
                                     <span>
                                         {activeTab === "sprays"
@@ -366,11 +365,12 @@ export default function SprayWheelPanel({
                                                             disabled={!canEquip}
                                                         >
                                                             <div className="unified-modal-card-img-wrap expression-asset-img-wrap">
-                                                                {flex.displayIcon ? (
-                                                                    <img src={flex.displayIcon} alt="" style={{ objectFit: "contain" }} />
-                                                                ) : (
-                                                                    <span>-</span>
-                                                                )}
+                                                                <ResilientAssetImage
+                                                                    sources={flexIconSources(flex.uuid, flex.displayIcon)}
+                                                                    alt=""
+                                                                    style={{ objectFit: "contain" }}
+                                                                    fallback={<span className="expression-asset-fallback">FLEX</span>}
+                                                                />
                                                             </div>
                                                             <div className="unified-modal-card-info">
                                                                 <span className="unified-modal-card-name">{flex.displayName}</span>
@@ -387,7 +387,7 @@ export default function SprayWheelPanel({
                         </div>
                         <div className="unified-modal-footer">
                             <div className="unified-modal-footer-copy">
-                                <strong>{activeTab === "sprays" ? pendingSprayAsset?.displayName || "Empty spray slot" : pendingFlexAsset?.displayName || "No flex selected"}</strong>
+                                <strong>{activeTab === "sprays" ? pendingSprayAsset?.displayName || "Empty spray slot" : pendingFlexAsset?.displayName || (pendingAssetId ? "Selected Flex" : "No flex selected")}</strong>
                                 <span>The selection is kept only when you apply it.</span>
                             </div>
                             <div className="unified-modal-footer-actions">

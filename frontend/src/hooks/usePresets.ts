@@ -232,7 +232,7 @@ export function usePresets(
         setPresets(updatedPresets);
         await savePresets(updatedPresets);
         setSelectedPreset(newPreset);
-        setCurrentLoadout(newPreset.loadout);
+        setCurrentLoadout(mergePresetLoadout(newPreset, updatedPresets, newPreset.loadout));
 
         // A newly created preset is already persisted. Keep the editor clean
         // until the user actually changes a slot, identity, or agent assignment.

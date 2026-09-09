@@ -137,10 +137,9 @@ export default function PlayerCardPanel({
                     <div className="unified-modal-container" style={{ maxWidth: '720px', height: 'min(85vh, 700px)' }}>
                         <div className="unified-modal-header" style={{ padding: '0.85rem 1.5rem' }}>
                             <div className="unified-modal-title-wrap">
-                                <span className="kicker">// Select Identity</span>
                                 <h3 className="unified-modal-title">Player Card &amp; Title</h3>
                             </div>
-                            <button type="button" className="unified-modal-close-btn" onClick={() => setPickerOpen(false)}>x</button>
+                            <button type="button" className="unified-modal-close-btn" onClick={() => setPickerOpen(false)} aria-label="Close">×</button>
                         </div>
 
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0.75rem 1.25rem 1rem' }}>

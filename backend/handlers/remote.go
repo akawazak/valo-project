@@ -37,12 +37,12 @@ type oauthAttempt struct {
 	ExpiresAt time.Time
 }
 
-// Current Riot client version (as of 2026-06-30). Hard-coded fallback in
-// case the valorant-api.com version endpoint is unreachable. Stale version
-// strings cause Riot APIs to reject requests with HTTP 400 BAD_PARAMETER,
-// so this fallback is updated regularly and the endpoint is retried on a
-// 30-minute TTL below.
-const fallbackRiotClientVersion = "release-13.00-shipping-32-4990475"
+// Current Riot client version (as of 2026-07-29), confirmed from the live
+// ShooterGame log. Keep this as a floor as well as a fallback: asset catalog
+// services can trail Riot's live patch and must not downgrade request headers.
+// Stale versions cause Riot APIs to reject requests with HTTP 400
+// BAD_PARAMETER.
+const fallbackRiotClientVersion = "release-13.02-shipping-7-5092570"
 
 var (
 	versionMu      sync.RWMutex
@@ -69,13 +69,11 @@ func (h *Handler) SetLocalClient(val *valclient.ValClient) {
 	h.Val = val
 }
 
-// getRiotClientVersion returns the X-Riot-ClientVersion header value. It
-// fetches the current version from valorant-api.com (no key required) and
-// caches it for 30 minutes. The previous implementation cached once per
-// process via sync.Once: if the very first fetch failed (network blip at
-// startup, etc.) every subsequent request used a hard-coded 2024 fallback
-// until backend restart, and Riot APIs returned HTTP 400 BAD_PARAMETER
-// because the version was too old.
+// getRiotClientVersion returns the X-Riot-ClientVersion header value. The
+// locally installed client is authoritative when available. Remote/mobile
+// sessions use valorant-api.com's version feed, but never accept a patch older
+// than fallbackRiotClientVersion because artwork/catalog feeds can lag behind
+// Riot's live client. The result is cached for 30 minutes.
 func getRiotClientVersion() string {
 	versionMu.RLock()
 	if !versionFetched.IsZero() && time.Since(versionFetched) < 30*time.Minute {
@@ -97,7 +95,7 @@ func getRiotClientVersion() string {
 	resp, err := client.Get("https://valorant-api.com/v1/version")
 	if err != nil {
 		slog.Warn("riot client version fetch failed; using fallback",
-			"err", err, "fallback", fallbackRiotClientVersion)
+			"fallback", fallbackRiotClientVersion)
 		versionMu.Lock()
 		// Don't extend the cached timestamp — let the next call retry soon.
 		versionMu.Unlock()
@@ -113,15 +111,50 @@ func getRiotClientVersion() string {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil ||
 		strings.TrimSpace(result.Data.RiotClientVersion) == "" {
 		slog.Warn("riot client version decode failed; using fallback",
-			"err", err, "fallback", fallbackRiotClientVersion)
+			"fallback", fallbackRiotClientVersion)
 		return fallbackRiotClientVersion
 	}
 
+	resolvedVersion := newerRiotClientVersion(
+		result.Data.RiotClientVersion,
+		fallbackRiotClientVersion,
+	)
+	if resolvedVersion != result.Data.RiotClientVersion {
+		slog.Warn("riot client version feed is behind live fallback",
+			"feed", result.Data.RiotClientVersion,
+			"fallback", fallbackRiotClientVersion)
+	}
+
 	versionMu.Lock()
-	versionCached = result.Data.RiotClientVersion
+	versionCached = resolvedVersion
 	versionFetched = time.Now()
 	versionMu.Unlock()
 	return versionCached
+}
+
+var riotClientPatchPattern = regexp.MustCompile(`^release-(\d+)\.(\d+)-`)
+
+func newerRiotClientVersion(candidate, floor string) string {
+	candidate = strings.TrimSpace(candidate)
+	floor = strings.TrimSpace(floor)
+	candidatePatch := riotClientPatchPattern.FindStringSubmatch(candidate)
+	floorPatch := riotClientPatchPattern.FindStringSubmatch(floor)
+	if len(candidatePatch) != 3 || len(floorPatch) != 3 {
+		if candidate != "" {
+			return candidate
+		}
+		return floor
+	}
+
+	candidateMajor, _ := strconv.Atoi(candidatePatch[1])
+	candidateMinor, _ := strconv.Atoi(candidatePatch[2])
+	floorMajor, _ := strconv.Atoi(floorPatch[1])
+	floorMinor, _ := strconv.Atoi(floorPatch[2])
+	if candidateMajor < floorMajor ||
+		(candidateMajor == floorMajor && candidateMinor < floorMinor) {
+		return floor
+	}
+	return candidate
 }
 
 func readLocalRiotClientVersion() string {
@@ -160,14 +193,19 @@ func (h *Handler) getClient(r *http.Request) (*valclient.ValClient, error) {
 			Shard:  valclient.Shard(shard),
 			Region: valclient.Region(region),
 			Player: &valclient.ValClientPlayer{Uuid: remoteAuth.Puuid},
-			Header: buildRiotHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
+			Header: remoteClientHeaders(remoteAuth.AccessToken, remoteAuth.EntitlementsToken),
 		}, nil
 	}
 
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.Val != nil {
-		return h.Val, nil
+	localVal := h.Val
+	h.mu.RUnlock()
+	if localVal != nil {
+		selected := selectedAccountPuuid(r)
+		if selected == "" || (localVal.Player != nil && strings.EqualFold(localVal.Player.Uuid, selected)) {
+			return localVal, nil
+		}
+		return nil, fmt.Errorf("authentication required: the selected Riot account is not available locally")
 	}
 	return nil, fmt.Errorf("authentication required: please log in first")
 }
@@ -178,7 +216,10 @@ func getRemoteAuthHeaders(r *http.Request) (*remoteAuthHeaders, bool, error) {
 	puuid := r.Header.Get("X-Riot-Puuid")
 	region := r.Header.Get("X-Riot-Region")
 
-	hasAny := accessToken != "" || entitlementsToken != "" || puuid != "" || region != ""
+	// Region is also harmless account-routing metadata forwarded by the Tauri
+	// bridge when secure remote tokens are unavailable. It must not turn an
+	// otherwise local request into a partial remote-auth failure.
+	hasAny := accessToken != "" || entitlementsToken != "" || puuid != ""
 	hasAll := accessToken != "" && entitlementsToken != "" && puuid != "" && region != ""
 	if hasAny && !hasAll {
 		return nil, false, fmt.Errorf("remote authentication is incomplete; please reconnect your Riot account")
@@ -188,6 +229,9 @@ func getRemoteAuthHeaders(r *http.Request) (*remoteAuthHeaders, bool, error) {
 	}
 	if subject := accessTokenSubject(accessToken); subject != "" && !strings.EqualFold(subject, puuid) {
 		return nil, false, fmt.Errorf("the refreshed Riot token belongs to a different account; refresh the selected account again")
+	}
+	if expiresAt := jwtNumericClaim(accessToken, "exp"); expiresAt > 0 && time.Now().Unix() >= expiresAt {
+		return nil, false, fmt.Errorf("authentication required: the selected Riot session has expired")
 	}
 	return &remoteAuthHeaders{
 		AccessToken:       accessToken,
@@ -219,6 +263,26 @@ func accessTokenSubject(token string) string {
 	return strings.TrimSpace(claims.Subject)
 }
 
+func jwtNumericClaim(token, claim string) int64 {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0
+	}
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(payload, &claims) != nil {
+		return 0
+	}
+	var value int64
+	if json.Unmarshal(claims[claim], &value) != nil {
+		return 0
+	}
+	return value
+}
+
 func buildRiotHeaders(accessToken, entitlementsToken string) http.Header {
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+accessToken)
@@ -226,6 +290,12 @@ func buildRiotHeaders(accessToken, entitlementsToken string) http.Header {
 	header.Set("X-Riot-ClientPlatform", clientPlatform)
 	header.Set("X-Riot-ClientVersion", getRiotClientVersion())
 	header.Set("Content-Type", "application/json")
+	return header
+}
+
+func remoteClientHeaders(accessToken, entitlementsToken string) http.Header {
+	header := buildRiotHeaders(accessToken, entitlementsToken)
+	header.Set(riothttp.RemoteSessionHeader, "1")
 	return header
 }
 

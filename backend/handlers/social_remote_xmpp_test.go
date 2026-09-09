@@ -342,13 +342,52 @@ func TestNormalizeChatPresenceKeepsPlayerCard(t *testing.T) {
 	}
 }
 
+func TestXMPPSnapshotKeepsValorantCardWithLeagueActivity(t *testing.T) {
+	cardPayload := base64.StdEncoding.EncodeToString([]byte(`{"sessionLoopState":"MENUS","playerCardId":"card-from-valorant"}`))
+	session := &xmppSocialSession{
+		state: "live",
+		roster: map[string]xmppRosterItem{
+			"friend": {PUUID: "friend", GameName: "Friend", GameTag: "EUW"},
+		},
+		presences: map[string]chatPresenceEntry{
+			"friend:valorant": {
+				Puuid:     "friend",
+				Product:   "valorant",
+				State:     "online",
+				TimeStamp: 10,
+				Private:   cardPayload,
+			},
+			"friend:league_of_legends": {
+				Puuid:     "friend",
+				Product:   "league_of_legends",
+				State:     "INGAME",
+				TimeStamp: 20,
+				Private:   base64.StdEncoding.EncodeToString([]byte(`{"gameStatus":"inGame"}`)),
+			},
+		},
+		selfPresences: map[string]chatPresenceEntry{},
+	}
+
+	snapshot := session.snapshot()
+	if len(snapshot.Presences) != 1 {
+		t.Fatalf("presence count = %d; want 1", len(snapshot.Presences))
+	}
+	presence := snapshot.Presences[0]
+	if presence.Product != "league_of_legends" || presence.CardID != "card-from-valorant" {
+		t.Fatalf("activity or VALORANT card was lost: %#v", presence)
+	}
+}
+
 func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
 	private := base64.StdEncoding.EncodeToString([]byte(`{
 		"sessionLoopState":"INGAME",
 		"queueId":"competitive",
+		"queueEntryTime":"2026.08.02-12.30.00",
 		"partyState":"DEFAULT",
 		"partySize":3,
 		"maxPartySize":5,
+		"matchMap":"/Game/Maps/Ascent/Ascent",
+		"competitiveTier":19,
 		"playerCardId":"card-top-level"
 	}`))
 	presence := normalizeChatPresence(chatPresenceEntry{
@@ -359,6 +398,9 @@ func TestNormalizeChatPresenceReadsTopLevelValorantFields(t *testing.T) {
 	}, nil)
 	if presence.State != "INGAME" || presence.Availability != "away" || presence.QueueID != "competitive" || presence.PartyState != "DEFAULT" || presence.PartySize != 3 || presence.MaxPartySize != 5 || presence.CardID != "card-top-level" {
 		t.Fatalf("top-level presence fields were dropped: %#v", presence)
+	}
+	if presence.QueueStartedAt != parseQueueEntryTime("2026.08.02-12.30.00") || presence.MapID != "/Game/Maps/Ascent/Ascent" || presence.CompetitiveTier != 19 {
+		t.Fatalf("rich live presence fields were dropped: %#v", presence)
 	}
 }
 
@@ -526,17 +568,7 @@ func TestXMPPPresenceKeepsOtherResourcesAndPrefersValorant(t *testing.T) {
 	}
 	session.applyPresence(xmppPresence{From: "friend@eu1.pvp.net/riot-client"})
 	valorant := xmppPresence{From: "friend@eu1.pvp.net/valorant"}
-	valorant.Games = &struct {
-		Valorant *struct {
-			State     string `xml:"st"`
-			Timestamp int64  `xml:"s.t"`
-			Payload   string `xml:"p"`
-		} `xml:"valorant"`
-	}{Valorant: &struct {
-		State     string `xml:"st"`
-		Timestamp int64  `xml:"s.t"`
-		Payload   string `xml:"p"`
-	}{State: "chat", Timestamp: 2, Payload: private}}
+	valorant.Games = valorantPresenceGames("chat", 2, private)
 	session.applyPresence(valorant)
 	session.applyPresence(xmppPresence{From: "friend@eu1.pvp.net/riot-client", Type: "unavailable"})
 
@@ -578,6 +610,27 @@ func TestXMPPApplyPresenceRejectsStaleResourceUpdate(t *testing.T) {
 	}
 }
 
+func TestXMPPPresenceDetectsLeagueAndOtherRiotProducts(t *testing.T) {
+	var league xmppPresence
+	if err := xml.Unmarshal([]byte(`<presence from="friend@eu1.pvp.net/league"><games><league_of_legends><st>champSelect</st><s.t>42</s.t></league_of_legends></games></presence>`), &league); err != nil {
+		t.Fatal(err)
+	}
+	session := &xmppSocialSession{
+		state:     "live",
+		roster:    map[string]xmppRosterItem{"friend": {PUUID: "friend", GameName: "Friend", GameTag: "EUW"}},
+		presences: map[string]chatPresenceEntry{},
+	}
+	session.applyPresence(league)
+
+	snapshot := session.snapshot()
+	if snapshot.OnlineCount != 1 || snapshot.InGameCount != 1 || len(snapshot.Presences) != 1 {
+		t.Fatalf("League presence was not counted: %#v", snapshot)
+	}
+	if got := snapshot.Presences[0]; got.Product != "league_of_legends" || got.State != "champSelect" {
+		t.Fatalf("League product detail was lost: %#v", got)
+	}
+}
+
 func TestXMPPSnapshotIgnoresUnverifiedRemoteChatPresence(t *testing.T) {
 	session := &xmppSocialSession{
 		state:     "live",
@@ -592,26 +645,13 @@ func TestXMPPSnapshotIgnoresUnverifiedRemoteChatPresence(t *testing.T) {
 	}
 }
 
-func valorantPresenceGames(state string, timestamp int64, payload string) *struct {
-	Valorant *struct {
-		State     string `xml:"st"`
-		Timestamp int64  `xml:"s.t"`
-		Payload   string `xml:"p"`
-	} `xml:"valorant"`
-} {
-	games := &struct {
-		Valorant *struct {
-			State     string `xml:"st"`
-			Timestamp int64  `xml:"s.t"`
-			Payload   string `xml:"p"`
-		} `xml:"valorant"`
-	}{}
-	games.Valorant = &struct {
-		State     string `xml:"st"`
-		Timestamp int64  `xml:"s.t"`
-		Payload   string `xml:"p"`
-	}{State: state, Timestamp: timestamp, Payload: payload}
-	return games
+func valorantPresenceGames(state string, timestamp int64, payload string) *xmppGames {
+	return &xmppGames{Products: []xmppGamePresence{{
+		XMLName:   xml.Name{Local: "valorant"},
+		State:     state,
+		Timestamp: timestamp,
+		Payload:   payload,
+	}}}
 }
 
 func TestRemoteOnlySocialRequiresOAuthHeaders(t *testing.T) {

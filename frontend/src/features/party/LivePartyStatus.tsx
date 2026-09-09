@@ -20,7 +20,7 @@ import {
 import { useData } from "@/context/DataContext";
 import ProfilePanel from "@/features/profile/ProfilePanel";
 import ChatModal from "./ChatModal";
-import { presenceActivity, presenceState, queueName } from "./presence";
+import { isGamePresence, presenceActivity, presenceSection, presenceSectionRank, presenceState, productName, queueName } from "./presence";
 import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
 import { playUiSound } from "@/lib/uiSounds";
 import { publishAppNotification } from "@/lib/appNotifications";
@@ -120,6 +120,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     const profileModalRef = useRef<HTMLElement>(null);
     const latestPartyRef = useRef<PartyStatusResponse | null>(null);
     const lastPartyIdRef = useRef<string | null>(null);
+	const previousPartyRef = useRef<{ id: string; memberCount: number } | null>(null);
 	const previousUnreadRef = useRef<Record<string, number> | null>(null);
 	const chatOpenRef = useRef(false);
 	const chatNoticeTimerRef = useRef<number | null>(null);
@@ -262,6 +263,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             setStale(false);
 			setOverlay(null);
             setExpanded(false);
+			previousPartyRef.current = null;
             return;
         }
 
@@ -272,6 +274,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 
             if (data.phase === "none") {
                 latestPartyRef.current = null;
+				previousPartyRef.current = { id: "", memberCount: 0 };
                 setParty(data);
                 setStale(false);
                 setRefreshKey((key) => key + 1);
@@ -293,6 +296,12 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
             // New party detected (different ID) — auto-collapse to the pill
             // so it doesn't burst onto the screen at full size.
             const newId = data.partyId || (data.members?.[0]?.puuid ?? null);
+			const previousParty = previousPartyRef.current;
+			const memberCount = data.members?.length || 0;
+			if (newId && previousParty && (newId !== previousParty.id || memberCount > previousParty.memberCount)) {
+				playUiSound("party");
+			}
+			previousPartyRef.current = { id: newId || "", memberCount };
             if (newId && lastPartyIdRef.current && newId !== lastPartyIdRef.current) {
 				setOverlay(null);
                 setExpanded(false);
@@ -374,7 +383,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 }
                 setCardCache((current) => ({ ...m, ...current }));
             })
-            .catch((err) => console.error("Error loading playercards API", err));
+            .catch((err) => console.warn("Error loading playercards API", err instanceof Error ? err.message : String(err)));
 
         fetchCachedPublicJson<{ data?: PartyPublicTierSet[] }>("https://valorant-api.com/v1/competitivetiers")
             .then((d) => {
@@ -389,7 +398,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 }
                 setTierCache(t);
             })
-            .catch((err) => console.error("Error loading competitive tiers API", err));
+            .catch((err) => console.warn("Error loading competitive tiers API", err instanceof Error ? err.message : String(err)));
 
         return () => {
             cancelled = true;
@@ -484,7 +493,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
-	const floatingSocialPortal = isLocalClientActive && typeof document !== "undefined" ? createPortal(
+	const floatingSocialPortal = isLocalClientActive && hasParty && typeof document !== "undefined" ? createPortal(
 		<div
 			ref={floatingSocial.setElement}
 			className="live-party-floating-social"
@@ -496,18 +505,14 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 				event.stopPropagation();
 			}}
 		>
-			{hasParty ? (
-				<PartyPill
-					local={local}
-					party={party!}
-					friendCount={onlineCount}
-					card={cardForPlayer(local.puuid, local.cardId)}
-					tier={tierCache[local.competitiveTier]}
-					onOpen={togglePartyPanel}
-				/>
-			) : (
-				<FriendsPill social={social} presences={presences} onOpen={togglePartyPanel} />
-			)}
+			<PartyPill
+				local={local}
+				party={party!}
+				friendCount={onlineCount}
+				card={cardForPlayer(local.puuid, local.cardId)}
+				tier={tierCache[local.competitiveTier]}
+				onOpen={togglePartyPanel}
+			/>
 		</div>,
 		document.body,
 	) : null;
@@ -668,7 +673,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                                 key={profileTarget.puuid}
                                 requestedProfile={profileTarget}
                                 onRequestedProfileChange={(profile) => setOverlay(profile ? { kind: "profile", profile } : null)}
-                                autoSyncMatches={true}
+                                autoSyncMatches={false}
                             />
                         </div>
                     </section>
@@ -795,24 +800,43 @@ function FriendPresenceList({
 }) {
     const [showOffline, setShowOffline] = useState(() => showOfflineByDefault || (typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:offline-open") === "true"));
     const [friendSearch, setFriendSearch] = useState("");
-    const [valorantOnly, setValorantOnly] = useState(false);
-    const [socialView, setSocialView] = useState<"friends" | "requests" | "activity">("friends");
+    const [playingOnly, setPlayingOnly] = useState(false);
+    const [socialView, setSocialView] = useState<"friends" | "requests" | "activity">(() => {
+		if (typeof window === "undefined") return "friends";
+		const saved = window.localStorage.getItem("vantavault:social:view");
+		return saved === "requests" || saved === "activity" ? saved : "friends";
+	});
     const [compactRows, setCompactRows] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:compact") === "true");
     useEffect(() => { if (showOfflineByDefault) setShowOffline(true); }, [showOfflineByDefault]);
     useEffect(() => { window.localStorage.setItem("vantavault:friends:offline-open", String(showOffline)); }, [showOffline]);
     useEffect(() => { window.localStorage.setItem("vantavault:friends:compact", String(compactRows)); }, [compactRows]);
+	useEffect(() => { window.localStorage.setItem("vantavault:social:view", socialView); }, [socialView]);
     const activePresences = presences.filter((presence) => presenceState(presence) !== "offline");
     const offlinePresences = presences.filter((presence) => presenceState(presence) === "offline");
     const matchesFilters = (presence: SocialPresence) => {
-        if (valorantOnly && !["game", "online", "away", "dnd"].includes(presenceState(presence))) return false;
+        if (playingOnly && !isGamePresence(presence)) return false;
         return (presence.name || "").toLowerCase().includes(friendSearch.trim().toLowerCase());
     };
-    const visibleActivePresences = activePresences.filter(matchesFilters);
+    const presenceRank = (presence: SocialPresence) => {
+        const state = presenceState(presence);
+        return state === "game" ? 0 : isGamePresence(presence) ? 1 : state === "chat" ? 2 : state === "mobile" ? 3 : 4;
+    };
+    const byPresence = (a: SocialPresence, b: SocialPresence) =>
+        presenceRank(a) - presenceRank(b) || (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+    const visibleActivePresences = activePresences.filter(matchesFilters).sort(byPresence);
     const visibleOfflinePresences = offlinePresences.filter(matchesFilters);
-    const valorantCount = activePresences.filter((presence) => presenceState(presence) !== "chat").length;
-    const chatCount = activePresences.length - valorantCount;
+    const activeSections = Array.from(visibleActivePresences.reduce((sections, presence) => {
+        const label = presenceSection(presence);
+        const items = sections.get(label) || [];
+        items.push(presence);
+        sections.set(label, items);
+        return sections;
+    }, new Map<string, SocialPresence[]>()).entries())
+        .map(([label, items]) => ({ label, items }))
+        .sort((left, right) => presenceSectionRank(left.label) - presenceSectionRank(right.label) || left.label.localeCompare(right.label));
     const requests = social?.requests || [];
     const activity = social?.activity || [];
+    const formerContacts = social?.formerContacts || [];
 
     return (
         <div className="live-party-friends">
@@ -823,30 +847,31 @@ function FriendPresenceList({
 					<button type="button" role="tab" aria-selected={socialView === "activity"} className={socialView === "activity" ? "active" : ""} onClick={() => setSocialView("activity")}>Activity</button>
 				</div>
 				<button type="button" className="live-party-inbox" onClick={onOpenInbox} aria-label="Open Riot chat inbox" title="Messages">✉{unreadCount > 0 && <span>{unreadCount}</span>}</button>
-				<div className="live-party-section-counts">
-                    <span>{valorantCount} VALORANT</span>
-                    <span>{chatCount} Riot Client</span>
-                </div>
             </div>
             {socialView === "friends" && <>
             <div className="live-party-friend-tools">
                 <input value={friendSearch} onChange={(event) => setFriendSearch(event.target.value)} placeholder="Search friends" aria-label="Search friends" />
-                <button type="button" className={valorantOnly ? "active" : ""} onClick={() => setValorantOnly((current) => !current)}>VALORANT</button>
+                <button type="button" className={playingOnly ? "active" : ""} onClick={() => setPlayingOnly((current) => !current)}>Playing</button>
                 <button type="button" className={compactRows ? "active" : ""} onClick={() => setCompactRows((current) => !current)} aria-label="Toggle compact friend rows">Compact</button>
             </div>
             <div className={`live-party-friend-scroll${compactRows ? " is-compact" : ""}`}>
-                <div className="live-party-friend-list">
-                    {visibleActivePresences.map((presence) => (
-                        <FriendPresenceRow
-                            key={presence.puuid}
-                            presence={presence}
-                            cardCache={cardCache}
-                            onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
-							onOpenChat={() => onOpenChat(presence)}
-							unreadCount={unreadByPeer[(presence.puuid || "").toLowerCase()] || 0}
-                            onContextMenu={onContextMenu}
-                        />
-                    ))}
+                <div className="live-party-presence-sections">
+                    {activeSections.map((section) => <section className="live-party-presence-section" key={section.label}>
+                        <header><strong>{section.label}</strong><span>{section.items.length}</span></header>
+                        <div className="live-party-friend-list">
+                            {section.items.map((presence) => (
+                                <FriendPresenceRow
+                                    key={presence.puuid}
+                                    presence={presence}
+                                    cardCache={cardCache}
+                                    onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
+                                    onOpenChat={() => onOpenChat(presence)}
+                                    unreadCount={unreadByPeer[(presence.puuid || "").toLowerCase()] || 0}
+                                    onContextMenu={onContextMenu}
+                                />
+                            ))}
+                        </div>
+                    </section>)}
                     {visibleActivePresences.length === 0 && (
                         <div className="live-party-friend-empty">{presences.length ? "No friends match these filters." : socialEmptyLabel(social)}</div>
                     )}
@@ -885,22 +910,27 @@ function FriendPresenceList({
                 )}
             </div>
             </>}
-			{socialView === "requests" && <SocialRequests requests={requests} events={activity} />}
-			{socialView === "activity" && <SocialActivity events={activity} />}
+			{socialView === "requests" && <SocialRequests requests={requests} formerContacts={formerContacts} />}
+			{socialView === "activity" && <div className="live-party-social-scroll"><SocialActivity events={activity} /></div>}
         </div>
     );
 }
 
-function SocialRequests({ requests, events }: { requests: NonNullable<SocialStatusResponse["requests"]>; events: NonNullable<SocialStatusResponse["activity"]> }) {
-	const reconnect = Array.from(new Map(events.filter((event) => event.type === "friendship_ended").map((event) => [event.peerPuuid, event])).values());
+function SocialRequests({ requests, formerContacts }: {
+    requests: NonNullable<SocialStatusResponse["requests"]>;
+    formerContacts: NonNullable<SocialStatusResponse["formerContacts"]>;
+}) {
 	const [requestStates, setRequestStates] = useState<Record<string, { state: "working" | "pending" | "error"; message?: string }>>({});
 	const [resolvedRequests, setResolvedRequests] = useState<Set<string>>(() => new Set());
 	const restoreTimers = useRef<Record<string, number>>({});
 	const [riotID, setRiotID] = useState("");
+	const [showAddFriend, setShowAddFriend] = useState(false);
+	const [showAllReconnect, setShowAllReconnect] = useState(false);
 	const [sendState, setSendState] = useState<{ state: "idle" | "working" | "done" | "error"; message?: string }>({ state: "idle" });
 	const visibleRequests = requests.filter((request) => !resolvedRequests.has(request.puuid));
 	const incoming = visibleRequests.filter((request) => request.direction === "incoming");
 	const outgoing = visibleRequests.filter((request) => request.direction === "outgoing");
+	const visibleReconnect = showAllReconnect ? formerContacts : formerContacts.slice(0, 6);
 	useEffect(() => {
 		const visible = new Set(requests.map((request) => request.puuid));
 		setRequestStates((current) => Object.fromEntries(Object.entries(current).filter(([peer]) => visible.has(peer))));
@@ -960,22 +990,23 @@ function SocialRequests({ requests, events }: { requests: NonNullable<SocialStat
 		}
 	};
 	return <div className="live-party-social-scroll">
-		<form className="live-party-friend-request-form" onSubmit={send}>
-			<label htmlFor="live-party-riot-id">Send friend request</label>
-			<div><input id="live-party-riot-id" value={riotID} onChange={(event) => setRiotID(event.target.value)} placeholder="Name#Tag" autoComplete="off" spellCheck={false} /><button type="submit" disabled={sendState.state === "working"}>{sendState.state === "working" ? "Sending…" : "Send"}</button></div>
-			{sendState.message ? <small aria-live="polite" className={sendState.state === "error" ? "is-error" : ""}>{sendState.message}</small> : <small>Use the player&apos;s full Riot ID.</small>}
-		</form>
-		{!visibleRequests.length && !reconnect.length && <div className="live-party-social-empty"><strong>No pending requests</strong><span>Incoming and sent requests will appear here.</span></div>}
 		{incoming.length > 0 && <SocialRequestGroup title="Incoming" requests={incoming} states={requestStates} onAction={act} />}
 		{outgoing.length > 0 && <SocialRequestGroup title="Sent" requests={outgoing} states={requestStates} onAction={act} />}
-		{reconnect.length > 0 && <section className="live-party-request-group">
-			<header><strong>Reconnect</strong><span>{reconnect.length}</span></header>
-			{reconnect.map((event) => { const actionState = requestStates[event.peerPuuid]; return <div className="live-party-request-row" key={event.peerPuuid}>
-				<i aria-hidden="true">{(event.name || "?").slice(0, 1).toUpperCase()}</i>
-				<span><strong>{event.name || "Unknown Riot account"}</strong><small>{actionState?.message || "Previously observed in your Riot friends list"}</small></span>
-				<div className="live-party-request-actions"><button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => act(event.peerPuuid, "send")}>{actionState?.state === "working" ? "Sending…" : "Send request"}</button></div>
+		{formerContacts.length > 0 && <section className="live-party-request-group live-party-reconnect-group">
+			<header><strong>People you knew</strong><span>{formerContacts.length}</span></header>
+			{visibleReconnect.map((contact) => { const actionState = requestStates[contact.puuid]; return <div className="live-party-request-row" key={contact.puuid}>
+				<i aria-hidden="true">{(contact.name || "?").slice(0, 1).toUpperCase()}</i>
+				<span><strong>{contact.name || "Unknown Riot account"}</strong><small>{actionState?.message || `Friends before · last seen ${formatSocialTime(contact.lastSeenAt)}`}</small></span>
+				<div className="live-party-request-actions"><button type="button" disabled={actionState?.state === "working" || actionState?.state === "pending"} onClick={() => act(contact.puuid, "send")}>{actionState?.state === "working" ? "Sending…" : "Add again"}</button></div>
 			</div>})}
+			{formerContacts.length > 6 && <button type="button" className="live-party-reconnect-more" onClick={() => setShowAllReconnect((current) => !current)}>{showAllReconnect ? "Show fewer" : `Show all ${formerContacts.length}`}</button>}
 		</section>}
+		{!visibleRequests.length && !formerContacts.length && <div className="live-party-social-empty is-compact"><strong>No requests or former friends</strong><span>New requests and people you can reconnect with will appear here.</span></div>}
+		<button type="button" className="live-party-add-friend-toggle" aria-expanded={showAddFriend} onClick={() => setShowAddFriend((current) => !current)}>{showAddFriend ? "Close add friend" : "Add friend by Riot ID"}</button>
+		{showAddFriend && <form className="live-party-friend-request-form" onSubmit={send}>
+			<div><input id="live-party-riot-id" aria-label="Riot ID" value={riotID} onChange={(event) => setRiotID(event.target.value)} placeholder="Name#Tag" autoComplete="off" spellCheck={false} /><button type="submit" disabled={sendState.state === "working"}>{sendState.state === "working" ? "Sending…" : "Send"}</button></div>
+			{sendState.message ? <small aria-live="polite" className={sendState.state === "error" ? "is-error" : ""}>{sendState.message}</small> : <small>Enter the full Riot ID.</small>}
+		</form>}
 	</div>;
 }
 
@@ -1005,11 +1036,11 @@ function SocialRequestGroup({ title, requests, states, onAction }: {
 function SocialActivity({ events }: { events: NonNullable<SocialStatusResponse["activity"]> }) {
 	const usefulEvents = events.filter((event) => event.type !== "friend_first_observed");
 	if (!usefulEvents.length) return <div className="live-party-social-empty"><strong>No friend activity yet</strong><span>Sent, received, accepted, cancelled, and removed friend activity will appear here.</span></div>;
-	return <div className="live-party-social-scroll live-party-activity-list">
+	return <div className="live-party-activity-list">
 		{usefulEvents.map((event) => <div className={`live-party-activity-row is-${event.type}`} key={event.id}>
 			<i aria-hidden="true" />
 			<span><strong>{event.name || "Unknown Riot account"}</strong><small>{socialEventLabel(event.type)}</small></span>
-			<time dateTime={new Date(event.occurredAt).toISOString()}>{formatSocialTime(event.occurredAt)}</time>
+			<time dateTime={new Date(event.occurredAt).toISOString()}><b>{socialEventActor(event.type)}</b><span>{formatSocialTime(event.occurredAt)}</span></time>
 		</div>)}
 	</div>;
 }
@@ -1017,15 +1048,22 @@ function SocialActivity({ events }: { events: NonNullable<SocialStatusResponse["
 function socialEventLabel(type: NonNullable<SocialStatusResponse["activity"]>[number]["type"]) {
 	switch (type) {
 		case "friend_first_observed": return "First observed in your friends list";
-		case "friend_readded": return "Friends again";
+		case "friend_added": return "Added to your friends list (initiator unavailable)";
+		case "friend_readded": return "Friends again (initiator unavailable)";
 		case "friendship_ended": return "No longer in your friends list · who removed whom is unknown";
-		case "request_received": return "Friend request received";
-		case "request_sent": return "Friend request sent";
-		case "request_cancelled": return "Friend request cancelled";
+		case "request_received": return "They sent you a friend request";
+		case "request_sent": return "You sent a friend request";
+		case "request_cancelled": return "You cancelled the friend request";
 		case "request_accepted_by_you": return "You accepted their friend request";
 		case "request_accepted_by_them": return "Accepted your friend request";
 		case "request_closed_unknown": return "Request closed · outcome unknown";
 	}
+}
+
+function socialEventActor(type: NonNullable<SocialStatusResponse["activity"]>[number]["type"]) {
+	if (["request_sent", "request_cancelled", "request_accepted_by_you"].includes(type)) return "YOU";
+	if (["request_received", "request_accepted_by_them"].includes(type)) return "THEM";
+	return "UNKNOWN";
 }
 
 function formatSocialTime(timestamp: number) {
@@ -1095,8 +1133,11 @@ function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
 function socialTitle(social: SocialStatusResponse | null, presences: SocialPresence[]) {
     if (!social) return "Connecting presence";
     if (social.status === "unavailable") return "Presence unavailable";
-    const valorantCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
-    if (valorantCount) return `${valorantCount} in VALORANT`;
+    const gamePresences = presences.filter(isGamePresence);
+    if (gamePresences.length) {
+        const products = Array.from(new Set(gamePresences.map((presence) => productName(presence.product))));
+        return products.length === 1 ? `${gamePresences.length} in ${products[0]}` : `${gamePresences.length} playing Riot games`;
+    }
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     return chatCount ? `${chatCount} on Riot Client` : "No active friends";
 }

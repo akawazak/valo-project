@@ -34,7 +34,7 @@ export async function getSettings(): Promise<Settings> {
         }
         return await response.json();
     } catch (error) {
-        console.error(error);
+        console.warn('Settings could not be loaded:', error instanceof Error ? error.message : String(error));
         throw new LocalClientError();
     }
 }
@@ -49,7 +49,7 @@ export async function saveSettings(settings: Settings): Promise<void> {
             throw new Error('Failed to save settings. The local client might not be running or there was a server error.');
         }
     } catch (error) {
-        console.error(error);
+        console.warn('Settings could not be saved:', error instanceof Error ? error.message : String(error));
         throw new LocalClientError();
     }
 }
@@ -69,4 +69,3 @@ export async function clearMatchCache(): Promise<StorageStatus> {
     if (!response.ok) throw new Error(await response.text() || 'Failed to clear match cache.');
     return response.json();
 }
-

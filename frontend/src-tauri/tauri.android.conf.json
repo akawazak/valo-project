@@ -1,0 +1,11 @@
+{
+  "build": {
+    "frontendDist": "../.next-android",
+    "beforeBuildCommand": "npm run build:android"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [],
+    "targets": "all"
+  }
+}

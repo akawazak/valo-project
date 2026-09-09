@@ -1,5 +1,7 @@
 "use client";
 
+import { createPortal } from "react-dom";
+
 interface ImportPresetModalProps {
     show: boolean;
     onClose: () => void;
@@ -10,39 +12,27 @@ interface ImportPresetModalProps {
 }
 
 export default function ImportPresetModal({
-    show, onClose, onImport, importCode, onChangeImportCode, importError
+    show, onClose, onImport, importCode, onChangeImportCode, importError,
 }: ImportPresetModalProps) {
     if (!show) return null;
-    return (
-        <div className="acc-delete-modal-overlay" onClick={onClose}>
-            <div className="acc-delete-modal" style={{ maxWidth: '480px', width: '90%' }} onClick={e => e.stopPropagation()}>
-                <h5 className="acc-delete-modal-title">Import Preset</h5>
-                <p className="acc-delete-modal-body">Paste a preset share code below to import it as a new preset.</p>
-                <textarea
-                    className="tactical-input mb-2"
-                    rows={4}
-                    placeholder="Paste share code here..."
-                    value={importCode}
-                    onChange={e => onChangeImportCode(e.target.value)}
-                    style={{ fontSize: '0.78rem', resize: 'vertical' }}
-                />
-                {importError && (
-                    <div className="text-danger font-monospace small mb-2">{importError}</div>
-                )}
-                <div className="acc-delete-modal-actions">
-                    <button type="button" className="acc-delete-modal-btn cancel" onClick={onClose}>
-                        Cancel
-                    </button>
-                    <button
-                        type="button"
-                        className="acc-delete-modal-btn confirm"
-                        disabled={!importCode.trim()}
-                        onClick={onImport}
-                    >
-                        Import
-                    </button>
+    return createPortal(
+        <div className="unified-modal-overlay compact-dialog-overlay" onClick={(event) => event.target === event.currentTarget && onClose()}>
+            <section className="unified-modal-container compact-dialog compact-dialog-wide" role="dialog" aria-modal="true" aria-labelledby="import-preset-title">
+                <header className="compact-dialog-header">
+                    <h2 id="import-preset-title">Import preset</h2>
+                    <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">×</button>
+                </header>
+                <div className="compact-dialog-form">
+                    <label htmlFor="preset-share-code">Share code</label>
+                    <textarea id="preset-share-code" className="tactical-input compact-dialog-textarea" rows={5} placeholder="Paste a VantaVault preset code" value={importCode} onChange={(event) => onChangeImportCode(event.target.value)} autoFocus />
+                    {importError ? <p className="compact-dialog-error" role="alert">{importError}</p> : null}
                 </div>
-            </div>
-        </div>
+                <footer className="compact-dialog-actions">
+                    <button type="button" className="compact-dialog-button secondary" onClick={onClose}>Cancel</button>
+                    <button type="button" className="compact-dialog-button primary" disabled={!importCode.trim()} onClick={onImport}>Import</button>
+                </footer>
+            </section>
+        </div>,
+        document.body,
     );
 }

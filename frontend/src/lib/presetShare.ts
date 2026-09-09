@@ -44,7 +44,7 @@ export function importPreset(base64Str: string): Omit<Preset, 'uuid'> {
             expressions: parsed.expressions || [],
         };
     } catch (e) {
-        console.error('Failed to parse preset import string:', e);
+        console.warn('Failed to parse preset import string:', e instanceof Error ? e.message : String(e));
         throw new Error('Invalid preset code format.');
     }
 }

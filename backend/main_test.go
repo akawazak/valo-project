@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/truearken/valclient/valclient"
 )
 
 func TestCorsAllowsTauriProductionOrigin(t *testing.T) {
@@ -87,6 +89,38 @@ func TestAPIKeyMiddlewareAllowsDesktopKey(t *testing.T) {
 	}
 }
 
+func TestBootstrapProofDoesNotExposeAPIKeyAndBypassesAPIMiddleware(t *testing.T) {
+	handler := bootstrapProofHandler("desktop-secret", apiKeyMiddleware("desktop-secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap-proof?nonce=0123456789abcdef", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", res.Code)
+	}
+	body := strings.TrimSpace(res.Body.String())
+	if body != bootstrapProof("desktop-secret", "0123456789abcdef") {
+		t.Fatalf("unexpected proof %q", body)
+	}
+	if strings.Contains(body, "desktop-secret") {
+		t.Fatal("bootstrap proof exposed the API key")
+	}
+}
+
+func TestBootstrapProofRejectsInvalidNonce(t *testing.T) {
+	handler := bootstrapProofHandler("desktop-secret", http.NotFoundHandler())
+	for _, nonce := range []string{"short", "../session_escape", strings.Repeat("a", 129)} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap-proof?nonce="+nonce, nil)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("nonce %q: got %d, want 400", nonce, res.Code)
+		}
+	}
+}
+
 func TestDesktopCORSPreflightThenAuthenticatedRequest(t *testing.T) {
 	called := 0
 	handler := corsMiddleware(apiKeyMiddleware("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -106,6 +140,9 @@ func TestDesktopCORSPreflightThenAuthenticatedRequest(t *testing.T) {
 	if allowed := preflightResult.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allowed, "X-Riot-Selected-Puuid") {
 		t.Fatalf("selected-account header is not allowed by CORS: %q", allowed)
 	}
+	if allowed := preflightResult.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(allowed, http.MethodDelete) {
+		t.Fatalf("account-data deletion is not allowed by CORS: %q", allowed)
+	}
 	if called != 0 {
 		t.Fatal("preflight unexpectedly reached the API handler")
 	}
@@ -117,5 +154,43 @@ func TestDesktopCORSPreflightThenAuthenticatedRequest(t *testing.T) {
 	handler.ServeHTTP(result, request)
 	if result.Code != http.StatusNoContent || called != 1 {
 		t.Fatalf("authenticated request got status %d and called=%d", result.Code, called)
+	}
+}
+
+func TestRefreshedLocalClientReplacesEntitlementAndAccount(t *testing.T) {
+	current := &valclient.ValClient{
+		Shard:  valclient.Shard("eu"),
+		Region: valclient.Region("eu"),
+		Player: &valclient.ValClientPlayer{Uuid: "old-account"},
+		Header: http.Header{
+			"Authorization":           []string{"Bearer old-access"},
+			"X-Riot-Entitlements-Jwt": []string{"old-entitlement"},
+			"X-Riot-Clientversion":    []string{"release-13.02-shipping-7-5092570"},
+		},
+	}
+	auth := valclient.AuthenticateResponse{
+		AccessToken: "new-access",
+		Subject:     "new-account",
+		Token:       "new-entitlement",
+	}
+
+	if !localClientAuthChanged(current, auth) {
+		t.Fatal("changed local credentials were not detected")
+	}
+	refreshed := refreshedLocalClient(current, auth)
+	if refreshed.Player.Uuid != "new-account" {
+		t.Fatalf("puuid = %q", refreshed.Player.Uuid)
+	}
+	if got := refreshed.Header.Get("Authorization"); got != "Bearer new-access" {
+		t.Fatalf("authorization = %q", got)
+	}
+	if got := refreshed.Header.Get("X-Riot-Entitlements-JWT"); got != "new-entitlement" {
+		t.Fatalf("entitlement = %q", got)
+	}
+	if got := refreshed.Header.Get("X-Riot-ClientVersion"); got != "release-13.02-shipping-7-5092570" {
+		t.Fatalf("client version was not preserved: %q", got)
+	}
+	if current.Header.Get("Authorization") != "Bearer old-access" {
+		t.Fatal("original client headers were mutated")
 	}
 }

@@ -1,15 +1,19 @@
 import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, ContentTier, OwnedGunBuddiesResponse, OwnedAgentsResponse, StorefrontResponse, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, IdentityV1, SpraySlot, RiotAccount, ExpressionSlot, FlexAsset } from '@/lib/types';
-import { LocalClientError } from '@/lib/errors';
+import { AppRequestError, LocalClientError } from '@/lib/errors';
+import { isAndroidRuntime } from '@/lib/platform';
+import { fetchCacheFirstJson } from '@/lib/resourceCache';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
 const PUBLIC_API_TIMEOUT_MS = 8000;
-let backendTokenPromise: Promise<string> | null = null;
 let activeRemoteAccount: {
     puuid: string;
     region: string;
-    accessToken: string;
-    entitlementsToken: string;
 } | null = null;
+const requestWarningAt = new Map<string, number>();
+const REQUEST_WARNING_WINDOW_MS = 30_000;
+let lastAuthInvalidEventAt = 0;
+const AUTH_INVALID_EVENT_WINDOW_MS = 2_000;
+const AUTH_FAILURE_CODES = ["AUTH_REQUIRED", "MISSING_ENTITLEMENT", "BAD_CLAIMS"];
 
 export function reportAppError(message: string) {
     if (typeof window !== "undefined") {
@@ -17,22 +21,49 @@ export function reportAppError(message: string) {
     }
 }
 
-async function getBackendToken(): Promise<string> {
-    if (!backendTokenPromise) {
-        backendTokenPromise = import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke<string>("get_backend_token"))
-            .catch(() => "");
-    }
-    return backendTokenPromise;
+function warnRequestFailure(error: unknown) {
+    const requestError = error instanceof AppRequestError ? error : null;
+    const code = requestError?.code || (error instanceof Error ? error.name : "UNKNOWN");
+    const warningKey = AUTH_FAILURE_CODES.includes(code) ? "AUTH_RECOVERY" : code;
+    const now = Date.now();
+    if (now - (requestWarningAt.get(warningKey) || 0) < REQUEST_WARNING_WINDOW_MS) return;
+    requestWarningAt.set(warningKey, now);
+    console.warn("ValoVault request failed", {
+        code,
+        status: requestError?.status,
+        message: requestError?.message || (error instanceof Error ? error.message : String(error)),
+    });
 }
 
 export async function appFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
     const url = input instanceof Request ? input.url : String(input);
     if (!url.startsWith(LOCAL_URL)) return window.fetch(input, init);
+    if (init?.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
     const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
-    const token = await getBackendToken();
-    if (token) headers.set("X-VantaVault-Key", token);
-    return window.fetch(input, { ...init, headers });
+    const selectedPuuid = localStorage.getItem("riot_puuid")?.trim();
+    const selectedRegion = localStorage.getItem("riot_region")?.trim();
+    // Callers such as background account renewal deliberately target an
+    // inactive account. Keep that explicit scope instead of overwriting it
+    // with whichever account is selected in the UI.
+    if (selectedPuuid && !headers.has("X-Riot-Selected-Puuid")) {
+        headers.set("X-Riot-Selected-Puuid", selectedPuuid);
+    }
+    if (selectedRegion && !headers.has("X-Riot-Region")) {
+        headers.set("X-Riot-Region", selectedRegion);
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    const localUrl = new URL(url);
+    const result = await invoke<{ status: number; contentType: string; body: string }>("backend_request", {
+        path: `${localUrl.pathname}${localUrl.search}`,
+        method: init?.method || (input instanceof Request ? input.method : "GET"),
+        headers: Object.fromEntries(headers.entries()),
+        body: typeof init?.body === "string" ? init.body : null,
+    });
+    if (init?.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+    return new Response(result.body, {
+        status: result.status,
+        headers: { "Content-Type": result.contentType },
+    });
 }
 
 /**
@@ -50,20 +81,20 @@ export function activateAccount(account: {
     entitlementsToken: string;
     expiresAt?: number;
     region: string;
+    authSource?: "oauth" | "lockfile";
 }) {
+    if (isAndroidRuntime()) localStorage.setItem("use_local_sso", "false");
     localStorage.setItem("riot_puuid", account.puuid);
     localStorage.setItem("riot_region", account.region);
     localStorage.removeItem("riot_access_token");
     localStorage.removeItem("riot_entitlements");
     const expiresAt = account.expiresAt ?? 0;
-    if (expiresAt > 0 && Date.now() >= expiresAt - 60_000) {
+    if (expiresAt > 0 && Date.now() >= expiresAt - 60_000 && account.authSource === "lockfile") {
         activeRemoteAccount = null;
-    } else if (account.accessToken) {
+    } else if (account.authSource !== "lockfile" || account.accessToken) {
         activeRemoteAccount = {
             puuid: account.puuid,
             region: account.region,
-            accessToken: account.accessToken,
-            entitlementsToken: account.entitlementsToken,
         };
     } else {
         // No tokens yet — likely a local-client-only account. Clear so the
@@ -79,31 +110,15 @@ export function clearActiveAccount() {
 }
 
 export function hasActiveRemoteAuth() {
-    return Boolean(activeRemoteAccount?.accessToken && activeRemoteAccount.entitlementsToken);
+    return Boolean(activeRemoteAccount);
 }
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEOUT_MS): Promise<T> {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await appFetch(url, { signal: controller.signal });
-        if (!response.ok) {
-            throw new Error(`Request failed with status ${response.status}`);
-        }
-        const data = await response.json() as T;
-        try {
-            localStorage.setItem(`vv-public-cache:${url}`, JSON.stringify({ savedAt: Date.now(), data }));
-        } catch { /* Cache is best-effort. */ }
-        return data;
+        return await fetchCacheFirstJson<T>(url, { timeoutMs, fetcher: appFetch });
     } catch (error) {
-        try {
-            const cached = localStorage.getItem(`vv-public-cache:${url}`);
-            if (cached) return JSON.parse(cached).data as T;
-        } catch { /* Preserve the original network error. */ }
         reportAppError("Some game artwork and metadata could not be loaded. Check your connection and retry.");
         throw error;
-    } finally {
-        clearTimeout(timeoutId);
     }
 }
 
@@ -118,21 +133,75 @@ async function fetchWithAuth(
 ): Promise<Response> {
     const headers = new Headers(init?.headers || {});
     if (typeof window !== "undefined") {
-        const useLocalSso = localStorage.getItem("use_local_sso") === "true";
-        if (options.forceRemoteAuth) {
+        const android = isAndroidRuntime();
+        if (options.forceRemoteAuth || android) {
             const selectedPuuid = localStorage.getItem("riot_puuid")?.trim();
             if (selectedPuuid) headers.set("X-Riot-Selected-Puuid", selectedPuuid);
         }
-        if (options.forceRemoteAuth || !useLocalSso) {
-            if (activeRemoteAccount) {
-                headers.set("X-Riot-Access-Token", activeRemoteAccount.accessToken);
-                headers.set("X-Riot-Entitlements-JWT", activeRemoteAccount.entitlementsToken);
-                headers.set("X-Riot-Puuid", activeRemoteAccount.puuid);
-                headers.set("X-Riot-Region", activeRemoteAccount.region);
-            }
+        // The selected account is authoritative. A global local-mode preference
+        // must never make requests silently fall back to another Riot account.
+        if (activeRemoteAccount) {
+            headers.set("X-Riot-Selected-Puuid", activeRemoteAccount.puuid);
+            headers.set("X-Riot-Region", activeRemoteAccount.region);
         }
     }
     return appFetch(url, { ...init, headers });
+}
+
+async function requestErrorFromResponse(
+    response: Response,
+    code: string,
+    fallback: string,
+): Promise<AppRequestError> {
+    const raw = await response.text().catch(() => "");
+    let serverMessage = "";
+    let serverCode = "";
+    try {
+        const parsed = JSON.parse(raw) as { message?: string; error?: string; errorCode?: string; code?: string };
+        serverMessage = parsed.message || parsed.error || "";
+        serverCode = parsed.errorCode || parsed.code || "";
+    } catch {
+        serverMessage = raw;
+    }
+    const safeDetails = raw
+        .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [redacted]")
+        .replace(/eyJ[A-Za-z0-9._~-]+/g, "[token redacted]")
+        .slice(0, 600);
+    const authFailure = response.status === 401
+        || response.status === 403
+        || AUTH_FAILURE_CODES.includes(serverCode);
+    if (
+        typeof window !== "undefined"
+        && authFailure
+        && AUTH_FAILURE_CODES.includes(serverCode)
+        && Date.now() - lastAuthInvalidEventAt >= AUTH_INVALID_EVENT_WINDOW_MS
+    ) {
+        lastAuthInvalidEventAt = Date.now();
+        window.dispatchEvent(new CustomEvent("vantavault:riot-auth-invalid", {
+            detail: { code: serverCode, status: response.status },
+        }));
+    }
+    return new AppRequestError({
+        message: authFailure
+            ? "Your Riot session needs to be renewed before this data can load."
+            : serverMessage || fallback,
+        code: serverCode || `${code}-${response.status || "HTTP"}`,
+        status: response.status,
+        details: safeDetails || undefined,
+        retryable: response.status !== 404,
+    });
+}
+
+function clientRequestFailure(error: unknown, code: string, fallback: string): never {
+    if (error instanceof AppRequestError) throw error;
+    if (isAndroidRuntime() || hasActiveRemoteAuth()) {
+        throw new AppRequestError({
+            message: error instanceof Error && error.message ? error.message : fallback,
+            code,
+            details: error instanceof Error ? error.name : undefined,
+        });
+    }
+    throw new LocalClientError();
 }
 
 export interface HealthStatus {
@@ -179,7 +248,7 @@ export async function getAgents(): Promise<Agent[]> {
         const data = await fetchJsonWithTimeout<{ data: Agent[] }>('https://valorant-api.com/v1/agents');
         return data.data.filter((agent: Agent) => agent.displayIcon);
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -189,7 +258,7 @@ export async function getWeapons(): Promise<Weapon[]> {
         const data = await fetchJsonWithTimeout<{ data: Weapon[] }>('https://valorant-api.com/v1/weapons');
         return data.data as Weapon[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -199,7 +268,7 @@ export async function getGunBuddies(): Promise<GunBuddy[]> {
         const data = await fetchJsonWithTimeout<{ data: GunBuddy[] }>('https://valorant-api.com/v1/buddies');
         return data.data as GunBuddy[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -209,7 +278,7 @@ export async function getContentTiers(): Promise<ContentTier[]> {
         const data = await fetchJsonWithTimeout<{ data: ContentTier[] }>('https://valorant-api.com/v1/contenttiers');
         return data.data as ContentTier[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -227,7 +296,7 @@ export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
     try {
         const response = await fetchWithAuth(LOCAL_URL + '/player-loadout');
         if (!response.ok) {
-            throw new Error('Failed to fetch player loadout. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-LOADOUT", "Could not fetch your current loadout.");
         }
         const data = await response.json();
         const expressions = (data.expressions ?? []) as ExpressionSlot[];
@@ -242,8 +311,24 @@ export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
             expressions,
             identity: data.identity as IdentityV1 | undefined,
         };
+    } catch (error) {
+        clientRequestFailure(error, "VV-LOADOUT-NETWORK", "Could not reach the loadout service.");
+    }
+}
+
+export async function getProfilePlayerCard(puuid: string, region: string): Promise<string> {
+    const params = new URLSearchParams({ puuid, region });
+    try {
+        const response = await fetchWithAuth(
+            `${LOCAL_URL}/profile/player-card?${params.toString()}`,
+            undefined,
+            { forceRemoteAuth: true },
+        );
+        if (!response.ok) return "";
+        const data = await response.json() as { playerCardId?: unknown };
+        return typeof data.playerCardId === "string" ? data.playerCardId : "";
     } catch {
-        throw new LocalClientError();
+        return "";
     }
 }
 
@@ -265,12 +350,12 @@ export async function getOwnedSkins(): Promise<OwnedSkinsResponse> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/owned-skins');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned skins. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-SKINS", "Could not fetch owned skins.");
         }
         return await response.json();
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-SKINS-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -278,7 +363,7 @@ export async function getOwnedGunBuddies(): Promise<OwnedGunBuddiesResponse> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/owned-gun-buddies');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned gun buddies. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-BUDDIES", "Could not fetch owned gun buddies.");
         }
         const data = await response.json() as {
             buddies?: Array<{ levelId?: string; amount?: number; LevelId?: string; Amount?: number }>;
@@ -294,8 +379,8 @@ export async function getOwnedGunBuddies(): Promise<OwnedGunBuddiesResponse> {
                 .filter((buddy) => buddy.levelId),
         };
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-BUDDIES-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -303,12 +388,12 @@ export async function getOwnedAgents(): Promise<OwnedAgentsResponse> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/owned-agents');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned agents. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-AGENTS", "Could not fetch owned agents.");
         }
         return await response.json();
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-AGENTS-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -316,12 +401,12 @@ export async function getPresets(): Promise<Preset[]> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/presets');
         if (!response.ok) {
-            throw new Error('Failed to fetch presets. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-PRESETS", "Could not fetch presets.");
         }
         return await response.json();
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-PRESETS-NETWORK", "Could not reach the presets service.");
     }
 }
 
@@ -332,11 +417,11 @@ export async function savePresets(presets: Preset[]): Promise<void> {
             body: JSON.stringify(presets),
         });
         if (!response.ok) {
-            throw new Error('Failed to save presets. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-PRESETS-SAVE", "Could not save presets.");
         }
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-PRESETS-SAVE-NETWORK", "Could not reach the presets service.");
     }
 }
 
@@ -360,7 +445,7 @@ export function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
         entitlementsToken: undefined,
         ssid: undefined,
     })));
-    accountSaveQueue = accountSaveQueue.then(async () => {
+    accountSaveQueue = accountSaveQueue.catch(() => undefined).then(async () => {
         const response = await appFetch(LOCAL_URL + '/accounts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -369,8 +454,6 @@ export function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
         if (!response.ok) {
             throw new Error(await response.text() || 'Failed to persist Riot accounts.');
         }
-    }).catch((error) => {
-        console.error('Failed to persist Riot accounts:', error);
     });
     return accountSaveQueue;
 }
@@ -390,11 +473,11 @@ export async function applyLoadout(request: ApplyLoadoutRequest): Promise<void> 
             body: JSON.stringify(request),
         });
         if (!response.ok) {
-            throw new Error('Failed to apply loadout. The local client might not be running or there was a server error.');
+            throw await requestErrorFromResponse(response, "VV-LOADOUT-APPLY", "Could not apply the loadout.");
         }
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-LOADOUT-APPLY-NETWORK", "Could not reach the loadout service.");
     }
 }
 
@@ -455,8 +538,7 @@ export async function refreshRiotSession(cookies: string): Promise<ReauthTokenRe
 export async function getStorefront(): Promise<StorefrontResponse> {
     const response = await fetchWithAuth(LOCAL_URL + '/storefront');
     if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to fetch storefront.');
+        throw await requestErrorFromResponse(response, "VV-STOREFRONT", "Could not fetch the storefront.");
     }
     return response.json();
 }
@@ -464,8 +546,7 @@ export async function getStorefront(): Promise<StorefrontResponse> {
 export async function getWallet(): Promise<Record<string, number>> {
     const response = await fetchWithAuth(LOCAL_URL + '/wallet');
     if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to fetch wallet.');
+        throw await requestErrorFromResponse(response, "VV-WALLET", "Could not fetch the wallet.");
     }
     const data = await response.json();
     return data.Balances || {};
@@ -476,7 +557,7 @@ export async function getBundles(): Promise<BundleInfo[]> {
         const data = await fetchJsonWithTimeout<{ data: BundleInfo[] }>('https://valorant-api.com/v1/bundles');
         return data.data as BundleInfo[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -485,13 +566,13 @@ export async function getOwnedSprays(): Promise<string[]> {
     try {
         const response = await fetchWithAuth(LOCAL_URL + '/owned-sprays');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned sprays.');
+            throw await requestErrorFromResponse(response, "VV-SPRAYS", "Could not fetch owned sprays.");
         }
         const data = await response.json();
         return data.sprayIds || [];
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-SPRAYS-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -499,13 +580,13 @@ export async function getOwnedPlayerCards(): Promise<string[]> {
     try {
         const response = await fetchWithAuth(LOCAL_URL + '/owned-cards');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned cards.');
+            throw await requestErrorFromResponse(response, "VV-CARDS", "Could not fetch owned cards.");
         }
         const data = await response.json();
         return data.cardIds || [];
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-CARDS-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -513,13 +594,13 @@ export async function getOwnedPlayerTitles(): Promise<string[]> {
     try {
         const response = await fetchWithAuth(LOCAL_URL + '/owned-titles');
         if (!response.ok) {
-            throw new Error('Failed to fetch owned titles.');
+            throw await requestErrorFromResponse(response, "VV-TITLES", "Could not fetch owned titles.");
         }
         const data = await response.json();
         return data.titleIds || [];
     } catch (error) {
-        console.error(error);
-        throw new LocalClientError();
+        warnRequestFailure(error);
+        clientRequestFailure(error, "VV-TITLES-NETWORK", "Could not reach the inventory service.");
     }
 }
 
@@ -528,7 +609,7 @@ export async function getSprays(): Promise<SprayAsset[]> {
         const data = await fetchJsonWithTimeout<{ data: SprayAsset[] }>('https://valorant-api.com/v1/sprays');
         return data.data as SprayAsset[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -539,7 +620,7 @@ export async function getPlayerCards(): Promise<PlayerCardAsset[]> {
         const data = await load().catch(load);
         return data.data as PlayerCardAsset[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -549,7 +630,7 @@ export async function getPlayerTitles(): Promise<PlayerTitleAsset[]> {
         const data = await fetchJsonWithTimeout<{ data: PlayerTitleAsset[] }>('https://valorant-api.com/v1/playertitles');
         return data.data as PlayerTitleAsset[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -1040,9 +1121,11 @@ function appendProfileParams(
 
 export async function getProfileOverview(
     opts: { puuid?: string; region?: string } = {},
+    cacheOnly = false,
 ): Promise<ProfileOverview> {
     const params = new URLSearchParams();
     appendProfileParams(params, opts);
+    if (cacheOnly) params.set("cacheOnly", "true");
     const qs = params.toString();
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/overview${qs ? `?${qs}` : ""}`);
     if (!response.ok) {
@@ -1215,14 +1298,52 @@ export interface LivePlayer {
     cardId: string;
     isLocal: boolean;
     competitiveTier: number;
-    rankedRating: number;
+    rankedRating?: number;
     peakTier?: number;
-    peakRankName?: string;
     /** Opaque grouping only; raw Riot party IDs are never returned. */
     partyGroup?: string;
-    /** Confirmed from Riot presence/current party, or inferred from prior matches. */
-    partyConfidence?: "likely";
+    /** Prior shared-party evidence from cached completed matches, never a live-party claim. */
+    historyPartyGroup?: string;
+    historyPartyMatches?: number;
+    historyPartyLastSeenAt?: number;
+    cachedEvidence?: {
+        puuid: string;
+        agentId?: string;
+        latestTier?: number;
+        peakTier?: number;
+        matches?: number;
+        wins?: number;
+        winrate?: number;
+        kills?: number;
+        deaths?: number;
+        assists?: number;
+        kd?: number;
+        kda?: number;
+        lastMatchAt?: number;
+        cacheUpdatedAt?: number;
+    };
     teamId?: string;
+}
+
+async function requestLiveMatchAction(path: string, fallback: string): Promise<LiveMatchResponse> {
+    try {
+        const response = await fetchWithAuth(LOCAL_URL + path, { method: "POST" });
+        if (!response.ok) {
+            const message = await response.text().catch(() => "");
+            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: message || fallback };
+        }
+        return await response.json();
+    } catch (error) {
+        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: error instanceof Error ? error.message : fallback };
+    }
+}
+
+export function refreshLiveMatchRanks(): Promise<LiveMatchResponse> {
+    return requestLiveMatchAction("/livematch/ranks", "Could not refresh live ranks.");
+}
+
+export function scanLiveMatchLikelyStacks(): Promise<LiveMatchResponse> {
+    return requestLiveMatchAction("/livematch/likely-stacks", "Could not recheck cached parties.");
 }
 
 export async function getLiveMatch(): Promise<LiveMatchResponse> {
@@ -1263,73 +1384,6 @@ export async function getProfileLeaderboard(seasonId?: string, query = "", start
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/leaderboard?${params.toString()}`);
     if (!response.ok) throw new Error(await response.text() || "Failed to fetch leaderboard.");
     return response.json();
-}
-
-/**
- * Rebuild the active match with current Riot MMR for players whose identity
- * Riot exposes. This deliberately bypasses the local match-history cache.
- */
-export async function refreshLiveMatchRanks(): Promise<LiveMatchResponse> {
-    try {
-        const response = await fetchWithAuth(LOCAL_URL + '/livematch/ranks', { method: 'POST' });
-        if (!response.ok) {
-            const text = await response.text().catch(() => "");
-            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: text || "Failed to refresh live ranks." };
-        }
-        return await response.json();
-    } catch (err) {
-        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
-    }
-}
-
-export async function scanLiveMatchLikelyStacks(): Promise<LiveMatchResponse> {
-    try {
-        const response = await fetchWithAuth(LOCAL_URL + '/livematch/likely-stacks', { method: 'POST' });
-        if (!response.ok) {
-            const text = await response.text().catch(() => "");
-            return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: text || "Failed to scan likely stacks." };
-        }
-        return await response.json();
-    } catch (err) {
-        return { phase: "none", matchId: "", mapId: "", queueId: "", timeLeft: 0, error: err instanceof Error ? err.message : String(err || "") };
-    }
-}
-
-export interface LivePlayerStats {
-    matches: number;
-    wins: number;
-    winrate: number;
-    kd: number;
-    kda: number;
-    loaded: boolean;
-}
-
-const EMPTY_STATS: LivePlayerStats = { matches: 0, wins: 0, winrate: 0, kd: 0, kda: 0, loaded: false };
-
-/**
- * Fetch agent-specific stats for one player. Backed by an in-memory
- * cache on the backend, so subsequent calls for the same (puuid,
- * agent) pair return instantly. Returns `{ loaded: false }` on
- * failure so the caller can degrade silently.
- */
-export async function getLivePlayerStats(puuid: string, agentId: string): Promise<LivePlayerStats> {
-    if (!puuid || !agentId) return EMPTY_STATS;
-    try {
-        const url = `${LOCAL_URL}/live/player-stats?puuid=${encodeURIComponent(puuid)}&agent=${encodeURIComponent(agentId)}`;
-        const response = await fetchWithAuth(url);
-        if (!response.ok) return EMPTY_STATS;
-        const data = await response.json();
-        return {
-            matches: Number(data?.matches) || 0,
-            wins: Number(data?.wins) || 0,
-            winrate: Number(data?.winrate) || 0,
-            kd: Number(data?.kd) || 0,
-            kda: Number(data?.kda) || 0,
-            loaded: !!data?.loaded,
-        };
-    } catch {
-        return EMPTY_STATS;
-    }
 }
 
 export interface RiotMissionsResponse {
@@ -1492,9 +1546,11 @@ export interface SocialStatusResponse {
     friendCount: number;
     onlineCount: number;
     inGameCount: number;
+    selfPresence?: SocialPresence;
     presences?: SocialPresence[];
     requests?: SocialFriendRequest[];
     activity?: SocialActivityEvent[];
+    formerContacts?: SocialFormerContact[];
     error?: string;
 }
 
@@ -1509,9 +1565,15 @@ export interface SocialActivityEvent {
     id: number;
     peerPuuid: string;
     name: string;
-    type: "friend_first_observed" | "friend_readded" | "friendship_ended" | "request_received" | "request_sent" | "request_cancelled" | "request_accepted_by_you" | "request_accepted_by_them" | "request_closed_unknown";
+    type: "friend_first_observed" | "friend_added" | "friend_readded" | "friendship_ended" | "request_received" | "request_sent" | "request_cancelled" | "request_accepted_by_you" | "request_accepted_by_them" | "request_closed_unknown";
     occurredAt: number;
     evidence: string;
+}
+
+export interface SocialFormerContact {
+    puuid: string;
+    name: string;
+    lastSeenAt: number;
 }
 
 export interface SocialPresence {
@@ -1527,6 +1589,12 @@ export interface SocialPresence {
     cardId?: string;
     platform?: string;
     partyGroup?: string;
+    queueStartedAt?: number;
+    mapId?: string;
+    competitiveTier?: number;
+    allyScore?: number;
+    enemyScore?: number;
+    scoreAvailable?: boolean;
 }
 
 export interface DailyTicketResponse {
@@ -1566,18 +1634,9 @@ export async function getItemUpgrades(): Promise<ItemUpgradeDefinition[]> {
 }
 
 export async function subscribeProgressionEvents(onProgression: () => void, signal: AbortSignal): Promise<void> {
-    const response = await appFetch(LOCAL_URL + '/progression/events', { signal });
-    if (!response.ok || !response.body) throw new Error('Progression event stream unavailable.');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     while (!signal.aborted) {
-        const { value, done } = await reader.read();
-        if (done) return;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
-        for (const event of events) if (event.includes('event: progression')) onProgression();
+        await waitForEventRetry(60_000, signal);
+        if (!signal.aborted) onProgression();
     }
 }
 
@@ -1600,7 +1659,7 @@ export async function getFlexes(): Promise<FlexAsset[]> {
         const data = await fetchJsonWithTimeout<{ data: FlexAsset[] }>('https://valorant-api.com/v1/flex');
         return data.data as FlexAsset[];
     } catch (error) {
-        console.error(error);
+        warnRequestFailure(error);
         return [];
     }
 }
@@ -1634,35 +1693,11 @@ function waitForEventRetry(delayMs: number, signal: AbortSignal): Promise<void> 
 }
 
 async function subscribeEventStream(path: string, eventNames: ReadonlySet<string>, onEvent: () => void, signal: AbortSignal): Promise<void> {
-    let retryDelay = 500;
+    void path;
+    void eventNames;
     while (!signal.aborted) {
-        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-        try {
-            const response = await appFetch(LOCAL_URL + path, { signal });
-            if (!response.ok || !response.body) throw new Error('Event stream unavailable.');
-            reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            while (!signal.aborted) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                retryDelay = 500;
-                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-                const events = buffer.split('\n\n');
-                buffer = events.pop() || '';
-                for (const event of events) {
-                    const eventName = event.split('\n').find((line) => line.startsWith('event:'))?.slice(6).trim();
-                    if (eventName && eventNames.has(eventName)) onEvent();
-                }
-            }
-        } catch {
-            if (signal.aborted) return;
-        } finally {
-            if (reader) void reader.cancel().catch(() => undefined);
-        }
-        if (signal.aborted) return;
-        await waitForEventRetry(retryDelay, signal);
-        retryDelay = Math.min(retryDelay * 2, 5_000);
+        await waitForEventRetry(15_000, signal);
+        if (!signal.aborted) onEvent();
     }
 }
 

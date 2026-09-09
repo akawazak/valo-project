@@ -167,6 +167,7 @@ let tierPromise: Promise<Map<number, { smallIcon: string }>> | null = null;
 interface CachedProfileSnapshot {
     overview: ProfileOverview;
     seasonSummary: ProfileSeasonSummary | null;
+    rrHistory: ProfileRRHistory | null;
     history: ProfileMatchSummary[];
     total: number;
     agentStats: ProfileAgentStatsResponse | null;
@@ -488,9 +489,12 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncPuuidRef = useRef("");
     const historyRequestRef = useRef(0);
+    const rrHistoryRequestRef = useRef(0);
     const refreshRequestRef = useRef(0);
     const currentPuuidRef = useRef(puuid);
     currentPuuidRef.current = puuid;
+    const currentSeasonIdRef = useRef(overview?.currentSeasonId || "");
+    currentSeasonIdRef.current = overview?.currentSeasonId || "";
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
         onRequestedProfileChange(profile.puuid === ownPuuid ? null : profile);
         window.scrollTo({ top: 0, behavior: "smooth" });
@@ -582,7 +586,25 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         }
     }, [opts, pageSize, puuid, queue]);
 
-    const refresh = useCallback(async () => {
+    const loadRRHistory = useCallback(async (seasonId?: string) => {
+        const request = ++rrHistoryRequestRef.current;
+        const targetPuuid = puuid;
+        if (!targetPuuid) {
+            setRRHistory(null);
+            return;
+        }
+        try {
+            const rr = await getRRHistory(seasonId, opts);
+            if (request !== rrHistoryRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
+            setRRHistory(rr);
+        } catch (err) {
+            if (request === rrHistoryRequestRef.current && currentPuuidRef.current === targetPuuid && !viewedProfile) {
+                setError(cleanError(err));
+            }
+        }
+    }, [opts, puuid, viewedProfile]);
+
+    const refresh = useCallback(async (refreshLive: boolean) => {
         const request = ++refreshRequestRef.current;
         const targetPuuid = puuid;
         if (!puuid) {
@@ -607,7 +629,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             }
 
             const [ov, ag, mp] = await Promise.all([
-                getProfileOverview(opts),
+                getProfileOverview(opts, !refreshLive),
                 getAgentStats(queue || undefined, opts),
                 getMapStats(queue || undefined, opts),
             ]);
@@ -635,9 +657,10 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
 
     useEffect(() => {
         const cached = puuid ? profileSnapshotCache.get(puuid.toLowerCase()) : undefined;
+        rrHistoryRequestRef.current += 1;
         setOverview(cached?.overview ?? null);
         setSeasonSummary(cached?.seasonSummary ?? null);
-        setRRHistory(null);
+        setRRHistory(cached?.rrHistory ?? null);
         setHistory(cached?.history ?? []);
         setTotal(cached?.total ?? 0);
         setHistoryLoaded(Boolean(cached));
@@ -659,8 +682,8 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, [puuid, viewedProfile]);
 
     useEffect(() => {
-        void refresh();
-    }, [refresh]);
+        void refresh(!viewedProfile);
+    }, [refresh, viewedProfile]);
 
     useEffect(() => {
         void loadHistory();
@@ -671,23 +694,12 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
 
     useEffect(() => {
         const currentSeasonId = overview?.currentSeasonId;
-        if (!puuid || !currentSeasonId) {
+        if (!puuid) {
             setRRHistory(null);
             return;
         }
-        let cancelled = false;
-        getRRHistory(currentSeasonId, opts)
-            .then((rr) => {
-                if (cancelled) return;
-                setRRHistory(rr);
-            })
-            .catch((err) => {
-                if (!cancelled && !viewedProfile) setError(cleanError(err));
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [opts, overview?.currentSeasonId, puuid, viewedProfile]);
+        void loadRRHistory(currentSeasonId || undefined);
+    }, [loadRRHistory, overview?.currentSeasonId, puuid]);
 
     useEffect(() => {
         if (!puuid) return;
@@ -752,8 +764,11 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 } else if (manual) {
                     showToast("Profile synced.");
                 }
-                await refresh();
-                await loadHistory();
+                await Promise.all([
+                    refresh(true),
+                    loadHistory(),
+                    loadRRHistory(currentSeasonIdRef.current || undefined),
+                ]);
             } catch (err) {
                 if (currentPuuidRef.current === targetPuuid) {
                     if (manual || viewedProfile) setError(cleanError(err));
@@ -764,7 +779,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 }
             }
         },
-        [loadHistory, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
+        [loadHistory, loadRRHistory, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
     );
 
     useEffect(() => {
@@ -782,11 +797,11 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         return () => window.clearInterval(timer);
     }, [rateLimitUntil, runSync]);
 
-    // Auto-sync every profile once per visit/account. The backend deduplicates
-    // a sync that is already running, and this ref prevents render-driven
-    // repeats while the same profile remains open.
+    // An explicitly opened profile gets one stale-aware background refresh.
+    // Live-roster and party overlays still pass autoSyncMatches=false, so a
+    // match screen cannot fan out history calls for every visible player.
     useEffect(() => {
-        if (!autoSyncMatches || !puuid || loading || syncing) return;
+        if (!autoSyncMatches || !puuid || syncing) return;
         if (!syncStatus) {
             if (autoSyncPuuidRef.current !== puuid) {
                 autoSyncPuuidRef.current = puuid;
@@ -795,26 +810,24 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             return;
         }
         if (syncStatus.inFlight) {
-            autoSyncPuuidRef.current = puuid;
+            autoSyncPuuidRef.current = `${puuid}:${syncStatus.lastSyncedAt || 0}`;
             void runSync(false);
             return;
         }
-        if (autoSyncPuuidRef.current !== puuid) {
-            autoSyncPuuidRef.current = puuid;
-            void runSync(false);
-        }
-    }, [autoSyncMatches, loading, puuid, runSync, syncStatus, syncing]);
+        if (syncStatus.errorKind === "rate_limited" && (syncStatus.retryAt || 0) > Date.now()) return;
+        const staleAfter = (viewedProfile ? 60 : 20) * 60 * 1000;
+        if (syncStatus.lastSyncedAt && Date.now() - syncStatus.lastSyncedAt < staleAfter) return;
+        const attemptKey = `${puuid}:${syncStatus.lastSyncedAt || 0}`;
+        if (autoSyncPuuidRef.current === attemptKey) return;
+        autoSyncPuuidRef.current = attemptKey;
+        void runSync(false);
+    }, [autoSyncMatches, puuid, runSync, syncStatus, syncing, viewedProfile]);
 
-    const knownShortHistory = historyLoaded
-        && !syncStatus?.inFlight
-        && (syncStatus?.totalMatches ?? total) < 3;
-    const requiredProfileMatches = knownShortHistory ? Math.min(3, total) : 3;
     const profileSnapshotCandidate = Boolean(puuid)
         && overviewLoadedFor === puuid
         && historyLoadedFor === puuid
         && Boolean(overview)
-        && historyLoaded
-        && history.length >= requiredProfileMatches;
+        && historyLoaded;
 
     useEffect(() => {
         if (!puuid || !profileSnapshotCandidate || !overview) return;
@@ -822,6 +835,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         profileSnapshotCache.set(puuid.toLowerCase(), {
             overview,
             seasonSummary,
+            rrHistory,
             history,
             total,
             agentStats,
@@ -829,7 +843,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             syncStatus,
             identity,
         });
-    }, [agentStats, history, identity, mapStats, overview, profileSnapshotCandidate, puuid, seasonSummary, syncStatus, total]);
+    }, [agentStats, history, identity, mapStats, overview, profileSnapshotCandidate, puuid, rrHistory, seasonSummary, syncStatus, total]);
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
@@ -936,7 +950,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
 
     if (showProfileFacade) {
         const overviewReady = overviewLoadedFor === puuid;
-        const matchesReady = historyLoadedFor === puuid && historyLoaded && history.length >= requiredProfileMatches;
+        const matchesReady = historyLoadedFor === puuid && historyLoaded;
         const profileLoadMessage = matchesReady
             ? "Finishing profile..."
             : overviewReady
@@ -955,7 +969,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                             <span className={s.profileLoadKicker}>PROFILE UNAVAILABLE</span>
                             <strong>Couldn&apos;t load this profile</strong>
                             <small>{error}</small>
-                            <button type="button" className={s.profileLoadRetry} onClick={() => { void refresh(); void loadHistory(); }}>
+                                <button type="button" className={s.profileLoadRetry} onClick={() => { void refresh(true); void loadHistory(); }}>
                                 Try again
                             </button>
                         </>
@@ -1090,7 +1104,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                 ))}
                             </select>
                             <div className={s.railCommandBtns}>
-                                <button className={s.ghostBtn} onClick={refresh} disabled={isBusy}>
+                                <button className={s.ghostBtn} onClick={() => void refresh(true)} disabled={isBusy}>
                                     Refresh
                                 </button>
                                 <button className={s.primaryBtn} onClick={() => runSync(true)} disabled={isBusy}>
@@ -1192,6 +1206,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                         snapshots={rrHistory?.snapshots ?? []}
                                         source={rrHistory?.source}
                                         height={250}
+                                        loading={isBusy}
                                     />
                                 </Panel>
 
@@ -1920,7 +1935,7 @@ function RoundReview({
     agents: Record<string, AgentMeta>;
     weapons: Weapon[];
 }) {
-    const rounds = detail.rounds || [];
+    const rounds = useMemo(() => detail.rounds || [], [detail.rounds]);
     const local = detail.players.find((player) => player.isLocal);
     const localSubject = local?.subject.toLowerCase() || "";
     const localTeam = local?.teamId.toLowerCase() || "";
@@ -1945,24 +1960,13 @@ function RoundReview({
         top: Math.max(0, Math.min(1, x * map!.yMultiplier! + map!.yScalarToAdd!)) * 100,
     });
     const playerBySubject = useMemo(() => new Map(detail.players.map((player) => [player.subject.toLowerCase(), player])), [detail.players]);
-    const firstKills = useMemo(() => {
-        const byRound = new Map<number, MatchKillEvent>();
-        for (const event of detail.kills || []) {
-            const current = byRound.get(event.roundNum);
-            if (!current || event.gameTime < current.gameTime) byRound.set(event.roundNum, event);
-        }
-        return byRound;
-    }, [detail.kills]);
-    const opening = [...firstKills.values()].filter((event) => event.killer.toLowerCase() === localSubject || event.victim.toLowerCase() === localSubject);
-    const openingWins = opening.filter((event) => event.killer.toLowerCase() === localSubject);
-    const convertedOpeningWins = openingWins.filter((event) => rounds.find((round) => round.roundNum === event.roundNum)?.winningTeam.toLowerCase() === localTeam).length;
     const allLocalDeaths = (detail.kills || []).filter((event) => event.victim.toLowerCase() === localSubject);
     const tradedDeaths = allLocalDeaths.filter((death) => (detail.kills || []).some((event) => event.roundNum === death.roundNum && event.roundTime >= death.roundTime && event.roundTime - death.roundTime <= 5_000 && event.victim.toLowerCase() === death.killer.toLowerCase() && playerBySubject.get(event.killer.toLowerCase())?.teamId.toLowerCase() === localTeam)).length;
     const totalAbilityEffects = rounds.reduce((sum, round) => {
         const stat = round.playerStats?.find((entry) => entry.subject.toLowerCase() === localSubject);
         return sum + (stat?.ability.grenade || 0) + (stat?.ability.ability1 || 0) + (stat?.ability.ability2 || 0) + (stat?.ability.ultimate || 0);
     }, 0);
-    const abilityUsage = ([
+    const abilityUsage = useMemo(() => ([
         ["grenade", local?.abilityCasts?.grenade || 0],
         ["ability1", local?.abilityCasts?.ability1 || 0],
         ["ability2", local?.abilityCasts?.ability2 || 0],
@@ -1970,13 +1974,218 @@ function RoundReview({
     ] as const).filter(([, count]) => count > 0).map(([slot, count]) => ({
         count,
         name: agents[local?.characterId.toLowerCase() || ""]?.abilities?.[slot]?.name || ({ grenade: "Signature", ability1: "Ability 1", ability2: "Ability 2", ultimate: "Ultimate" } as const)[slot],
-    }));
+    })), [agents, local?.abilityCasts?.ability1, local?.abilityCasts?.ability2, local?.abilityCasts?.grenade, local?.abilityCasts?.ultimate, local?.characterId]);
     const totalAbilityCasts = abilityUsage.reduce((sum, ability) => sum + ability.count, 0);
+    const roundFacts = useMemo(() => {
+        let yourScore = 0;
+        let enemyScore = 0;
+        return rounds.map((round) => {
+            const won = round.winningTeam.toLowerCase() === localTeam;
+            if (won) yourScore += 1;
+            else enemyScore += 1;
+            const events = (detail.kills || [])
+                .filter((event) => event.roundNum === round.roundNum)
+                .sort((a, b) => a.roundTime - b.roundTime || a.gameTime - b.gameTime);
+            const stat = round.playerStats?.find((entry) => entry.subject.toLowerCase() === localSubject);
+            const kills = events.filter((event) => event.killer.toLowerCase() === localSubject);
+            const deaths = events.filter((event) => event.victim.toLowerCase() === localSubject);
+            const assists = events.filter((event) => event.assistants?.some((assistant) => assistant.toLowerCase() === localSubject));
+            const openingEvent = events[0];
+            const openingResult = openingEvent?.killer.toLowerCase() === localSubject
+                ? "won"
+                : openingEvent?.victim.toLowerCase() === localSubject
+                    ? "lost"
+                    : "none";
+            const traded = deaths.some((death) => events.some((event) => (
+                event.roundTime >= death.roundTime
+                && event.roundTime - death.roundTime <= 5_000
+                && event.victim.toLowerCase() === death.killer.toLowerCase()
+                && playerBySubject.get(event.killer.toLowerCase())?.teamId.toLowerCase() === localTeam
+            )));
+            const playerTeam = (subject: string) => playerBySubject.get(subject.toLowerCase())?.teamId.toLowerCase() || "";
+            const allyLoadout = (round.playerStats || [])
+                .filter((entry) => playerTeam(entry.subject) === localTeam)
+                .reduce((sum, entry) => sum + (entry.economy.loadoutValue || 0), 0);
+            const enemyLoadout = (round.playerStats || [])
+                .filter((entry) => playerTeam(entry.subject) && playerTeam(entry.subject) !== localTeam)
+                .reduce((sum, entry) => sum + (entry.economy.loadoutValue || 0), 0);
+            const damage = stat?.damage?.reduce((sum, event) => sum + event.damage, 0) || 0;
+            const localObjective = round.bombPlanter?.toLowerCase() === localSubject
+                ? `Planted${round.plantSite ? ` ${round.plantSite}` : ""}`
+                : round.bombDefuser?.toLowerCase() === localSubject
+                    ? "Defused"
+                    : "";
+            return {
+                round,
+                won,
+                stat,
+                events,
+                kills,
+                deaths,
+                assists,
+                damage,
+                openingResult,
+                traded,
+                allyLoadout,
+                enemyLoadout,
+                localObjective,
+                yourScore,
+                enemyScore,
+            };
+        });
+    }, [detail.kills, localSubject, localTeam, playerBySubject, rounds]);
+    const selectedFact = roundFacts.find((fact) => fact.round.roundNum === selectedRound?.roundNum) || roundFacts[0];
+    const turningPoints = useMemo(() => {
+        const notes: Array<{ roundNum: number; tone: "good" | "danger" | "neutral"; title: string; detail: string }> = [];
+        const claimed = new Set<number>();
+        const add = (note: (typeof notes)[number]) => {
+            if (claimed.has(note.roundNum)) return;
+            claimed.add(note.roundNum);
+            notes.push(note);
+        };
+        for (let index = 0; index < roundFacts.length; index += 1) {
+            const fact = roundFacts[index];
+            const displayRound = fact.round.roundNum + 1;
+            if (fact.openingResult === "won" && !fact.won) {
+                add({ roundNum: fact.round.roundNum, tone: "danger", title: `R${displayRound} · Advantage lost`, detail: "You secured first blood, but the round did not convert." });
+                continue;
+            }
+            if (fact.openingResult === "lost" && fact.won) {
+                add({ roundNum: fact.round.roundNum, tone: "good", title: `R${displayRound} · Team recovery`, detail: "Your team recovered the round after you were first death." });
+                continue;
+            }
+            if (fact.won && fact.enemyLoadout - fact.allyLoadout >= 3_000) {
+                add({ roundNum: fact.round.roundNum, tone: "good", title: `R${displayRound} · Economy upset`, detail: `Won despite a ${Math.round((fact.enemyLoadout - fact.allyLoadout) / 100) / 10}k team-loadout deficit.` });
+                continue;
+            }
+            if (index >= 2 && roundFacts[index - 1].won === roundFacts[index - 2].won && fact.won !== roundFacts[index - 1].won) {
+                add({
+                    roundNum: fact.round.roundNum,
+                    tone: fact.won ? "good" : "danger",
+                    title: `R${displayRound} · ${fact.won ? "Momentum recovered" : "Momentum broken"}`,
+                    detail: fact.won ? "This win stopped a two-round losing run." : "This loss ended a two-round winning run.",
+                });
+            }
+        }
+        return notes.slice(0, 6);
+    }, [roundFacts]);
+    const reviewInsights = useMemo(() => {
+        const insights: Array<{ id: string; tone: "good" | "danger" | "neutral"; label: string; value: string; evidence: string; tip: string }> = [];
+        const openingFacts = roundFacts.filter((fact) => fact.openingResult !== "none");
+        const openingWon = openingFacts.filter((fact) => fact.openingResult === "won");
+        const openingConverted = openingWon.filter((fact) => fact.won).length;
+        if (openingFacts.length) {
+            const duelRate = Math.round((openingWon.length / openingFacts.length) * 100);
+            insights.push({
+                id: "opening-duels",
+                tone: duelRate >= 55 ? "good" : duelRate < 40 ? "danger" : "neutral",
+                label: "Opening duels",
+                value: `${openingWon.length}/${openingFacts.length} won`,
+                evidence: `${openingConverted}/${openingWon.length} opening advantages converted into round wins.`,
+                tip: duelRate >= 55 ? "Keep choosing first contact when the setup gives you support." : "Take first contact closer to a teammate or after utility creates the advantage.",
+            });
+        }
+        if (allLocalDeaths.length) {
+            const tradeRate = Math.round((tradedDeaths / allLocalDeaths.length) * 100);
+            insights.push({
+                id: "trade-spacing",
+                tone: tradeRate >= 55 ? "good" : tradeRate < 35 ? "danger" : "neutral",
+                label: "Trade spacing",
+                value: `${tradeRate}% traded`,
+                evidence: `${tradedDeaths}/${allLocalDeaths.length} deaths were answered by a teammate within five seconds.`,
+                tip: tradeRate >= 55 ? "Your spacing created reliable return kills; preserve it." : "Play within a teammate’s trade path instead of giving isolated fights.",
+            });
+        }
+        const multiKillRounds = roundFacts.filter((fact) => fact.kills.length >= 2);
+        if (multiKillRounds.length) {
+            const converted = multiKillRounds.filter((fact) => fact.won).length;
+            insights.push({
+                id: "multikill-conversion",
+                tone: converted === multiKillRounds.length ? "good" : converted / multiKillRounds.length < 0.6 ? "danger" : "neutral",
+                label: "Multi-kill conversion",
+                value: `${converted}/${multiKillRounds.length} rounds`,
+                evidence: `${multiKillRounds.length} rounds contained at least two of your kills.`,
+                tip: converted === multiKillRounds.length ? "Your high-impact rounds consistently converted." : "After a multi-kill, reset around the objective instead of offering another isolated duel.",
+            });
+        }
+        const lowDamageLosses = roundFacts.filter((fact) => fact.stat && !fact.won && fact.damage < 100);
+        if (lowDamageLosses.length) {
+            insights.push({
+                id: "low-damage-losses",
+                tone: "danger",
+                label: "Low-damage losses",
+                value: `${lowDamageLosses.length} rounds`,
+                evidence: `Below 100 recorded damage in rounds ${lowDamageLosses.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
+                tip: "Use safer utility-assisted contact or reposition early enough to contribute before the round closes.",
+            });
+        }
+        const weakBuyLosses = roundFacts.filter((fact) => !fact.won && fact.allyLoadout > 0 && fact.enemyLoadout - fact.allyLoadout >= 3_000);
+        if (weakBuyLosses.length) {
+            insights.push({
+                id: "economy-deficit",
+                tone: "neutral",
+                label: "Economy pressure",
+                value: `${weakBuyLosses.length} disadvantaged losses`,
+                evidence: `Your team entered those rounds at least 3,000 loadout value behind.`,
+                tip: "Treat these as lower-probability rounds: coordinate the buy, preserve weapons, and avoid judging aim from the result alone.",
+            });
+        }
+        const objectiveRounds = roundFacts.filter((fact) => fact.localObjective);
+        if (objectiveRounds.length) {
+            const converted = objectiveRounds.filter((fact) => fact.won).length;
+            insights.push({
+                id: "objective-work",
+                tone: converted / objectiveRounds.length >= 0.6 ? "good" : "neutral",
+                label: "Objective work",
+                value: `${converted}/${objectiveRounds.length} converted`,
+                evidence: objectiveRounds.map((fact) => `R${fact.round.roundNum + 1} ${fact.localObjective}`).join(" · "),
+                tip: converted / objectiveRounds.length >= 0.6 ? "Your plant/defuse involvement produced round value." : "After the objective action, prioritize the safest post-plant or retake position.",
+            });
+        }
+        if (totalAbilityCasts || totalAbilityEffects) {
+            insights.push({
+                id: "utility",
+                tone: "neutral",
+                label: "Utility record",
+                value: totalAbilityCasts ? `${totalAbilityCasts} casts` : `${totalAbilityEffects} effects`,
+                evidence: abilityUsage.length ? abilityUsage.map((ability) => `${ability.name} ${ability.count}`).join(" · ") : `${totalAbilityEffects} round effects preserved.`,
+                tip: "Use this as a factual usage count; the payload does not prove whether each cast had good timing.",
+            });
+        }
+        const flaggedFacts = roundFacts.filter((fact) => fact.stat && (fact.stat.wasAfk || fact.stat.wasPenalized || fact.stat.stayedInSpawn));
+        if (flaggedFacts.length) {
+            insights.push({
+                id: "riot-status",
+                tone: "danger",
+                label: "Riot status flags",
+                value: `${flaggedFacts.length} rounds`,
+                evidence: `AFK, penalty, or spawn state was reported in rounds ${flaggedFacts.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
+                tip: "This is Riot-reported state, not an intent judgment; review connection or interruption issues if it was unexpected.",
+            });
+        }
+        return insights;
+    }, [abilityUsage, allLocalDeaths.length, roundFacts, totalAbilityCasts, totalAbilityEffects, tradedDeaths]);
+    const selectedSignals = selectedFact ? [
+        selectedFact.openingResult === "won" ? { tone: "good", label: "Opening kill" } : selectedFact.openingResult === "lost" ? { tone: "danger", label: "First death" } : null,
+        selectedFact.kills.length >= 2 ? { tone: "good", label: `${selectedFact.kills.length}K multi-kill` } : null,
+        selectedFact.traded ? { tone: "good", label: "Death traded" } : selectedFact.deaths.length ? { tone: "danger", label: "Untraded death" } : null,
+        selectedFact.localObjective ? { tone: "objective", label: selectedFact.localObjective } : null,
+        selectedFact.enemyLoadout - selectedFact.allyLoadout >= 3_000 ? { tone: "neutral", label: "Lower team buy" } : selectedFact.allyLoadout - selectedFact.enemyLoadout >= 3_000 ? { tone: "good", label: "Stronger team buy" } : null,
+    ].filter((signal): signal is { tone: string; label: string } => Boolean(signal)) : [];
+    const selectedRoundRead = (() => {
+        if (!selectedFact) return "No detailed player receipt was recorded for this round.";
+        if (selectedFact.openingResult === "won" && !selectedFact.won) return "You created the opening advantage, but the team did not convert it. After first blood, reduce unnecessary re-peeks and play the objective edge.";
+        if (selectedFact.openingResult === "lost" && !selectedFact.traded) return "You were first death and the kill was not traded within five seconds. Take the same contact only with closer trade support or earlier utility.";
+        if (selectedFact.kills.length >= 2 && !selectedFact.won) return "Your multi-kill did not convert. The next decision after gaining numbers mattered more than finding another duel.";
+        if (!selectedFact.won && selectedFact.stat && selectedFact.damage < 100) return "This was a low-damage loss. Look for earlier safe contribution through utility, crossfire positioning, or a supported first fight.";
+        if (selectedFact.won && selectedFact.enemyLoadout - selectedFact.allyLoadout >= 3_000) return "Your team won against a stronger enemy loadout—one of the match’s clearest high-value rounds.";
+        if (selectedFact.won && selectedFact.deaths.length === 0) return "You survived a converted round. Preserve the weapon and repeat the positioning that kept your impact available late.";
+        return `${selectedFact.damage} damage, ${selectedFact.kills.length} kills, ${selectedFact.assists.length} assists, and ${selectedFact.deaths.length ? "a death" : "survival"} were recorded.`;
+    })();
     const objectiveLines = [
         selectedRound?.bombPlanter ? `${selectedRound.bombPlanter.toLowerCase() === localSubject ? "You planted" : "Spike planted"}${selectedRound.plantSite ? ` at ${selectedRound.plantSite}` : ""}${selectedRound.plantRoundTime ? ` · ${fmtLength(selectedRound.plantRoundTime)}` : ""}` : "",
         selectedRound?.bombDefuser ? `${selectedRound.bombDefuser.toLowerCase() === localSubject ? "You defused" : "Spike defused"}${selectedRound.defuseRoundTime ? ` · ${fmtLength(selectedRound.defuseRoundTime)}` : ""}` : "",
     ].filter(Boolean);
-    const flaggedRounds = rounds.filter((round) => round.playerStats?.some((entry) => entry.subject.toLowerCase() === localSubject && (entry.wasAfk || entry.wasPenalized || entry.stayedInSpawn)));
     const roundTimeline = useMemo(() => {
         if (!selectedRound) return [];
         const timeline: Array<{
@@ -2041,15 +2250,15 @@ function RoundReview({
             <div><span>Round evidence</span><strong>Read the match one decision at a time</strong></div>
             <small>{hasDetailedRounds ? "Riot match receipt" : "Objective timeline available · detailed buys require a refresh"}</small>
         </header>
-        <div className={s.roundFilmstrip} role="list" aria-label="Rounds">
-            {rounds.map((round) => {
-                const won = round.winningTeam.toLowerCase() === localTeam;
-                const stat = round.playerStats?.find((entry) => entry.subject.toLowerCase() === localSubject);
-                const events = (detail.kills || []).filter((event) => event.roundNum === round.roundNum);
-                const kills = events.filter((event) => event.killer.toLowerCase() === localSubject).length;
-                const deaths = events.filter((event) => event.victim.toLowerCase() === localSubject).length;
-                return <button key={round.roundNum} type="button" role="listitem" data-result={won ? "win" : "loss"} data-active={round.roundNum === selectedRound?.roundNum} onClick={() => setSelectedRoundNum(round.roundNum)}>
-                    <small>R{round.roundNum + 1}</small><strong>{won ? "W" : "L"}</strong><span>{kills ? `${kills}K` : deaths ? "D" : stat?.economy.spent ? `${Math.round(stat.economy.spent / 100) / 10}k` : "—"}</span>
+        <div className={s.roundFilmstrip} role="list" aria-label="Round momentum and score">
+            {roundFacts.map((fact) => {
+                const phaseStart = fact.round.roundNum === 12 ? "half" : fact.round.roundNum === 24 ? "overtime" : undefined;
+                return <button key={fact.round.roundNum} type="button" role="listitem" data-result={fact.won ? "win" : "loss"} data-active={fact.round.roundNum === selectedRound?.roundNum} data-phase-start={phaseStart} onClick={() => setSelectedRoundNum(fact.round.roundNum)} title={`Round ${fact.round.roundNum + 1}: ${fact.won ? "won" : "lost"}, score ${fact.yourScore}-${fact.enemyScore}`}>
+                    {phaseStart ? <em>{phaseStart === "half" ? "2H" : "OT"}</em> : null}
+                    <small>R{fact.round.roundNum + 1}</small>
+                    <strong>{fact.yourScore}<i>:</i>{fact.enemyScore}</strong>
+                    <span>{fact.kills.length ? `${fact.kills.length}K` : fact.deaths.length ? "D" : fact.damage ? `${fact.damage} dmg` : "—"}</span>
+                    <b aria-label="Round signals">{fact.openingResult === "won" ? "+1" : fact.openingResult === "lost" ? "−1" : ""}{fact.localObjective ? ` · ${fact.localObjective.startsWith("Plant") ? "P" : "D"}` : ""}</b>
                 </button>;
             })}
         </div>
@@ -2070,6 +2279,7 @@ function RoundReview({
             </div>
             <aside className={s.roundReceipt}>
                 <div className={s.roundReceiptResult} data-result={roundWon ? "win" : "loss"}><span>{roundWon ? "Round won" : "Round lost"}</span><strong>{selectedRound!.roundResult || selectedRound!.roundCeremony || "Elimination"}</strong></div>
+                {selectedSignals.length ? <div className={s.roundSignals}>{selectedSignals.map((signal) => <span key={signal.label} data-tone={signal.tone}>{signal.label}</span>)}</div> : null}
                 <div className={s.roundReceiptPlayer}>
                     {local && agents[local.characterId.toLowerCase()]?.icon ? <Image src={agents[local.characterId.toLowerCase()].icon} alt="" width={44} height={44} unoptimized /> : null}
                     <div><span>Your impact</span><strong>{localKills.length}K · {localDeaths.length}D · {localAssists.length}A</strong></div>
@@ -2080,6 +2290,8 @@ function RoundReview({
                     <div><dt>Spent</dt><dd>{selectedStat?.economy.spent?.toLocaleString() || "—"}</dd></div>
                     <div><dt>Credits left</dt><dd>{selectedStat?.economy.remaining?.toLocaleString() || "—"}</dd></div>
                     <div><dt>Headshots</dt><dd>{headshots || "—"}</dd></div>
+                    <div><dt>Team loadout</dt><dd>{selectedFact?.allyLoadout ? selectedFact.allyLoadout.toLocaleString() : "—"}</dd></div>
+                    <div><dt>Enemy loadout</dt><dd>{selectedFact?.enemyLoadout ? selectedFact.enemyLoadout.toLocaleString() : "—"}</dd></div>
                 </dl>
                 <div className={s.roundLoadout}>
                     <span>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={112} height={34} unoptimized /> : null}</span>
@@ -2090,6 +2302,10 @@ function RoundReview({
                     <span>Objective timeline</span>
                     <strong>{objectiveLines.length ? objectiveLines.map((line) => <small key={line}>{line}</small>) : "No objective action recorded"}</strong>
                     {selectedAltFireEvents.length ? <em>{selectedAltFireEvents.length} fight{selectedAltFireEvents.length === 1 ? "" : "s"} recorded with secondary fire.</em> : null}
+                </div>
+                <div className={s.roundRead} data-tone={roundWon ? "good" : "danger"}>
+                    <span>Round read</span>
+                    <p>{selectedRoundRead}</p>
                 </div>
             </aside>
         </div>
@@ -2103,14 +2319,24 @@ function RoundReview({
                 </article>)}
             </div>
         </section>
-        <div className={s.matchPatterns}>
-            <header><span>Match patterns</span><small>Factual signals from this match</small></header>
-            <article data-tone={openingWins.length && convertedOpeningWins === openingWins.length ? "good" : "neutral"}><span>First contact</span><strong>{openingWins.length} of {opening.length} opening duels won</strong><small>{openingWins.length ? `${convertedOpeningWins} of those ${openingWins.length === 1 ? "round" : "rounds"} converted into a win.` : "You did not record an opening kill."}</small></article>
-            <article data-tone={allLocalDeaths.length && tradedDeaths === 0 ? "danger" : "neutral"}><span>Trade window</span><strong>{tradedDeaths} of {allLocalDeaths.length} deaths traded</strong><small>Counts a teammate eliminating your killer within five seconds.</small></article>
-            <article data-tone="neutral"><span>Ability usage</span><strong>{totalAbilityCasts ? `${totalAbilityCasts} casts` : `${totalAbilityEffects} recorded effects`}</strong><small>{abilityUsage.length ? abilityUsage.map((ability) => `${ability.name} ${ability.count}`).join(" · ") : hasDetailedRounds ? "No cast total was reported; round effects are still preserved." : "Refresh this match to preserve ability evidence."}{totalAbilityCasts && totalAbilityEffects ? ` · ${totalAbilityEffects} round effects` : ""}</small></article>
-            {local?.playtimeMillis ? <article data-tone="neutral"><span>Active time</span><strong>{fmtLength(local.playtimeMillis)} recorded</strong><small>{detail.matchInfo.gameLengthMillis ? `${fmtLength(detail.matchInfo.gameLengthMillis)} total match duration. ` : ""}Riot&apos;s player timer is shown directly; disconnect intent is not inferred.</small></article> : null}
-            {flaggedRounds.length ? <article data-tone="danger"><span>Riot status</span><strong>{flaggedRounds.length} round{flaggedRounds.length === 1 ? "" : "s"} flagged</strong><small>AFK, spawn, or penalty state was reported in rounds {flaggedRounds.map((round) => round.roundNum + 1).join(", ")}.</small></article> : <article data-tone="good"><span>Riot status</span><strong>No round penalties reported</strong><small>No AFK, spawn, or round penalty flags were present in this match payload.</small></article>}
-        </div>
+        {turningPoints.length ? <section className={s.matchTurningPoints}>
+            <header><div><span>Turning points</span><strong>Rounds that changed the match story</strong></div><small>{turningPoints.length} evidence-backed moments</small></header>
+            <div>{turningPoints.map((point) => <button key={`${point.roundNum}-${point.title}`} type="button" data-tone={point.tone} onClick={() => setSelectedRoundNum(point.roundNum)}>
+                <i>{point.tone === "good" ? "↑" : point.tone === "danger" ? "↓" : "•"}</i><span><strong>{point.title}</strong><small>{point.detail}</small></span>
+            </button>)}</div>
+        </section> : null}
+        <section className={s.matchDebrief}>
+            <header><div><span>Match review</span><strong>What to keep and what to change</strong></div><small>Rules use only recorded round evidence</small></header>
+            <div className={s.matchDebriefGrid}>
+                {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone}>
+                    <div><span>{insight.tone === "good" ? "Worked" : insight.tone === "danger" ? "Needs attention" : "Context"}</span><b>{insight.label}</b></div>
+                    <strong>{insight.value}</strong>
+                    <p>{insight.evidence}</p>
+                    <footer><i>→</i><span>{insight.tip}</span></footer>
+                </article>)}
+                {!reviewInsights.length ? <div className={s.matchDebriefEmpty}>This match does not contain enough detailed round evidence for reliable tips yet.</div> : null}
+            </div>
+        </section>
     </section>;
 }
 

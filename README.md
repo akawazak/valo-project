@@ -10,6 +10,10 @@
   <p>
     <a href="https://vanta-vault-app.vercel.app/"><strong>Website</strong></a>
     &nbsp;&middot;&nbsp;
+    <a href="https://vanta-vault-app.vercel.app/valorant-store-checker/"><strong>Store checker</strong></a>
+    &nbsp;&middot;&nbsp;
+    <a href="https://vanta-vault-app.vercel.app/valorant-loadout-manager/"><strong>Loadout manager</strong></a>
+    &nbsp;&middot;&nbsp;
     <a href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe"><strong>Download</strong></a>
     &nbsp;&middot;&nbsp;
     <a href="https://github.com/akawazak/valo-project/releases/latest">Release notes</a>
@@ -25,21 +29,21 @@
 
 ## Overview
 
-VantaVault puts the VALORANT storefront, loadouts, profiles, match history, progression, friends, parties, and available live-match context in one native app. It is designed for players who want more than a store checker without keeping several browser tools open.
+VantaVault puts the local VALORANT storefront, loadouts, profiles, match history, progression, friends, parties, and available live-match context in one native app.
 
 Account sessions and saved match data remain on your device. VantaVault can use a connected remote Riot session for account features and the local Riot Client for information that is only available while the game client is running.
 
-![VantaVault profile showing rank, season averages, and RR progression](docs/screenshots/profile.png)
+![VantaVault demo profile showing rank, season averages, and RR progression](website/assets/homepage-profile-sanitized.png)
 
 ## Features
 
 | Area | What it provides |
 | --- | --- |
-| **Storefront** | Daily offers, rotating featured bundles, Night Market, accessories, wallet balances, prices, upgrades, variants, and wishlist alerts. |
+| **Storefront** | Daily offers, rotating featured bundles, Night Market, accessories, wallet balances, prices, upgrades, variants, and wishlist alerts while the local Windows VALORANT session is running. |
 | **Loadouts** | Weapons, skins, variants, buddies, sprays, player cards, titles, flexes, and saved presets. Presets can be imported, exported, edited, and applied when ready. |
 | **Profiles** | Current RR, rank history, lifetime peak, match history, win rate, agent and map performance, progression, and locally stored round analytics. |
 | **Social** | Friends, player cards, Riot presence, party state, friend requests, chat history, and available pregame or live-match information. |
-| **Live match** | Queue, map, teams, agents, current and peak ranks, party markers, live score when exposed, and clearly labelled likely stacks based on recent-match evidence. |
+| **Live match** | Queue, map, teams, agents, confirmed Riot party markers, and live score when exposed by the active local session. |
 | **Accounts** | Multiple isolated Riot sessions, remote access renewal, and safe fallback to the local Riot Client when it is signed into the same account. |
 | **Discord** | Rich Presence for the store, loadout editor, agent select, queue, map, agent, and in-match activity. |
 | **Privacy** | Local match storage, configurable retention, encrypted mobile session storage, and diagnostics that can be exported without account tokens. |
@@ -49,19 +53,11 @@ Account sessions and saved match data remain on your device. VantaVault can use 
 
 ### Complete loadout editor
 
-![VantaVault loadout editor showing weapons, player identity, and expression slots](docs/screenshots/loadout.png)
-
-### Current loadout
-
-![VantaVault Current Loadout](docs/screenshots/current-loadout.png)
+![VantaVault loadout editor using a demo identity](website/assets/homepage-loadout-sanitized.png)
 
 ### Party and friends
 
-![VantaVault Party and Friends panel](docs/screenshots/party-friends.png)
-
-### Live match
-
-![VantaVault live match view showing teams, ranks, and party evidence](docs/screenshots/live-match.png)
+![VantaVault Party and Friends panel using demo identities](website/assets/party-friends-sanitized.png)
 
 </details>
 
@@ -71,14 +67,15 @@ Most account information works through a connected remote session. Features tied
 
 | Feature | Remote session | Local Riot Client |
 | --- | :---: | :---: |
-| Storefront, wallet, owned cosmetics, and loadout changes | Yes | Yes |
+| Storefront and wallet | No | Yes, while VALORANT is running |
+| Owned cosmetics and loadout changes | Yes | Yes |
 | Profiles, match history, progression, and map review | Yes | Yes |
 | Friends, presence, and direct messages | Yes | Yes |
 | Party chat and friend-request actions | No | Yes |
 | Pregame and live-match teams | When Riot exposes the active session | Yes |
 | Exact live score and automatic local game detection | No | Yes |
 | Automatic custom-match preset apply and restore | No | Yes |
-| Wishlist checks | While VantaVault is running | While VantaVault is running |
+| Wishlist checks | No | While VantaVault and VALORANT are running |
 
 VantaVault never replaces the selected account with data from a different local account. If the remote session and Riot Client account do not match, local fallback is not used.
 
@@ -110,11 +107,19 @@ Windows may show a SmartScreen warning because community releases are not curren
 
 ## Android target
 
-Android uses the same remote-account data contracts in a phone-oriented interface. It includes the storefront, wallet, Night Market, loadouts and presets, contracts and Battle Pass progress, friends and chat, profiles, rank progression, match history, and conditional live-match data.
+Android uses the supported remote-account data contracts in a phone-oriented interface. It includes loadouts and presets, contracts and Battle Pass progress, friends and chat, profiles, rank progression, match history, and conditional live-match data. Storefront and wallet polling are intentionally limited to the active local Windows VALORANT session.
 
 Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game detection, Discord Rich Presence, or Windows updater. Riot sign-in runs in an isolated native WebView, and saved session secrets are encrypted with a key backed by Android Keystore.
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
+
+## What's new in 0.5.28
+
+- Account Manager preserves its saved order while it is open, scrolls to the current account, and applies favorite ordering only after it is reopened.
+- Account rows can retain their player-card previews and communicate ready, expired, and sign-in-required states more clearly.
+- Live-match agent records and likely-party context now use locally cached completed-match evidence, avoiding request bursts during live polling.
+- Desktop and Android share the same supported remote-account contracts, with platform-only capabilities kept separate.
+- Startup, account recovery, and incomplete Riot-data states are handled without falling through to a framework error page.
 
 ## Development
 
@@ -135,7 +140,7 @@ npm install
 npm.cmd run desktop
 ```
 
-The desktop command builds and starts the private Go backend as a sidecar. Do not start a second backend separately; each desktop launch provides its own private key and uses port `31719`.
+The desktop command builds and starts the private Go backend as a sidecar. Do not start a second backend separately; each desktop launch provides its own private key and binds a random loopback port.
 
 For interface-only work, run `npm.cmd run dev`. Riot accounts, the private backend, Discord Rich Presence, updates, and other native features require `npm.cmd run desktop`.
 

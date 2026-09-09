@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -148,10 +149,13 @@ func TestSyncManagerBoundsHistoryWorkForLargeCaches(t *testing.T) {
 	}
 
 	historyRequests := 0
+	var historyRequestsMu sync.Mutex
 	fetch := func(method, apiURL string, _ []byte) ([]byte, error) {
 		switch {
 		case strings.Contains(apiURL, "/match-history/"):
+			historyRequestsMu.Lock()
 			historyRequests++
+			historyRequestsMu.Unlock()
 			total := 400
 			if strings.Contains(apiURL, "queue=competitive") {
 				total = 200
@@ -172,6 +176,8 @@ func TestSyncManagerBoundsHistoryWorkForLargeCaches(t *testing.T) {
 	if err := manager.runOnce(puuid, "eu", false); err != nil {
 		t.Fatal(err)
 	}
+	historyRequestsMu.Lock()
+	defer historyRequestsMu.Unlock()
 	if historyRequests != 4 {
 		t.Fatalf("history requests = %d, want 4", historyRequests)
 	}

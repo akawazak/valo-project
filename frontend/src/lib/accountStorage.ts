@@ -4,15 +4,8 @@ import { getPersistedAccounts, savePersistedAccounts } from "@/services/api";
 
 const ACCOUNTS_KEY = "riot_accounts";
 
-type SecureSecrets = {
-    accessToken?: string;
-    entitlementsToken?: string;
-    ssid?: string;
-};
-
 let accountCache: RiotAccount[] | null = null;
 let saveQueue: Promise<void> = Promise.resolve();
-const securedSecretSnapshots = new Map<string, string>();
 
 function readLegacyAccounts(): RiotAccount[] {
     try {
@@ -42,29 +35,22 @@ function mergeAccounts(local: RiotAccount[], persisted: RiotAccount[]) {
     return Array.from(merged.values());
 }
 
-async function loadSecrets(puuid: string): Promise<SecureSecrets> {
-    return invoke<SecureSecrets>("load_riot_account_secrets", { puuid });
-}
-
 async function saveSecrets(account: RiotAccount): Promise<void> {
     if (!account.accessToken && !account.entitlementsToken && !account.ssid) return;
-    const snapshot = JSON.stringify([account.accessToken || "", account.entitlementsToken || "", account.ssid || ""]);
-    if (securedSecretSnapshots.get(account.puuid) === snapshot) return;
     await invoke("save_riot_account_secrets", {
         puuid: account.puuid,
         accessToken: account.accessToken || null,
         entitlementsToken: account.entitlementsToken || null,
         ssid: account.ssid || null,
     });
-    securedSecretSnapshots.set(account.puuid, snapshot);
 }
 
 async function persistPublicAccounts(accounts: RiotAccount[]) {
     const publicAccounts = accounts.map(publicAccount);
+    await savePersistedAccounts(publicAccounts);
     localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(publicAccounts));
     localStorage.removeItem("riot_access_token");
     localStorage.removeItem("riot_entitlements");
-    await savePersistedAccounts(publicAccounts);
 }
 
 export function getStoredAccounts(): RiotAccount[] {
@@ -73,6 +59,7 @@ export function getStoredAccounts(): RiotAccount[] {
 }
 
 export function saveStoredAccounts(accounts: RiotAccount[]): Promise<void> {
+    const previousAccounts = accountCache;
     accountCache = accounts;
     // One transient Credential Manager/backend failure must not poison every
     // later account save in this app session.
@@ -84,59 +71,58 @@ export function saveStoredAccounts(accounts: RiotAccount[]): Promise<void> {
             // Keep credentials in memory for this session, but never fall back to
             // persisting Riot secrets in WebView localStorage.
             localStorage.setItem("riot_secure_storage_error", "1");
-            console.error("Could not migrate Riot credentials to Windows Credential Manager:", error);
+            console.warn("Could not migrate Riot credentials to protected native storage.");
+            throw error;
         }
         await persistPublicAccounts(accounts);
     });
-    return saveQueue;
+    return saveQueue.catch((error) => {
+        if (accountCache === accounts) accountCache = previousAccounts;
+        throw error;
+    });
+}
+
+export function saveStoredAccountPlayerCard(puuid: string, playerCardId: string): Promise<boolean> {
+    const normalizedPuuid = puuid.trim().toLowerCase();
+    const normalizedCardId = playerCardId.trim();
+    if (!normalizedPuuid || !normalizedCardId) return Promise.resolve(false);
+
+    const accounts = getStoredAccounts();
+    let changed = false;
+    const updated = accounts.map((account) => {
+        if (account.puuid.toLowerCase() !== normalizedPuuid || account.playerCardId === normalizedCardId) {
+            return account;
+        }
+        changed = true;
+        return { ...account, playerCardId: normalizedCardId };
+    });
+    if (!changed) return Promise.resolve(false);
+    return saveStoredAccounts(updated).then(() => true);
 }
 
 export async function hydrateStoredAccounts(): Promise<RiotAccount[]> {
     const legacy = getStoredAccounts();
     const persisted = await getPersistedAccounts();
     const merged = mergeAccounts(legacy, persisted);
-    let migrationSucceeded = true;
-
     const hydrated = await Promise.all(merged.map(async (account) => {
         try {
-            const secrets = await loadSecrets(account.puuid);
-            if (
-                (!secrets.accessToken && account.accessToken)
-                || (!secrets.entitlementsToken && account.entitlementsToken)
-                || (!secrets.ssid && account.ssid)
-            ) {
+            if (account.accessToken || account.entitlementsToken || account.ssid) {
                 await saveSecrets(account);
             }
-            const hydratedAccount = {
-                ...account,
-                accessToken: secrets.accessToken || account.accessToken || "",
-                entitlementsToken: secrets.entitlementsToken || account.entitlementsToken || "",
-                ssid: secrets.ssid || account.ssid,
-            };
-            securedSecretSnapshots.set(account.puuid, JSON.stringify([
-                hydratedAccount.accessToken,
-                hydratedAccount.entitlementsToken,
-                hydratedAccount.ssid || "",
-            ]));
-            return hydratedAccount;
+            return publicAccount(account);
         } catch (error) {
-            migrationSucceeded = false;
-            console.error("Could not load secure Riot credentials:", error);
-            return account;
+            localStorage.setItem("riot_secure_storage_error", "1");
+            console.warn("Could not migrate legacy Riot credentials to protected native storage.");
+            throw error;
         }
     }));
 
     accountCache = hydrated;
-    if (!migrationSucceeded) localStorage.setItem("riot_secure_storage_error", "1");
+    localStorage.removeItem("riot_secure_storage_error");
     await persistPublicAccounts(hydrated);
     return hydrated;
 }
 
 export async function deleteStoredAccountSecrets(puuid: string): Promise<void> {
-    securedSecretSnapshots.delete(puuid);
-    try {
-        await invoke("delete_riot_account_secrets", { puuid });
-    } catch (error) {
-        console.warn("Could not delete Riot credentials from Windows Credential Manager:", error);
-    }
+    await invoke("delete_riot_account_secrets", { puuid });
 }

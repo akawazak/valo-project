@@ -66,12 +66,12 @@ type SocialStatusResponse struct {
 	Presences        []SocialPresence      `json:"presences,omitempty"`
 	Requests         []SocialFriendRequest `json:"requests,omitempty"`
 	Activity         []SocialActivityEvent `json:"activity,omitempty"`
+	FormerContacts   []SocialFormerContact `json:"formerContacts,omitempty"`
 	RosterComplete   bool                  `json:"-"`
 	RequestsComplete bool                  `json:"-"`
-	// SelfPresence stays backend-only. It carries the signed-in player's
-	// presence, which is needed for live-score enrichment but is not part of
-	// the friends response exposed to the UI.
-	SelfPresence *SocialPresence `json:"-"`
+	// SelfPresence lets the mobile client explain whether the selected account
+	// is merely online, in a party, queueing, agent select, or in a match.
+	SelfPresence *SocialPresence `json:"selfPresence,omitempty"`
 	Error        string          `json:"error,omitempty"`
 }
 
@@ -91,21 +91,30 @@ type SocialActivityEvent struct {
 	Evidence   string `json:"evidence"`
 }
 
+type SocialFormerContact struct {
+	Puuid      string `json:"puuid"`
+	Name       string `json:"name"`
+	LastSeenAt int64  `json:"lastSeenAt"`
+}
+
 type SocialPresence struct {
-	Puuid          string `json:"puuid,omitempty"`
-	Name           string `json:"name,omitempty"`
-	Product        string `json:"product,omitempty"`
-	State          string `json:"state,omitempty"`
-	Availability   string `json:"availability,omitempty"`
-	QueueID        string `json:"queueId,omitempty"`
-	PartyState     string `json:"partyState,omitempty"`
-	PartySize      int    `json:"partySize,omitempty"`
-	MaxPartySize   int    `json:"maxPartySize,omitempty"`
-	CardID         string `json:"cardId,omitempty"`
-	Platform       string `json:"platform,omitempty"`
-	AllyScore      int    `json:"-"`
-	EnemyScore     int    `json:"-"`
-	ScoreAvailable bool   `json:"-"`
+	Puuid           string `json:"puuid,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Product         string `json:"product,omitempty"`
+	State           string `json:"state,omitempty"`
+	Availability    string `json:"availability,omitempty"`
+	QueueID         string `json:"queueId,omitempty"`
+	PartyState      string `json:"partyState,omitempty"`
+	PartySize       int    `json:"partySize,omitempty"`
+	MaxPartySize    int    `json:"maxPartySize,omitempty"`
+	CardID          string `json:"cardId,omitempty"`
+	Platform        string `json:"platform,omitempty"`
+	QueueStartedAt  int64  `json:"queueStartedAt,omitempty"`
+	MapID           string `json:"mapId,omitempty"`
+	CompetitiveTier int    `json:"competitiveTier,omitempty"`
+	AllyScore       int    `json:"allyScore,omitempty"`
+	EnemyScore      int    `json:"enemyScore,omitempty"`
+	ScoreAvailable  bool   `json:"scoreAvailable,omitempty"`
 	// PartyGroup is an anonymous, process-local grouping key derived from
 	// Riot presence data. Raw party IDs are never returned to the frontend.
 	PartyGroup string `json:"partyGroup,omitempty"`

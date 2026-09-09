@@ -53,6 +53,19 @@ func TestSocialHistoryRequiresCompleteSnapshotsAndDoesNotAssignRemovalActor(t *t
 	if !found {
 		t.Fatal("expected friendship_ended after a second complete roster snapshot")
 	}
+
+	// A temporary partial Riot response must still expose the durable activity
+	// timeline instead of making the Activity tab appear to erase itself.
+	h := NewHandler(nil)
+	h.trackingConn = db
+	partialResponse := &SocialStatusResponse{Source: "remote"}
+	h.attachSocialHistory(account, partialResponse)
+	if len(partialResponse.Activity) == 0 {
+		t.Fatal("partial social response dropped stored activity")
+	}
+	if len(partialResponse.FormerContacts) != 1 || partialResponse.FormerContacts[0].Puuid != "friend" || partialResponse.FormerContacts[0].Name != "Friend#TAG" {
+		t.Fatalf("partial social response dropped former contacts: %#v", partialResponse.FormerContacts)
+	}
 }
 
 func TestRemoteAcceptFriendRequestUsesRiotRosterMutationAndWaitsForConfirmation(t *testing.T) {
@@ -323,12 +336,46 @@ func TestSocialPendingRequestBecomesAcceptedOnlyWhenFriendAppears(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	accepted := 0
+	generic := 0
 	for _, event := range events {
 		if event.Type == "request_accepted_by_you" {
+			accepted++
+		}
+		if event.Type == "friend_added" || event.Type == "friend_readded" {
+			generic++
+		}
+	}
+	if accepted != 1 || generic != 0 {
+		t.Fatalf("accepted=%d generic=%d events=%+v", accepted, generic, events)
+	}
+}
+
+func TestSocialNewFriendWithoutRequestRecordsUnknownInitiator(t *testing.T) {
+	db, err := tracking.OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	account := "account"
+	baseline := &SocialStatusResponse{Source: "remote", RosterComplete: true, RequestsComplete: true, Presences: []SocialPresence{{Puuid: "existing", Name: "Existing#TAG"}}}
+	if err := recordSocialSnapshot(db, account, baseline, 1000); err != nil {
+		t.Fatal(err)
+	}
+	next := &SocialStatusResponse{Source: "remote", RosterComplete: true, RequestsComplete: true, Presences: []SocialPresence{{Puuid: "existing", Name: "Existing#TAG"}, {Puuid: "new", Name: "New#TAG"}}}
+	if err := recordSocialSnapshot(db, account, next, 2000); err != nil {
+		t.Fatal(err)
+	}
+	events, err := readSocialActivity(db, account, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.PeerPuuid == "new" && event.Type == "friend_added" && strings.Contains(event.Evidence, "actor_unknown") {
 			return
 		}
 	}
-	t.Fatal("expected pending-to-friend transition to be recorded as accepted")
+	t.Fatalf("new friend event missing unknown-initiator evidence: %+v", events)
 }
 
 func TestRemoteRosterSeparatesPendingRequestsFromFriends(t *testing.T) {

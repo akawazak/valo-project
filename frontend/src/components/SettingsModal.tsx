@@ -6,7 +6,7 @@ import { RiotAccount } from "@/lib/types";
 import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/services/settings";
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
-import { playUiSound } from "@/lib/uiSounds";
+import { playUiSound, UI_SOUND_LABELS, type UiSound } from "@/lib/uiSounds";
 
 const RIOT_WALLPAPERS = [
     { id: 'evolution', name: 'Evolution', url: '/themes/evolution.jpg' },
@@ -22,6 +22,7 @@ const RIOT_WALLPAPERS = [
 const GITHUB_REPOSITORY_URL = "https://github.com/akawazak/valo-project";
 const GITHUB_RELEASE_URL = `${GITHUB_REPOSITORY_URL}/releases/latest`;
 const DISCORD_INVITE_URL = "https://discord.gg/gxGQwWyECE";
+const SOUND_PREVIEW_CUES = Object.keys(UI_SOUND_LABELS) as UiSound[];
 
 const SETTINGS_SECTIONS = [
     { id: "general", label: "General", description: "Startup and cosmetic browsing" },
@@ -77,6 +78,7 @@ interface SettingsModalProps {
     // Client health & active info
     isLocalClientActive: boolean;
     activeAccount: RiotAccount | null;
+    isAndroid: boolean;
 
     // Updater state
     appVersion: string;
@@ -145,6 +147,7 @@ export default function SettingsModal({
     onInterfaceThemeChange,
     isLocalClientActive,
     activeAccount,
+    isAndroid,
     appVersion,
     isPortable,
     updateAvailable,
@@ -168,6 +171,7 @@ export default function SettingsModal({
     const [secureStorageFailed, setSecureStorageFailed] = useState(false);
     const [projectLinkCopied, setProjectLinkCopied] = useState(false);
     const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+	const [soundPreviewCue, setSoundPreviewCue] = useState<UiSound>("message");
     const backupInputRef = useRef<HTMLInputElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const wallpaperPreloadRef = useRef<HTMLImageElement[]>([]);
@@ -273,7 +277,7 @@ export default function SettingsModal({
                         </header>
 
                         <div className="settings-list">
-                            <div className="settings-item" hidden={activeSection !== "general"}>
+                            <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Auto Agent Select</div>
                                     <div className="settings-item-desc">Automatically apply your agent-linked preset when a match is found.</div>
@@ -290,7 +294,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item" hidden={activeSection !== "general"}>
+                            <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Launch at Login</div>
                                     <div className="settings-item-desc">Start VantaVault automatically when you sign in to Windows.</div>
@@ -339,7 +343,10 @@ export default function SettingsModal({
 								</div>
 								<div className="settings-sound-controls">
 									<AppearanceRange label="Sound volume" hint="Kept intentionally below system volume." value={soundVolume} min={0} max={100} onChange={onSoundVolumeChange} />
-									<button type="button" className="settings-update-now-btn" onClick={() => playUiSound("message", { force: true })}>Preview</button>
+									<select className="settings-select" aria-label="Sound cue to preview" value={soundPreviewCue} onChange={(event) => setSoundPreviewCue(event.target.value as UiSound)}>
+										{SOUND_PREVIEW_CUES.map((cue) => <option key={cue} value={cue}>{UI_SOUND_LABELS[cue]}</option>)}
+									</select>
+									<button type="button" className="settings-update-now-btn" onClick={() => playUiSound(soundPreviewCue, { force: true })}>Preview</button>
 								</div>
 							</div>
 
@@ -466,7 +473,7 @@ export default function SettingsModal({
                                 </div>
                             </div>
 
-                            <div className="settings-item" hidden={activeSection !== "about"}>
+                            <div className="settings-item" hidden={activeSection !== "about" || isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Updates</div>
                                     <div className="settings-item-desc">
@@ -571,7 +578,7 @@ export default function SettingsModal({
                                     </label>
                                 </div>
                             </div>
-                            <div className="settings-item">
+                            <div className="settings-item" hidden={isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Live Match Overlay</div>
                                     <div className="settings-item-desc">
@@ -762,7 +769,9 @@ export default function SettingsModal({
                             <div className="connection-mode-header">
                                 <div>
                                     <div className="settings-item-label" style={{ marginBottom: '2px' }}>Connection Mode</div>
-                                    <div className="settings-item-desc">Choose how VantaVault authenticates with Riot.</div>
+                                    <div className="settings-item-desc">
+                                        {isAndroid ? "Android uses remote Riot accounts; local PC detection stays in the Windows app." : "Choose how VantaVault authenticates with Riot."}
+                                    </div>
                                 </div>
                                 <div className={`conn-live-dot ${useLocalSso ? (isLocalClientActive ? 'dot-green' : 'dot-amber') : 'dot-blue'}`} />
                             </div>
@@ -785,7 +794,7 @@ export default function SettingsModal({
                                     <span className="conn-mode-label">Remote Accounts</span>
                                     <span className="conn-mode-desc">Login via Riot SSO</span>
                                 </button>
-                                <button
+                                {!isAndroid && <button
                                     type="button"
                                     id="conn-mode-local"
                                     className={`conn-mode-option ${useLocalSso ? 'active' : ''}`}
@@ -798,10 +807,10 @@ export default function SettingsModal({
                                     </span>
                                     <span className="conn-mode-label">Local Client</span>
                                     <span className="conn-mode-desc">Auto-detect Valorant</span>
-                                </button>
+                                </button>}
                             </div>
 
-                            {useLocalSso && (
+                            {!isAndroid && useLocalSso && (
                                 <div className={`connection-status-row ${isLocalClientActive ? 'status-online' : 'status-offline'}`}>
                                     <span className="status-indicator-dot" />
                                     <span className="status-text">
@@ -814,7 +823,9 @@ export default function SettingsModal({
                             )}
                             {secureStorageFailed && (
                                 <div className="connection-security-warning" role="status">
-                                    Riot credentials could not be saved to Windows Credential Manager. This session still works, but reconnect the account after restarting VantaVault.
+                                    {isAndroid
+                                        ? "Secure Android account storage is unavailable. This session remains memory-only and will need to be reconnected after restarting."
+                                        : "Riot credentials could not be saved to Windows Credential Manager. This session still works, but reconnect the account after restarting VantaVault."}
                                 </div>
                             )}
                         </div>

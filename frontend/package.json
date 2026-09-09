@@ -1,48 +1,56 @@
 {
   "name": "frontend",
-  "version": "0.5.27",
+  "version": "0.5.28",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
     "dev:all": "node scripts/dev.js",
     "desktop": "tauri dev",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build",
     "build": "next build --turbopack",
+    "build:android": "node scripts/build-android.mjs",
     "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "eslint",
+    "sounds:generate": "node scripts/generate-ui-sounds.mjs",
     "predeploy": "npm run build",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "~2.8.0",
+    "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-http": "^2.5.2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.9.0",
     "bootstrap": "^5.3.8",
-    "next": "16.2.9",
+    "next": "16.2.12",
     "react": "19.2.0",
     "react-bootstrap": "^2.10.10",
     "react-dom": "19.2.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@next/eslint-plugin-next": "16.2.9",
-    "@tauri-apps/cli": "~2.8.0",
+    "@next/eslint-plugin-next": "16.2.12",
+    "@tauri-apps/cli": "2.11.4",
     "@types/node": "^20",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
+    "eslint-config-next": "16.2.12",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "typescript": "^5",
-    "typescript-eslint": "^8.46.3"
+    "typescript-eslint": "^8.46.3",
+    "vitest": "3.2.6"
   },
   "overrides": {
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
-    "postcss": "8.5.16",
+    "postcss": "8.5.18",
     "sharp": "0.35.3"
   }
 }

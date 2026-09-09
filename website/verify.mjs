@@ -75,12 +75,22 @@ if (!schemaBlocks.length) {
 }
 for (const [, json] of schemaBlocks) JSON.parse(json);
 
-if (!sitemap.includes("<lastmod>2026-08-03</lastmod>") || !sitemap.includes("<image:image>")) {
+if (!sitemap.includes("<lastmod>2026-08-21</lastmod>") || !sitemap.includes("<image:image>")) {
   throw new Error("Sitemap is missing freshness or image discovery metadata.");
 }
 
-if ((sitemap.match(/<loc>/g) || []).length !== 1) {
-  throw new Error("The restored single-page website sitemap must contain only the homepage.");
+if ((sitemap.match(/<loc>/g) || []).length !== 4) {
+  throw new Error("Sitemap must contain the homepage and three feature pages.");
+}
+
+for (const page of ["valorant-store-checker", "valorant-loadout-manager", "valorant-match-history"]) {
+  const pageHtml = await readFile(new URL(`./${page}/index.html`, import.meta.url), "utf8");
+  if (!pageHtml.includes('<meta name="description"') || !pageHtml.includes('application/ld+json')) {
+    throw new Error(`${page} is missing search metadata or structured data.`);
+  }
+  if (!pageHtml.includes('/_vercel/insights/script.js') || !pageHtml.includes('Download')) {
+    throw new Error(`${page} is missing analytics or a download action.`);
+  }
 }
 
 if (/data:image\/webp;base64/i.test(html)) {
@@ -88,9 +98,10 @@ if (/data:image\/webp;base64/i.test(html)) {
 }
 
 for (const asset of [
-  "assets/homepage-profile-detail.webp",
-  "assets/homepage-loadout-detail.webp",
-  "assets/social-preview.png",
+  "assets/homepage-profile-sanitized.png",
+  "assets/homepage-loadout-sanitized.png",
+  "assets/social-preview-sanitized.png",
+  "assets/party-friends-sanitized.png",
 ]) {
   const details = await stat(new URL(`./${asset}`, import.meta.url));
   if (!details.isFile() || details.size === 0) throw new Error(`${asset} is missing.`);

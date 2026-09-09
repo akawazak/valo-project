@@ -132,6 +132,41 @@
   text-transform: uppercase;
 }
 
+.live-match-refresh-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 4px;
+}
+
+.live-match-refresh-actions button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(8, 13, 19, 0.72);
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.live-match-refresh-actions button:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.46);
+  color: var(--text-primary);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.live-match-refresh-actions button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.live-match-refresh-actions button.is-error {
+  border-color: rgba(255, 185, 72, 0.42);
+  color: var(--yellow);
+}
+
 .map-display-name {
   font-size: 2.5rem;
   font-weight: 800;
@@ -219,22 +254,23 @@
   position: relative;
   z-index: 2;
   flex: 1;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 50px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "ally-title versus enemy-title"
+    "ally-list  versus enemy-list";
   align-items: stretch;
   padding: 0 clamp(24px, 4vw, 60px) 36px;
-  gap: clamp(20px, 3vw, 40px);
+  row-gap: 12px;
+  column-gap: clamp(20px, 3vw, 40px);
   max-width: 1600px;
   margin: 0 auto;
   width: 100%;
 }
 
 .team-column {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
+  display: contents;
 }
 
 .team-title {
@@ -260,10 +296,12 @@
 }
 
 .ally-team .team-title {
+  grid-area: ally-title;
   color: var(--green);
 }
 
 .enemy-team .team-title {
+  grid-area: enemy-title;
   color: var(--accent);
 }
 
@@ -272,6 +310,14 @@
   flex-direction: column;
   gap: 12px;
   flex: 1;
+}
+
+.ally-team .players-list {
+  grid-area: ally-list;
+}
+
+.enemy-team .players-list {
+  grid-area: enemy-list;
 }
 
 .live-player-card {
@@ -342,6 +388,22 @@
   letter-spacing: 0.08em;
   white-space: nowrap;
   box-shadow: 0 0 16px rgba(42, 194, 219, 0.12);
+}
+
+.player-history-party-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 2px 7px;
+  color: #c7d7e5;
+  background: rgba(126, 153, 178, 0.1);
+  border: 1px solid rgba(154, 181, 205, 0.24);
+  border-radius: 999px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.54rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
 }
 
 .live-player-card.state-locked {
@@ -1116,29 +1178,6 @@
 
 .live-score-team.is-enemy { text-align: right; }
 
-.live-match-ranks-button {
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  padding: 5px 10px;
-  color: var(--text-primary);
-  background: rgba(7, 13, 18, 0.68);
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.live-match-ranks-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
-
-.live-match-ranks-button:disabled { cursor: wait; opacity: 0.7; }
-.live-match-ranks-button.is-error { border-color: var(--yellow); color: var(--yellow); }
-
 .live-player-loadout-image-placeholder {
   width: 72px;
   height: 34px;
@@ -1210,6 +1249,7 @@
 }
 
 .vs-divider {
+  grid-area: versus;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1233,7 +1273,13 @@
 
 @media (max-width: 1100px) {
   .teams-container {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(min-content, 1fr) auto minmax(min-content, 1fr);
+    grid-template-areas:
+      "ally-title"
+      "ally-list"
+      "enemy-title"
+      "enemy-list";
     overflow: auto;
   }
 

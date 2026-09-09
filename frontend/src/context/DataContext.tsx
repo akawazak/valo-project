@@ -1,10 +1,13 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
-import { accountRequiresManualRepair, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount, FlexAsset } from '@/lib/types';
-import { activateAccount as activateRemoteAccount, appFetch, clearActiveAccount, clearChatHistory, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getAuthUrl, hasActiveRemoteAuth, submitTokenUrl, getFlexes } from '@/services/api';
+import { accountRequiresManualRepair, isLockfileAccount, Agent, Weapon, GunBuddy, ContentTier, OwnedBuddy, BundleInfo, SprayAsset, PlayerCardAsset, PlayerTitleAsset, SpraySlot, RiotAccount, FlexAsset } from '@/lib/types';
+import { activateAccount as activateRemoteAccount, appFetch, clearActiveAccount, clearChatHistory, getAgents, getWeapons, getGunBuddies, getContentTiers, getOwnedSkins, getOwnedGunBuddies, getHealth, getLocalAccount, getOwnedAgents, getBundles, getSprays, getPlayerCards, getPlayerTitles, getOwnedSprays, getOwnedPlayerCards, getOwnedPlayerTitles, getPlayerSprays, getAuthUrl, hasActiveRemoteAuth, reportAppError, submitTokenUrl, getFlexes } from '@/services/api';
 import { pushAuthDebugEvent } from '@/lib/authDebug';
 import { deleteStoredAccountSecrets, getStoredAccounts, hydrateStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
+import { isAndroidRuntime } from '@/lib/platform';
+import { AppRequestError } from '@/lib/errors';
+import { DISMISSED_LOCAL_ACCOUNT_KEY, selectPersistedAccount, selectedAccountCanUseLocalClient, shouldOfferLocalAccount } from '@/lib/accountSelection';
 
 function isAccountExpired(account: RiotAccount | null) {
     if (!account?.expiresAt) return false;
@@ -23,6 +26,17 @@ function hasSsidCookie(cookies: string | null | undefined): cookies is string {
     return Boolean(cookies && /(?:^|;\s*)ssid=/.test(cookies));
 }
 
+function persistedAuthFailureMessage(code: string): string {
+    switch (code) {
+        case "account_mismatch": return "The saved Riot session belongs to a different account.";
+        case "login_required": return "Riot requires a new sign-in.";
+        case "cookies_expired": return "The saved Riot session has expired.";
+        case "missing_cookies": return "No reusable Riot login session is available.";
+        case "cancelled": return "Riot sign-in was cancelled.";
+        default: return "Riot account renewal failed. Retry later or sign in again.";
+    }
+}
+
 type LoginRedirectPayload = { sessionId: string; url: string };
 type LoginCookiesPayload = { sessionId: string; cookies: string };
 type LoginSessionPayload = { sessionId: string };
@@ -31,6 +45,48 @@ const COOKIE_MAINTENANCE_AGE_MS = 24 * 60 * 60 * 1000;
 const COOKIE_MAINTENANCE_POLL_MS = 60 * 60 * 1000;
 const COOKIE_MAINTENANCE_START_DELAY_MS = 30_000;
 const COOKIE_MAINTENANCE_SPACING_MS = 3_000;
+const INVENTORY_CACHE_VERSION = 1;
+const USER_LOAD_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000] as const;
+
+type InventoryCache = {
+    version: number;
+    savedAt: number;
+    ownedAgentIDs: string[];
+    ownedLevelIDs: string[];
+    ownedChromaIDs: string[];
+    ownedBuddyIDs: OwnedBuddy[];
+    ownedSprayIDs: string[];
+    ownedCardIDs: string[];
+    ownedTitleIDs: string[];
+    playerSpraySlots: SpraySlot[];
+};
+
+function inventoryCacheKey(puuid: string) {
+    return `vv-inventory-cache:v${INVENTORY_CACHE_VERSION}:${puuid.toLowerCase()}`;
+}
+
+function readInventoryCache(puuid: string): InventoryCache | null {
+    if (!puuid) return null;
+    try {
+        const value = JSON.parse(localStorage.getItem(inventoryCacheKey(puuid)) || "null") as InventoryCache | null;
+        return value?.version === INVENTORY_CACHE_VERSION ? value : null;
+    } catch {
+        return null;
+    }
+}
+
+function writeInventoryCache(puuid: string, value: Omit<InventoryCache, "version" | "savedAt">) {
+    if (!puuid) return;
+    try {
+        localStorage.setItem(inventoryCacheKey(puuid), JSON.stringify({
+            ...value,
+            version: INVENTORY_CACHE_VERSION,
+            savedAt: Date.now(),
+        } satisfies InventoryCache));
+    } catch {
+        // Inventory caching is an offline/startup optimization, never a requirement.
+    }
+}
 
 /**
  * closeLoginWindowAndWait asks Tauri to close the popup for the given
@@ -117,10 +173,10 @@ async function completeLoginFlow(
                       waitMs: 15000,
                   });
             ssid = raw ?? undefined;
-            pushAuthDebugEvent("login.cookie_read", { puuid: res.puuid, sessionId, ssid }, { outcome: hasSsidCookie(ssid) ? "success" : "failed", code: hasSsidCookie(ssid) ? undefined : "ssid_missing" });
-        } catch (err) {
-            console.error("Failed to read ssid cookie:", err);
-            pushAuthDebugEvent("login.cookie_read", { puuid: res.puuid, sessionId }, { outcome: "failed", code: "cookie_read_error", message: err instanceof Error ? err.message : String(err) });
+            pushAuthDebugEvent("login.cookie_read", null, { outcome: hasSsidCookie(ssid) ? "success" : "failed", code: hasSsidCookie(ssid) ? undefined : "ssid_missing" });
+        } catch {
+            console.warn("Failed to read Riot login cookie.");
+            pushAuthDebugEvent("login.cookie_read", null, { outcome: "failed", code: "cookie_read_error" });
             // Non-fatal — we still have OAuth tokens. Silent reauth just
             // won't work until the user manually signs in again.
         }
@@ -172,12 +228,33 @@ function getOwnedBuddyDetails(gunBuddies: GunBuddy[], ownedBuddies: OwnedBuddy[]
 }
 
 async function deleteSavedLoginSession(sessionId: string | undefined) {
-    if (!sessionId?.startsWith("account_")) return;
-    try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("delete_login_session", { sessionId });
-    } catch (err) {
-        console.warn("Could not remove unused Riot browser session:", err);
+    if (!sessionId) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_login_session", { sessionId });
+}
+
+function deleteAccountScopedCaches(puuid: string) {
+    const normalized = puuid.toLowerCase();
+    for (const key of [
+        inventoryCacheKey(puuid),
+        `vv-mobile-social:v2:${puuid}`,
+        `vv-mobile-home:v4:${puuid}`,
+        `vantavault:social-cards:v1:${normalized}`,
+        `vantavault:notifications:v1:${puuid}`,
+        `vantavault:notifications:v1:${normalized}`,
+        `vantavault:wishlist:${puuid}`,
+        `vantavault:wishlist:${normalized}`,
+    ]) {
+        localStorage.removeItem(key);
+    }
+    for (const storage of [localStorage, sessionStorage]) {
+        const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index)).filter((key): key is string => Boolean(key));
+        for (const key of keys) {
+            const lowered = key.toLowerCase();
+            if (lowered.includes(`:${normalized}:`) || lowered.endsWith(`:${normalized}`)) {
+                storage.removeItem(key);
+            }
+        }
     }
 }
 
@@ -188,15 +265,28 @@ export function migrateSessionIds(): void {
         const accounts = getStoredAccounts();
         let changed = false;
         const migrated = accounts.map(acc => {
+            if (isLockfileAccount(acc)) {
+                if (acc.authSource === "lockfile" && !acc.sessionId) return acc;
+                changed = true;
+                return {
+                    ...acc,
+                    authSource: "lockfile" as const,
+                    sessionId: undefined,
+                    lastRefreshError: undefined,
+                    lastRefreshErrorCode: undefined,
+                };
+            }
             const stableId = `session_${acc.puuid}`;
             if (!acc.sessionId) {
                 changed = true;
-                return { ...acc, sessionId: stableId };
+                return { ...acc, authSource: acc.authSource || ("oauth" as const), sessionId: stableId };
             }
             return acc;
         });
         if (changed) {
-            void saveStoredAccounts(migrated);
+            void saveStoredAccounts(migrated).catch(() => {
+                console.warn("Could not persist the migrated account list.");
+            });
         }
     } catch {
         // silently ignore migration errors
@@ -252,8 +342,8 @@ interface DataContextType {
     isTokenExpired: boolean;
     setIsTokenExpired: (expired: boolean) => void;
     handleSwitchAccount: (acc: RiotAccount) => void;
-    handleDeleteAccount: (puuid: string) => void;
-    handleAddNewAccount: (acc: RiotAccount) => void;
+    handleDeleteAccount: (puuid: string) => Promise<void>;
+    handleAddNewAccount: (acc: RiotAccount) => Promise<void>;
     refreshAccountsList: () => void;
     refreshAccountToken: (acc: RiotAccount, visible?: boolean, allowPopup?: boolean) => Promise<boolean>;
     cancelAccountRefresh: (acc: RiotAccount) => void;
@@ -349,16 +439,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const staticLoadPromiseRef = useRef<Promise<void> | null>(null);
     const hasLoadedUserRef = useRef(false);
     const lastUserSourceRef = useRef<'none' | 'local' | 'remote'>('none');
+    const userLoadFailuresRef = useRef(0);
+    const nextUserLoadAtRef = useRef(0);
+    const autoRenewedExpiryRef = useRef(new Set<string>());
+    const nativeCookieRetryRef = useRef(new Set<string>());
+    const authRecoveryInFlightRef = useRef(false);
 
     // Refresh local lists of accounts and active selection
     const refreshAccountsList = useCallback(() => {
-        const stored = getStoredAccounts();
+        const android = isAndroidRuntime();
+        const stored = getStoredAccounts().filter((account) => !android || !isLockfileAccount(account));
+        if (android) localStorage.setItem("use_local_sso", "false");
         setAccounts(stored);
         const puuid = localStorage.getItem("riot_puuid");
-        const found = stored.find(a => a.puuid === puuid) || stored[0] || null;
+        const found = selectPersistedAccount(stored, puuid);
         if (found) {
             activateAccount(found);
-            const expired = checkTokenExpired(found, isLocalClientActive, localPuuid);
+            const expired = isAccountExpired(found);
             setIsTokenExpired(prev => prev === expired ? prev : expired);
         } else {
             clearActiveAccount();
@@ -370,7 +467,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // PUUID. Always accept the freshly cached account instead of comparing
         // only its identifier and accidentally retaining blank credentials.
         setActiveAccount(found);
-    }, [isLocalClientActive, localPuuid]);
+    }, []);
 
     useEffect(() => {
         const expired = activeAccount
@@ -415,7 +512,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 hasLoadedStaticRef.current = true;
             } catch (error) {
                 staticLoadPromiseRef.current = null;
-                console.error("Failed to load static catalog:", error);
+                console.warn("Failed to load static catalog", error instanceof Error ? error.message : String(error));
                 throw error;
             }
         })();
@@ -438,6 +535,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
         try {
             // Ensure static data is loaded first
             await loadStaticData();
+
+            const selectedPuuid = localStorage.getItem("riot_puuid") || "";
+            const cached = readInventoryCache(selectedPuuid);
+            if (cached) {
+                setOwnedAgentIDs(cached.ownedAgentIDs);
+                setAgents(allAgentsRef.current.filter((agent) => cached.ownedAgentIDs.includes(agent.uuid) || agent.isBaseContent));
+                setOwnedLevelIDs(cached.ownedLevelIDs);
+                setOwnedChromaIDs(cached.ownedChromaIDs);
+                setOwnedBuddyIDs(cached.ownedBuddyIDs);
+                setOwnedSprayIDs(cached.ownedSprayIDs);
+                setOwnedCardIDs(cached.ownedCardIDs);
+                setOwnedTitleIDs(cached.ownedTitleIDs);
+                setPlayerSpraySlots(cached.playerSpraySlots);
+                setOwnedBuddies(getOwnedBuddyDetails(gunBuddiesRef.current, cached.ownedBuddyIDs));
+                setLoading(false);
+            }
 
             const [ownedSkins, ownedGunBuddies, ownedAgents, ownedSprays, ownedCards, ownedTitles, playerSprays] = await Promise.all([
                 getOwnedSkins(),
@@ -471,13 +584,59 @@ export function DataProvider({ children }: { children: ReactNode }) {
             setPlayerSpraySlots(playerSprays);
 
             setOwnedBuddies(getOwnedBuddyDetails(gunBuddiesData, ownedGunBuddies.buddies));
+            writeInventoryCache(selectedPuuid, {
+                ownedAgentIDs: ownedAgents.AgentIds,
+                ownedLevelIDs: levels,
+                ownedChromaIDs: ownedSkins.ChromaIds.map(id => id.toLowerCase()),
+                ownedBuddyIDs: ownedGunBuddies.buddies,
+                ownedSprayIDs: ownedSprays,
+                ownedCardIDs: ownedCards,
+                ownedTitleIDs: ownedTitles,
+                playerSpraySlots: playerSprays,
+            });
+            userLoadFailuresRef.current = 0;
+            nextUserLoadAtRef.current = 0;
+            hasLoadedUserRef.current = true;
             setLoading(false);
         } catch (error) {
-            console.error("Failed to load user-specific inventory:", error);
+            // This is handled app state, not an uncaught runtime failure. Next's
+            // development overlay treats console.error(Error) as a fatal-looking
+            // console issue even though we recover below.
+            if (error instanceof AppRequestError) {
+                console.warn("User inventory is waiting for Riot authentication recovery.", {
+                    code: error.code,
+                    status: error.status,
+                });
+            } else {
+                console.warn("Failed to load user-specific inventory:", error);
+            }
+            const failureIndex = Math.min(userLoadFailuresRef.current, USER_LOAD_RETRY_DELAYS_MS.length - 1);
+            userLoadFailuresRef.current += 1;
+            nextUserLoadAtRef.current = Date.now() + USER_LOAD_RETRY_DELAYS_MS[failureIndex];
             hasLoadedUserRef.current = false;
             setLoading(false);
         }
     }, [loadStaticData, ensureGunBuddyCatalog]);
+
+    // Public metadata is cache-first. When its background revalidation finds
+    // changed Riot artwork/content, reload the in-memory catalog once without
+    // blocking the current screen or requiring an app restart.
+    useEffect(() => {
+        let timer = 0;
+        const update = () => {
+            if (!hasLoadedStaticRef.current) return;
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => {
+                staticLoadPromiseRef.current = null;
+                void loadStaticData().catch(() => undefined);
+            }, 350);
+        };
+        window.addEventListener("vantavault:resource-updated", update);
+        return () => {
+            window.clearTimeout(timer);
+            window.removeEventListener("vantavault:resource-updated", update);
+        };
+    }, [loadStaticData]);
 
     const refreshLoadout = useCallback(async () => {
         try {
@@ -519,7 +678,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const handleSwitchAccount = useCallback((acc: RiotAccount) => {
         activateAccount(acc);
         setActiveAccount(acc);
+        setPendingLocalAccount(null);
+        if (localPuuid && acc.puuid.toLowerCase() !== localPuuid.toLowerCase()) {
+            localStorage.setItem(DISMISSED_LOCAL_ACCOUNT_KEY, localPuuid);
+        }
         hasLoadedUserRef.current = false;
+        userLoadFailuresRef.current = 0;
+        nextUserLoadAtRef.current = 0;
         if (isAccountExpired(acc)) {
             setIsTokenExpired(true);
         } else {
@@ -528,30 +693,41 @@ export function DataProvider({ children }: { children: ReactNode }) {
             setStorefrontRefreshKey(k => k + 1);
         }
         void loadUserData();
-    }, [loadUserData]);
+    }, [loadUserData, localPuuid]);
 
-    const handleDeleteAccount = useCallback((puuid: string) => {
+    const handleDeleteAccount = useCallback(async (puuid: string) => {
         const stored = getStoredAccounts();
         const removed = stored.find(a => a.puuid === puuid);
+        if (!removed) return;
         const updated = stored.filter(a => a.puuid !== puuid);
-        const persisted = saveStoredAccounts(updated);
-        setAccounts(updated);
-        void persisted.then(async () => {
-			await clearChatHistory(undefined, puuid).catch(() => undefined);
+        try {
+            await clearChatHistory(undefined, puuid);
             await deleteStoredAccountSecrets(puuid);
             await deleteSavedLoginSession(removed?.sessionId);
-        });
-        
+            deleteAccountScopedCaches(puuid);
+            await saveStoredAccounts(updated);
+        } catch (error) {
+            reportAppError("The account was not removed because its private data could not be deleted completely. Retry after closing Riot sign-in windows.");
+            throw error;
+        }
+        setAccounts(updated);
+
         if (activeAccount?.puuid === puuid) {
             const next = updated[0] ?? null;
             if (next) {
                 activateAccount(next);
                 setActiveAccount(next);
+                hasLoadedUserRef.current = false;
+                userLoadFailuresRef.current = 0;
+                nextUserLoadAtRef.current = 0;
                 // Bump storefront refresh key to re-fetch for new active account
                 setStorefrontRefreshKey(k => k + 1);
             } else {
                 setActiveAccount(null);
                 clearActiveAccount();
+                hasLoadedUserRef.current = false;
+                userLoadFailuresRef.current = 0;
+                nextUserLoadAtRef.current = 0;
                 localStorage.removeItem("riot_puuid");
                 localStorage.removeItem("riot_region");
             }
@@ -559,13 +735,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // No page reload — state updates are sufficient
     }, [activeAccount]);
 
-    const handleAddNewAccount = useCallback((acc: RiotAccount) => {
+    const handleAddNewAccount = useCallback(async (acc: RiotAccount) => {
         // Keep the exact user-data folder created by the successful login.
         const stored = getStoredAccounts();
         const existing = stored.find((account) => account.puuid === acc.puuid);
         const stableAcc: RiotAccount = {
             ...existing,
             ...acc,
+            authSource: "oauth",
             sessionId: acc.sessionId || existing?.sessionId || `session_${acc.puuid}`,
             ssid: hasSsidCookie(acc.ssid)
                 ? acc.ssid
@@ -573,15 +750,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
         };
         const updated = stored.filter(a => a.puuid !== stableAcc.puuid);
         updated.unshift(stableAcc);
-        const persisted = saveStoredAccounts(updated);
+        try {
+            await saveStoredAccounts(updated);
+        } catch {
+            reportAppError("The Riot account could not be stored securely, so it was not added.");
+            return;
+        }
         setAccounts(updated);
         if (existing?.sessionId && existing.sessionId !== stableAcc.sessionId) {
-            void persisted.then(() => deleteSavedLoginSession(existing.sessionId));
+            await deleteSavedLoginSession(existing.sessionId).catch(() => {
+                reportAppError("The old Riot login session could not be removed. Retry from Account Manager.");
+            });
         }
         activateAccount(stableAcc);
         setActiveAccount(stableAcc);
         setIsTokenExpired(false);
         hasLoadedUserRef.current = false;
+        userLoadFailuresRef.current = 0;
+        nextUserLoadAtRef.current = 0;
         void loadUserData();
         // Bump storefront refresh key so store loads fresh for new account
         setStorefrontRefreshKey(k => k + 1);
@@ -592,6 +778,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         visible: boolean = false,
         allowPopup: boolean = true,
     ): Promise<boolean> {
+        if (isLockfileAccount(acc)) {
+            pushAuthDebugEvent("refresh.blocked", acc, { outcome: "skipped", code: "local_lockfile_session" });
+            return false;
+        }
         pushAuthDebugEvent("refresh.start", acc, { outcome: "start", allowPopup, visible });
         const sessionKey = acc.sessionId || `session_${acc.puuid}`;
         if (loginInFlightRef.current) {
@@ -630,7 +820,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
 
         const recordFailure = (message: string, code: string = "temporary") => {
-            const safeMessage = String(message || "Account renewal failed.").replace(/\s+/g, " ").slice(0, 240);
+            void message;
+            const safeMessage = persistedAuthFailureMessage(code);
             pushAuthDebugEvent("refresh.failure_recorded", acc, { outcome: "failed", code, message: safeMessage });
             const updated = getStoredAccounts().map((account) => account.puuid === acc.puuid ? {
                 ...account,
@@ -638,7 +829,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 lastRefreshError: safeMessage,
                 lastRefreshErrorCode: code,
             } : account);
-            saveStoredAccounts(updated);
+            void saveStoredAccounts(updated).catch(() => {
+                reportAppError("The account renewal status could not be saved securely.");
+            });
             setAccounts(updated);
             if (activeAccount?.puuid === acc.puuid) {
                 const nextActive = updated.find((account) => account.puuid === acc.puuid);
@@ -648,8 +841,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         let cancelled = false;
         const previousSessionMissing = accountRequiresManualRepair(acc);
-        let failureCode = acc.ssid ? "cookies_expired" : "missing_cookies";
-        let failureReason = acc.ssid
+        const hasNativeSession = Boolean(acc.ssid || acc.sessionId);
+        let failureCode = hasNativeSession ? "cookies_expired" : "missing_cookies";
+        let failureReason = hasNativeSession
             ? "Saved Riot session was rejected. Sign in again to repair it."
             : "No reusable Riot session is stored. Sign in again to repair it.";
         const reauthController = new AbortController();
@@ -664,15 +858,52 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         // Step 1: use the stored Riot session to renew the short-lived access
         // token without opening a popup.
-        if (acc.ssid) {
+        if (hasNativeSession) {
             try {
                 pushAuthDebugEvent("refresh.ssid_reauth", acc, { outcome: "start" });
-                const res = await appFetch("http://localhost:31719/v1/auth/ssid-reauth", {
+                // Let the native bridge try Credential Manager/Android Keystore
+                // first. Supplying an older WebView cookie here would override the
+                // newer rotated native cookie and incorrectly force a sign-in.
+                let reauthCookies = acc.ssid;
+                const requestReauth = (cookies: string | undefined) => appFetch("http://localhost:31719/v1/auth/ssid-reauth", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ cookies: acc.ssid }),
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Riot-Selected-Puuid": acc.puuid,
+                        "X-Riot-Region": acc.region,
+                    },
+                    body: JSON.stringify({ cookies: cookies || "" }),
                     signal: reauthController.signal,
                 });
+                let res = await requestReauth(reauthCookies);
+                let responseBody = res.ok ? "" : await res.text().catch(() => "");
+                let responseCode = "";
+                try {
+                    responseCode = responseBody ? JSON.parse(responseBody).error || "" : "";
+                } catch {
+                    responseCode = "";
+                }
+
+                // Pre-Credential-Manager installs kept the reusable cookie only in
+                // the claimed per-account WebView2 profile. Use that profile only
+                // when native storage explicitly reports that no cookie exists.
+                if (!res.ok && responseCode === "missing_cookies" && !hasSsidCookie(reauthCookies) && sessionId) {
+                    try {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        const sessionCookies = await invoke<string | null>("get_ssid_cookie", {
+                            sessionId,
+                            waitMs: 0,
+                        });
+                        if (hasSsidCookie(sessionCookies)) {
+                            reauthCookies = sessionCookies;
+                            pushAuthDebugEvent("refresh.session_cookie_read", acc, { outcome: "success" });
+                            res = await requestReauth(reauthCookies);
+                            responseBody = res.ok ? "" : await res.text().catch(() => "");
+                        }
+                    } catch {
+                        pushAuthDebugEvent("refresh.session_cookie_read", acc, { outcome: "failed", code: "ssid_missing" });
+                    }
+                }
                 if (cancelled) return false;
                 if (res.ok) {
                     const data = await res.json();
@@ -691,7 +922,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             region: data.region || acc.region,
                             gameName: data.game_name || acc.gameName,
                             tagLine: data.tag_line || acc.tagLine,
-                            ssid: hasSsidCookie(data.cookies) ? data.cookies : acc.ssid,
+                            ssid: hasSsidCookie(data.cookies) ? data.cookies : reauthCookies,
                             sessionId,
                             lastRenewedAt: Date.now(),
                             lastCookieRotatedAt: hasSsidCookie(data.cookies)
@@ -718,14 +949,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         return true;
                     }
                 }
-                const body = await res.text().catch(() => "");
-                if (body) {
+                if (responseBody) {
                     try {
-                        const parsed = JSON.parse(body);
+                        const parsed = JSON.parse(responseBody);
                         failureReason = parsed.message || parsed.error || failureReason;
                         failureCode = parsed.error || "temporary";
                     } catch {
-                        failureReason = body.slice(0, 240);
+                        failureReason = responseBody.slice(0, 240);
                         failureCode = "temporary";
                     }
                 }
@@ -837,7 +1067,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         };
                         const stored = getStoredAccounts();
                         const updated = stored.map(a => a.puuid === acc.puuid ? updatedAcc : a);
-                        saveStoredAccounts(updated);
+                        await saveStoredAccounts(updated);
                         setAccounts(updated);
                         pushAuthDebugEvent("refresh.popup_exchange", updatedAcc, { outcome: "success" });
                         if (activeAccount?.puuid === acc.puuid) {
@@ -897,7 +1127,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
                         finish(true);
                     } catch (err) {
-                        console.error("Error in token submit during auto-refresh:", err);
+                        console.warn("Riot account renewal failed.");
                         if (!cancelled) {
                             recordFailure(
                                 err instanceof Error ? err.message : String(err || "Riot sign-in failed."),
@@ -917,14 +1147,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 }).then(fn => { unlistenCloseFn = fn; });
 
                 invoke("open_login_window", { authUrl: auth_url, sessionId, visible }).catch((err) => {
-                    console.error("Failed to open login window:", err);
-                    pushAuthDebugEvent("refresh.popup_open", acc, { outcome: "failed", message: err instanceof Error ? err.message : String(err || "Failed to open Riot sign-in.") });
+                    console.warn("Failed to open Riot sign-in window.");
+                    pushAuthDebugEvent("refresh.popup_open", null, { outcome: "failed", code: "popup_open_failed" });
                     recordFailure(err instanceof Error ? err.message : String(err || "Failed to open Riot sign-in."));
                     finish(false);
                 });
             });
         } catch (err) {
-            console.error("Failed to start refreshAccountToken:", err);
+            console.warn("Failed to start Riot account renewal.");
             recordFailure(err instanceof Error ? err.message : String(err || "Failed to start account renewal."));
             releaseLock();
             return false;
@@ -948,6 +1178,57 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refreshAccountTokenRef.current = refreshAccountToken;
     }, [refreshAccountToken]);
 
+    // A Riot access token can still be within its advertised lifetime while
+    // its paired entitlement JWT has been rotated or invalidated. Recover from
+    // that server response immediately instead of waiting for the expiry timer.
+    useEffect(() => {
+        const recoverRiotAuth = () => {
+            if (authRecoveryInFlightRef.current) return;
+            authRecoveryInFlightRef.current = true;
+
+            const canUseLocalSession = !isAndroidRuntime()
+                && isLocalClientActive
+                && Boolean(localPuuid)
+                && Boolean(activeAccount?.puuid)
+                && activeAccount!.puuid.toLowerCase() === localPuuid.toLowerCase();
+
+            if (canUseLocalSession) {
+                localStorage.setItem("use_local_sso", "true");
+                clearActiveAccount();
+                setIsTokenExpired(false);
+                hasLoadedUserRef.current = false;
+                userLoadFailuresRef.current = 0;
+                nextUserLoadAtRef.current = 0;
+                setStorefrontRefreshKey((key) => key + 1);
+                void loadUserData().finally(() => {
+                    authRecoveryInFlightRef.current = false;
+                });
+                return;
+            }
+
+            if (!activeAccount || isLockfileAccount(activeAccount)) {
+                authRecoveryInFlightRef.current = false;
+                return;
+            }
+
+            void refreshAccountTokenRef.current(activeAccount, false, false)
+                .then((renewed) => {
+                    if (!renewed) return;
+                    hasLoadedUserRef.current = false;
+                    userLoadFailuresRef.current = 0;
+                    nextUserLoadAtRef.current = 0;
+                    setStorefrontRefreshKey((key) => key + 1);
+                    return loadUserData();
+                })
+                .finally(() => {
+                    authRecoveryInFlightRef.current = false;
+                });
+        };
+
+        window.addEventListener("vantavault:riot-auth-invalid", recoverRiotAuth);
+        return () => window.removeEventListener("vantavault:riot-auth-invalid", recoverRiotAuth);
+    }, [activeAccount, isLocalClientActive, localPuuid, loadUserData]);
+
     // Riot rotates the reusable auth cookies during successful reauth. Keep
     // inactive accounts alive too, but serialize and space the requests so a
     // large account list does not create a startup burst or rate-limit storm.
@@ -962,20 +1243,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
             try {
                 const now = Date.now();
                 const dueAccounts = getStoredAccounts().filter((account) => {
-                    if (!hasSsidCookie(account.ssid)) return false;
-                    if (["login_required", "cookies_expired", "account_mismatch", "missing_cookies"].includes(account.lastRefreshErrorCode || "")) {
-                        return false;
-                    }
+                    if (!hasSsidCookie(account.ssid) && !account.sessionId) return false;
                     const lastMaintenance = Math.max(
                         account.lastCookieRotatedAt || 0,
                         account.lastRefreshAttemptAt || 0,
                         account.lastRenewedAt || 0,
                     );
-                    return now - lastMaintenance >= COOKIE_MAINTENANCE_AGE_MS;
+                    const retryNativeCookie = ["login_required", "cookies_expired", "missing_cookies", "cancelled", "account_mismatch"]
+                        .includes(account.lastRefreshErrorCode || "")
+                        && !nativeCookieRetryRef.current.has(account.puuid);
+                    return retryNativeCookie || now - lastMaintenance >= COOKIE_MAINTENANCE_AGE_MS;
                 });
 
                 for (const account of dueAccounts) {
                     if (cancelled || loginInFlightRef.current) break;
+                    nativeCookieRetryRef.current.add(account.puuid);
                     const ok = await refreshAccountTokenRef.current(account, false, false);
                     if (!ok) {
                         const current = getStoredAccounts().find((item) => item.puuid === account.puuid);
@@ -1092,7 +1374,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 const cookiesUnlisten = await listen<LoginCookiesPayload>("riot-login-cookies-v2", (event) => {
                     if (event.payload?.sessionId === sessionId && loginInFlightRef.current?.sessionId === sessionId) {
                         loginInFlightRef.current.capturedCookies = event.payload.cookies;
-                        console.debug("captured ssid cookies for session", sessionId);
+                        console.debug("Captured Riot login cookies for the active session.");
                     }
                 }).catch(() => () => {});
 
@@ -1170,20 +1452,40 @@ export function DataProvider({ children }: { children: ReactNode }) {
         };
     }, []);
 
-    // Auto-refresh the active account token shortly before expiry to avoid
-    // user-visible expiration. Schedule a refresh 90 seconds before expiry.
+    // Auto-refresh shortly before expiry and, importantly for Android, once
+    // immediately after startup when the saved token is already expired.
+    // Android has no local Riot Client SSO fallback, so skipping an already
+    // expired token would leave every remote feature offline until the user
+    // manually signed in again.
     useEffect(() => {
         let timer: number | null = null;
-        if (activeAccount && activeAccount.expiresAt && activeAccount.expiresAt > Date.now()) {
-            const msUntil = activeAccount.expiresAt - Date.now();
-            const refreshMs = Math.max(5_000, msUntil - 90_000); // at least 5s
-            timer = window.setTimeout(() => {
-                // Attempt silent refresh; if it fails, leave token expired and UI will surface refresh option
-                void refreshAccountToken(activeAccount, false, false).catch((err) => console.error('Auto refresh failed:', err));
-            }, refreshMs);
+        if (!accountsHydrated || !isBackendOnline || !activeAccount?.expiresAt) return undefined;
+
+        const msUntil = activeAccount.expiresAt - Date.now();
+        const expiryKey = `${activeAccount.puuid}:${activeAccount.expiresAt}`;
+        const runSilentRenewal = () => {
+            if (autoRenewedExpiryRef.current.has(expiryKey)) return;
+            autoRenewedExpiryRef.current.add(expiryKey);
+            void refreshAccountToken(activeAccount, false, false)
+                .catch(() => console.warn('Automatic Riot account renewal failed.'));
+        };
+
+        if (msUntil <= 90_000) {
+            if (!isLockfileAccount(activeAccount)) {
+                timer = window.setTimeout(runSilentRenewal, 1_000);
+            }
+        } else {
+            timer = window.setTimeout(runSilentRenewal, Math.max(5_000, msUntil - 90_000));
         }
         return () => { if (timer) clearTimeout(timer); };
-    }, [activeAccount, refreshAccountToken]);
+    }, [
+        accountsHydrated,
+        activeAccount,
+        isBackendOnline,
+        isLocalClientActive,
+        localPuuid,
+        refreshAccountToken,
+    ]);
 
     // Initialize accounts list and load static data on mount
     useEffect(() => {
@@ -1215,6 +1517,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // manually reconnect after a restart as long as the game is open.
     const autoImportedLocalRef = useRef<string>("");
     useEffect(() => {
+        if (isAndroidRuntime()) return;
         if (!isLocalClientActive || !localPuuid) return;
         if (autoImportedLocalRef.current === localPuuid) return; // already tried this session
 
@@ -1226,18 +1529,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
             const match = stored.find(a => a.puuid.toLowerCase() === localPuuid.toLowerCase());
             if (match) {
                 const currentPuuid = localStorage.getItem("riot_puuid");
-                const useLocalSso = localStorage.getItem("use_local_sso") === "true";
-                const shouldUseLocal =
-                    useLocalSso ||
-                    !activeAccount ||
-                    !currentPuuid ||
-                    currentPuuid.toLowerCase() === localPuuid.toLowerCase();
-
-                if (shouldUseLocal && currentPuuid?.toLowerCase() !== localPuuid.toLowerCase()) {
+                if (!currentPuuid) {
                     activateAccount(match);
                     setActiveAccount(match);
                     setStorefrontRefreshKey(k => k + 1);
-                } else if (!shouldUseLocal && activeAccount.puuid.toLowerCase() !== localPuuid.toLowerCase()) {
+                } else if (shouldOfferLocalAccount(
+                    currentPuuid,
+                    localPuuid,
+                    localStorage.getItem(DISMISSED_LOCAL_ACCOUNT_KEY),
+                )) {
                     setPendingLocalAccount(match);
                 }
             }
@@ -1247,12 +1547,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         // Account not in storage — silently fetch it from the local client
         autoImportedLocalRef.current = localPuuid; // mark before async to avoid double-calls
-        getLocalAccount().then(data => {
+        getLocalAccount().then(async data => {
             if (!data?.puuid) return;
             const newAcc: RiotAccount = {
                 puuid: data.puuid,
                 accessToken: "",
                 entitlementsToken: "",
+                authSource: "lockfile",
                 expiresAt: 0,
                 region: data.region,
                 gameName: data.game_name,
@@ -1263,58 +1564,152 @@ export function DataProvider({ children }: { children: ReactNode }) {
             deduped.unshift(newAcc);
             // Save the discovered account, but don't auto-activate when a remote SSO
             // session or different active account exists — show chooser instead.
-            saveStoredAccounts(deduped);
+            await saveStoredAccounts(deduped);
             setAccounts(deduped);
 
-            const hasRemoteSession = hasActiveRemoteAuth();
-            const conflictWithActive = activeAccount && activeAccount.puuid.toLowerCase() !== newAcc.puuid.toLowerCase();
+            const currentPuuid = localStorage.getItem("riot_puuid");
 
-            if (hasRemoteSession || conflictWithActive) {
-                // Defer activation and surface chooser to the UI
+            if (shouldOfferLocalAccount(
+                currentPuuid,
+                newAcc.puuid,
+                localStorage.getItem(DISMISSED_LOCAL_ACCOUNT_KEY),
+            )) {
                 setPendingLocalAccount(newAcc);
             } else {
-                activateAccount(newAcc);
-                setActiveAccount(newAcc);
-                setIsTokenExpired(false);
-                setStorefrontRefreshKey(k => k + 1);
+                // A discovered local account may be stored for later without
+                // replacing a deliberate selection or reopening a dismissed prompt.
+                if (!currentPuuid) {
+                    activateAccount(newAcc);
+                    setActiveAccount(newAcc);
+                    setIsTokenExpired(false);
+                    setStorefrontRefreshKey(k => k + 1);
+                }
             }
-        }).catch(() => {});
+        }).catch(() => {
+            reportAppError("The local Riot account could not be stored securely.");
+        });
     }, [activeAccount, isLocalClientActive, localPuuid]);
+
+    // Lockfile accounts are live-session conveniences, not renewable saved
+    // accounts. Remove them when Riot confirms that session is gone or belongs
+    // to another PUUID, including their account-scoped private caches.
+    useEffect(() => {
+        if (isAndroidRuntime()) return;
+        if (!accountsHydrated || !isBackendOnline) return;
+
+        const removeStaleLocalAccounts = async (currentLocalPuuid: string) => {
+            const stored = getStoredAccounts();
+            const staleLocalAccounts = stored.filter((account) =>
+                isLockfileAccount(account) && account.puuid.toLowerCase() !== currentLocalPuuid
+            );
+            if (staleLocalAccounts.length === 0) return;
+
+            const stalePuuids = new Set(staleLocalAccounts.map((account) => account.puuid.toLowerCase()));
+            const updated = stored.filter((account) => !stalePuuids.has(account.puuid.toLowerCase()));
+            try {
+                for (const account of staleLocalAccounts) {
+                    // Lockfile rows never own renewable credentials or login
+                    // sessions. Their chat/cache cleanup is best-effort and must
+                    // not prevent the ephemeral row from disappearing.
+                    await clearChatHistory(undefined, account.puuid).catch(() => undefined);
+                    deleteAccountScopedCaches(account.puuid);
+                }
+                await saveStoredAccounts(updated);
+            } catch {
+                reportAppError("The signed-out local account could not be removed from the account list.");
+                return;
+            }
+            setAccounts(updated);
+            setPendingLocalAccount((current) =>
+                current && stalePuuids.has(current.puuid.toLowerCase()) ? null : current
+            );
+            autoImportedLocalRef.current = currentLocalPuuid;
+            if (activeAccount && stalePuuids.has(activeAccount.puuid.toLowerCase())) {
+                const preferredPuuid = localStorage.getItem("riot_puuid")?.toLowerCase();
+                const next = updated.find((account) => account.puuid.toLowerCase() === preferredPuuid) || updated[0] || null;
+                if (next) {
+                    activateAccount(next);
+                    setActiveAccount(next);
+                    setIsTokenExpired(checkTokenExpired(next, isLocalClientActive, localPuuid));
+                    setStorefrontRefreshKey((key) => key + 1);
+                } else {
+                    clearActiveAccount();
+                    setActiveAccount(null);
+                    setIsTokenExpired(false);
+                    localStorage.removeItem("riot_puuid");
+                    localStorage.removeItem("riot_region");
+                }
+            }
+        };
+
+        if (isLocalClientActive && localPuuid) {
+            void removeStaleLocalAccounts(localPuuid.toLowerCase());
+            return;
+        }
+
+        // A single negative health poll can happen while the backend is still
+        // attaching to Riot. Confirm once more before deleting the local row.
+        const confirmationTimer = window.setTimeout(() => {
+            void getHealth().then((health) => {
+                if (health.online && !health.localClientActive) {
+                    void removeStaleLocalAccounts("");
+                }
+            });
+        }, 5_000);
+        return () => window.clearTimeout(confirmationTimer);
+    }, [accountsHydrated, activeAccount, isBackendOnline, isLocalClientActive, localPuuid]);
 
     const handleResolveLocalAccount = useCallback((useLocal: boolean) => {
         if (!pendingLocalAccount) return;
+        localStorage.setItem(DISMISSED_LOCAL_ACCOUNT_KEY, pendingLocalAccount.puuid);
         if (useLocal) {
             activateAccount(pendingLocalAccount);
             setActiveAccount(pendingLocalAccount);
             setIsTokenExpired(false);
+            hasLoadedUserRef.current = false;
+            userLoadFailuresRef.current = 0;
+            nextUserLoadAtRef.current = 0;
             setStorefrontRefreshKey(k => k + 1);
+            void loadUserData();
         }
         // Keep the discovered account in storage either way; user can switch later
         setPendingLocalAccount(null);
-    }, [pendingLocalAccount]);
+    }, [loadUserData, pendingLocalAccount]);
 
     // Health check and user inventory loading
     useEffect(() => {
         const healthCheck = async () => {
-            const useLocalSso = typeof window !== 'undefined' && localStorage.getItem('use_local_sso') === 'true';
-            const hasRemoteSession = !useLocalSso && hasActiveRemoteAuth();
+            const android = isAndroidRuntime();
+            if (android) localStorage.setItem("use_local_sso", "false");
             const health = await getHealth();
             setIsBackendOnline(health.online);
-            setIsLocalClientActive(health.localClientActive);
-            setLocalPuuid(health.localPuuid);
+            setIsLocalClientActive(android ? false : health.localClientActive);
+            setLocalPuuid(android ? "" : health.localPuuid);
 
-            const userSource = hasRemoteSession ? 'remote' : (health.online && health.localClientActive) ? 'local' : 'none';
-            setIsClientHealthy(hasRemoteSession || (health.online && health.localClientActive));
+            const selectedPuuid = localStorage.getItem("riot_puuid");
+            const hasRemoteSession = hasActiveRemoteAuth();
+            const hasMatchingLocalSession = !android
+                && health.online
+                && selectedAccountCanUseLocalClient(selectedPuuid, health.localPuuid, health.localClientActive);
+            const userSource = hasRemoteSession ? 'remote' : hasMatchingLocalSession ? 'local' : 'none';
+            setIsClientHealthy(hasRemoteSession || hasMatchingLocalSession);
 
             if (userSource !== 'none') {
-                if (!hasLoadedUserRef.current || lastUserSourceRef.current !== userSource) {
+                const sourceChanged = lastUserSourceRef.current !== userSource;
+                if (sourceChanged) {
+                    userLoadFailuresRef.current = 0;
+                    nextUserLoadAtRef.current = 0;
+                }
+                if ((!hasLoadedUserRef.current || sourceChanged) && Date.now() >= nextUserLoadAtRef.current) {
                     hasLoadedUserRef.current = true;
                     lastUserSourceRef.current = userSource;
-                    loadUserData();
+                    void loadUserData();
                 }
             } else {
                 hasLoadedUserRef.current = false;
                 lastUserSourceRef.current = 'none';
+                userLoadFailuresRef.current = 0;
+                nextUserLoadAtRef.current = 0;
                 setLoading(false);
             }
         };

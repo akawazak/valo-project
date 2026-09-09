@@ -23,7 +23,7 @@ jobs:
     env:
       VT_API_KEY_CONFIGURED: ${{ secrets.VT_API_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
@@ -100,17 +100,20 @@ jobs:
           $delimiter >> $env:GITHUB_OUTPUT
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
-          node-version: lts/*
+          node-version: "24.18.0"
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
         with:
           go-version-file: backend/go.mod
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.77.2 --profile minimal
+          rustup default 1.77.2
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -141,7 +144,7 @@ jobs:
         run: |
           throw "TAURI_SIGNING_PRIVATE_KEY is required for a production release."
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@bef7b83ae45d5399cc8e382d06e8a13f1fd1cb7e # v0.5.20
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

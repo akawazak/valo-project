@@ -14,11 +14,30 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/truearken/valclient/valclient"
 )
+
+var backendSecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~-]+`),
+	regexp.MustCompile(`eyJ[A-Za-z0-9._~-]+`),
+	regexp.MustCompile(`(?i)(ssid|clid|tdid)=[^;,\s\"]+`),
+}
+
+func safeBackendError(err error) string {
+	message := err.Error()
+	for _, pattern := range backendSecretPatterns {
+		message = pattern.ReplaceAllString(message, "[redacted]")
+	}
+	if len(message) > 600 {
+		message = message[:600] + "..."
+	}
+	return message
+}
 
 type Handler struct {
 	Val           *valclient.ValClient
@@ -48,29 +67,19 @@ type Handler struct {
 	namesCache map[string]string
 	namesMu    sync.RWMutex
 
-	// playerStatsCache stores per-(puuid, agent) agent-specific stats
-	// (matches, wins, winrate, kd, kda) computed from Riot's match
-	// history. Used by the live match overlay so it can show "X-Y on
-	// Jett · 12W-8L (60%)" next to each player. Key format
-	// "<puuid>:<agentUuid-lower>". Negative cache entries (fetch
-	// failures) are stored as a zero-value CachedPlayerStats{Loaded:
-	// false} so we don't hammer Riot on every poll.
-	playerStatsCache map[string]CachedPlayerStats
-	playerStatsMu    sync.RWMutex
+	// Equipped cards are normally included in VALORANT presence. Friends who
+	// are offline or only using Riot Mobile do not expose that field, so Social
+	// performs a small, cooldown-bound player-loadout lookup in the background.
+	// These maps prevent the frequent presence poll from hammering Riot.
+	socialCardLookupMu       sync.Mutex
+	socialCardLookupAt       map[string]time.Time
+	socialCardLookupInFlight map[string]struct{}
 
 	// Party rank refreshes are a Riot-side request, not data returned by the
 	// initial party snapshot. Keep a short per-party cooldown so live polling
 	// can show ranks without repeatedly hitting the refresh endpoint.
 	partyRankRefreshMu sync.Mutex
 	partyRankRefreshAt map[string]time.Time
-
-	likelyStacksMu       sync.RWMutex
-	likelyStacks         map[string]likelyStackCache
-	liveRanksMu          sync.RWMutex
-	liveRanks            map[string]liveRankCache
-	liveExtrasMu         sync.Mutex
-	liveRanksInFlight    map[string]struct{}
-	likelyStacksInFlight map[string]struct{}
 
 	progressionMu          sync.Mutex
 	progressionSubscribers map[chan struct{}]struct{}
@@ -82,34 +91,18 @@ type Handler struct {
 	chatSnapshots          map[string]struct{}
 }
 
-// CachedPlayerStats is the per-(puuid, agent) agent-specific record.
-// Loaded=false means a fetch was attempted but failed (e.g. private
-// profile, region mismatch); the frontend treats it as "no data" and
-// skips rendering the stat line.
-type CachedPlayerStats struct {
-	Matches int     `json:"matches"`
-	Wins    int     `json:"wins"`
-	Winrate float64 `json:"winrate"`
-	KD      float64 `json:"kd"`
-	KDA     float64 `json:"kda"`
-	Loaded  bool    `json:"loaded"`
-}
-
 func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
-		Val:                    Val,
-		namesCache:             make(map[string]string),
-		playerStatsCache:       make(map[string]CachedPlayerStats),
-		partyRankRefreshAt:     make(map[string]time.Time),
-		likelyStacks:           make(map[string]likelyStackCache),
-		liveRanks:              make(map[string]liveRankCache),
-		liveRanksInFlight:      make(map[string]struct{}),
-		likelyStacksInFlight:   make(map[string]struct{}),
-		progressionSubscribers: make(map[chan struct{}]struct{}),
-		socialSubscribers:      make(map[chan struct{}]struct{}),
-		chatSubscribers:        make(map[chan struct{}]struct{}),
-		chatSnapshots:          make(map[string]struct{}),
-		oauthAttempts:          make(map[string]oauthAttempt),
+		Val:                      Val,
+		namesCache:               make(map[string]string),
+		socialCardLookupAt:       make(map[string]time.Time),
+		socialCardLookupInFlight: make(map[string]struct{}),
+		partyRankRefreshAt:       make(map[string]time.Time),
+		progressionSubscribers:   make(map[chan struct{}]struct{}),
+		socialSubscribers:        make(map[chan struct{}]struct{}),
+		chatSubscribers:          make(map[chan struct{}]struct{}),
+		chatSnapshots:            make(map[string]struct{}),
+		oauthAttempts:            make(map[string]oauthAttempt),
 	}
 }
 
@@ -170,7 +163,7 @@ func (h *Handler) trackingDB() (*sql.DB, error) {
 	}
 	h.trackingConn = db
 	h.trackingAppDir = appDir
-	log.Printf("tracking: opened DB at %s", filepath.Join(appDir, "tracking.db"))
+	log.Printf("tracking: opened database")
 	return h.trackingConn, nil
 }
 
@@ -588,9 +581,57 @@ func (h *Handler) GetOwnedTitles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) returnError(w http.ResponseWriter, err error) {
-	w.WriteHeader(http.StatusInternalServerError)
-	msg := "an error occured" + err.Error()
-	w.Write([]byte(msg))
+	status := http.StatusInternalServerError
+	payload := struct {
+		HTTPStatus int    `json:"httpStatus,omitempty"`
+		ErrorCode  string `json:"errorCode"`
+		Message    string `json:"message"`
+	}{
+		ErrorCode: "VV-BACKEND",
+		Message:   "The request could not be completed.",
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "authentication required") {
+		status = http.StatusUnauthorized
+		payload.HTTPStatus = http.StatusUnauthorized
+		payload.ErrorCode = "AUTH_REQUIRED"
+		payload.Message = "Connect or renew the selected Riot account to continue."
+	}
+
+	// valclient currently prefixes every non-200 Riot response with
+	// "Is VALORANT running? ... local request", including remote PD requests.
+	// Recover Riot's structured error so the frontend can distinguish an
+	// expired entitlement from a genuinely unavailable local client.
+	if start := strings.Index(err.Error(), "{"); start >= 0 {
+		var upstream struct {
+			HTTPStatus int    `json:"httpStatus"`
+			ErrorCode  string `json:"errorCode"`
+			Error      string `json:"error"`
+			Message    string `json:"message"`
+		}
+		if json.Unmarshal([]byte(err.Error()[start:]), &upstream) == nil {
+			if upstream.ErrorCode == "" {
+				upstream.ErrorCode = upstream.Error
+			}
+			if upstream.ErrorCode == "BAD_CLAIMS" && upstream.HTTPStatus == 0 {
+				upstream.HTTPStatus = http.StatusUnauthorized
+			}
+			if upstream.ErrorCode != "" {
+				if upstream.HTTPStatus >= 400 && upstream.HTTPStatus <= 599 {
+					status = upstream.HTTPStatus
+				}
+				payload.HTTPStatus = upstream.HTTPStatus
+				payload.ErrorCode = upstream.ErrorCode
+				payload.Message = upstream.Message
+			}
+		}
+	}
+
+	if payload.ErrorCode == "VV-BACKEND" {
+		log.Printf("request failed: status=%d code=%s reason=%q", payload.HTTPStatus, payload.ErrorCode, safeBackendError(err))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func (h *Handler) returnAny(w http.ResponseWriter, response any) {

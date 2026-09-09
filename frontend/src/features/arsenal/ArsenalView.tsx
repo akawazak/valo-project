@@ -183,7 +183,7 @@ export default function ArsenalView({
                 setWeaponOrder(parsed);
                 return;
             } catch (e) {
-                console.error("Failed to load weapon order:", e);
+                console.warn("Failed to load weapon order:", e instanceof Error ? e.message : String(e));
             }
         }
 
@@ -441,6 +441,7 @@ export default function ArsenalView({
                                         onToggle={onTogglePreset}
                                         onExport={onExportPreset}
                                         agents={agents}
+                                        allPresets={presets}
                                         variantCount={variants.length}
                                     />
                                     {variants.map(child => (
@@ -455,6 +456,7 @@ export default function ArsenalView({
                                             onToggle={onTogglePreset}
                                             onExport={onExportPreset}
                                             agents={agents}
+                                            allPresets={presets}
                                             isVariant
                                         />
                                     ))}

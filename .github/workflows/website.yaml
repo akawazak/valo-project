@@ -1,0 +1,30 @@
+name: website verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/website.yaml"
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  production-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        with:
+          node-version: "24.18.0"
+      - run: node website/verify.mjs
+      - name: Verify crawler files
+        run: |
+          test -s website/robots.txt
+          test -s website/sitemap.xml
+          grep -q "https://vanta-vault-app.vercel.app/" website/sitemap.xml

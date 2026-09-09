@@ -4,7 +4,7 @@ import { Preset, Agent } from "@/lib/types";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useData } from "@/context/DataContext";
-import { DEFAULT_PRESET_ID } from "@/lib/effectivePreset";
+import { DEFAULT_PRESET_ID, mergePresetLoadout } from "@/lib/effectivePreset";
 
 interface PresetListProps {
     presets: Preset[];
@@ -118,6 +118,7 @@ export default function PresetList({
                                 onToggle={onTogglePreset}
                                 onExport={onExportPreset}
                                 agents={agents}
+                                allPresets={presets}
                                 variantCount={variants.length}
                             />
 
@@ -133,6 +134,7 @@ export default function PresetList({
                                     onToggle={onTogglePreset}
                                     onExport={onExportPreset}
                                     agents={agents}
+                                    allPresets={presets}
                                     isVariant
                                 />
                             ))}
@@ -165,6 +167,7 @@ export function PresetCard({
     onToggle,
     onExport,
     agents,
+    allPresets,
     isVariant = false,
     variantCount = 0,
 }: {
@@ -178,6 +181,7 @@ export function PresetCard({
     onToggle: (p: Preset, checked: boolean) => void;
     onExport?: (p: Preset) => void;
     agents: Agent[];
+    allPresets: Preset[];
     isVariant?: boolean;
     variantCount?: number;
 }) {
@@ -187,6 +191,10 @@ export function PresetCard({
     const [menuAnchor, setMenuAnchor] = useState<{ bottom: number; right: number } | null>(null);
 
     const { weapons, playerCards } = useData();
+    const previewLoadout = useMemo(
+        () => mergePresetLoadout(preset, allPresets, preset.loadout),
+        [allPresets, preset],
+    );
 
     const equippedCard = useMemo(() => {
         const cardId = preset.identity?.playerCardId;
@@ -195,7 +203,6 @@ export function PresetCard({
     }, [preset.identity?.playerCardId, playerCards]);
 
     const skinPreviews = useMemo(() => {
-        if (!preset.loadout) return [];
         const items: Array<{ name: string; image: string }> = [];
         
         const weaponPriority = [
@@ -207,7 +214,7 @@ export function PresetCard({
         ];
 
         for (const wUuid of weaponPriority) {
-            const equipped = preset.loadout[wUuid];
+            const equipped = previewLoadout[wUuid];
             if (!equipped) continue;
             
             const weapon = weapons.find(w => w.uuid === wUuid);
@@ -228,7 +235,7 @@ export function PresetCard({
         }
 
         if (items.length < 3) {
-            for (const [wUuid, equipped] of Object.entries(preset.loadout)) {
+            for (const [wUuid, equipped] of Object.entries(previewLoadout)) {
                 if (weaponPriority.includes(wUuid)) continue;
                 const weapon = weapons.find(w => w.uuid === wUuid);
                 if (!weapon) continue;
@@ -247,7 +254,7 @@ export function PresetCard({
         }
         
         return items.slice(0, 4);
-    }, [preset.loadout, weapons]);
+    }, [previewLoadout, weapons]);
 
     useEffect(() => {
         function handleClickOutside(e: MouseEvent) {

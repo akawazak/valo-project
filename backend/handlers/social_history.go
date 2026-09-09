@@ -8,6 +8,7 @@ import (
 
 type storedSocialContact struct {
 	name            string
+	cardID          string
 	state           string
 	friendshipCount int
 }
@@ -23,17 +24,24 @@ type storedSocialRequest struct {
 // turn friends into former friends and never resolve pending requests.
 func (h *Handler) attachSocialHistory(account string, response *SocialStatusResponse) {
 	account = strings.ToLower(strings.TrimSpace(account))
-	if account == "" || response == nil || (!response.RosterComplete && !response.RequestsComplete) {
+	if account == "" || response == nil {
 		return
 	}
 	db, err := h.trackingDB()
 	if err != nil {
 		return
 	}
-	if err := recordSocialSnapshot(db, account, response, time.Now().UnixMilli()); err != nil {
-		return
+	// Only complete Riot snapshots may mutate friendship/request state, but a
+	// partial refresh should still carry the saved activity timeline to the UI.
+	if response.RosterComplete || response.RequestsComplete {
+		// A transient write failure must not hide history that is already saved.
+		// The current Riot snapshot can still render while the durable timeline
+		// and former-contact list are read independently below.
+		_ = recordSocialSnapshot(db, account, response, time.Now().UnixMilli())
 	}
-	response.Activity, _ = readSocialActivity(db, account, 50)
+	attachSavedSocialCards(db, account, response)
+	response.Activity, _ = readSocialActivity(db, account, 100)
+	response.FormerContacts, _ = readFormerSocialContacts(db, account, 100)
 	firstSeen := map[string]int64{}
 	rows, err := db.Query(`SELECT peerPuuid,direction,firstSeenAt FROM social_requests WHERE accountPuuid=? AND state='pending'`, account)
 	if err == nil {
@@ -51,6 +59,33 @@ func (h *Handler) attachSocialHistory(account string, response *SocialStatusResp
 	}
 }
 
+// attachSavedSocialCards keeps avatars stable when a friend goes offline.
+// Riot presence includes a player card while VALORANT is active, but offline
+// roster entries do not. Once observed, retain the last known card for later
+// sessions instead of falling back to a generic mark on both desktop/mobile.
+func attachSavedSocialCards(db *sql.DB, account string, response *SocialStatusResponse) {
+	if db == nil || response == nil || len(response.Presences) == 0 {
+		return
+	}
+	rows, err := db.Query(`SELECT peerPuuid,playerCardId FROM social_contacts WHERE accountPuuid=? AND playerCardId<>''`, account)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	cards := make(map[string]string)
+	for rows.Next() {
+		var peer, cardID string
+		if rows.Scan(&peer, &cardID) == nil && cardID != "" {
+			cards[strings.ToLower(peer)] = cardID
+		}
+	}
+	for i := range response.Presences {
+		if response.Presences[i].CardID == "" {
+			response.Presences[i].CardID = cards[strings.ToLower(response.Presences[i].Puuid)]
+		}
+	}
+}
+
 func recordSocialSnapshot(db *sql.DB, account string, response *SocialStatusResponse, now int64) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -65,14 +100,14 @@ func recordSocialSnapshot(db *sql.DB, account string, response *SocialStatusResp
 	}
 
 	contacts := map[string]storedSocialContact{}
-	rows, err := tx.Query(`SELECT peerPuuid,displayName,state,friendshipCount FROM social_contacts WHERE accountPuuid=?`, account)
+	rows, err := tx.Query(`SELECT peerPuuid,displayName,playerCardId,state,friendshipCount FROM social_contacts WHERE accountPuuid=?`, account)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var peer string
 		var item storedSocialContact
-		if err := rows.Scan(&peer, &item.name, &item.state, &item.friendshipCount); err != nil {
+		if err := rows.Scan(&peer, &item.name, &item.cardID, &item.state, &item.friendshipCount); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -95,6 +130,14 @@ func recordSocialSnapshot(db *sql.DB, account string, response *SocialStatusResp
 		requests[strings.ToLower(peer)+"\x00"+direction] = item
 	}
 	_ = rows.Close()
+	hasPendingRequest := func(peer string) bool {
+		for _, direction := range []string{"incoming", "outgoing"} {
+			if request, ok := requests[peer+"\x00"+direction]; ok && request.state == "pending" {
+				return true
+			}
+		}
+		return false
+	}
 
 	friends := map[string]SocialPresence{}
 	if response.RosterComplete {
@@ -113,21 +156,34 @@ func recordSocialSnapshot(db *sql.DB, account string, response *SocialStatusResp
 			}
 			switch {
 			case !exists:
-				if _, err = tx.Exec(`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,state,firstSeenAt,lastSeenAt,lastSeenOnlineAt,friendshipCount) VALUES(?,?,?,?,?,?,?,1)`, account, peer, name, "friend", now, now, lastOnline); err != nil {
+				if _, err = tx.Exec(`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,playerCardId,state,firstSeenAt,lastSeenAt,lastSeenOnlineAt,friendshipCount) VALUES(?,?,?,?,?,?,?,?,1)`, account, peer, name, presence.CardID, "friend", now, now, lastOnline); err != nil {
 					return err
 				}
-				if err = insertSocialEvent(tx, account, peer, name, "friend_first_observed", now, response.Source+":baseline"); err != nil {
-					return err
+				eventType, evidence := "friend_first_observed", response.Source+":baseline"
+				if friendsBaseline > 0 {
+					eventType, evidence = "friend_added", response.Source+":roster_transition_actor_unknown"
+					// Pending requests resolve later in this snapshot, where their
+					// incoming/outgoing direction gives the precise actor.
+					if hasPendingRequest(peer) {
+						eventType = ""
+					}
+				}
+				if eventType != "" {
+					if err = insertSocialEvent(tx, account, peer, name, eventType, now, evidence); err != nil {
+						return err
+					}
 				}
 			case current.state != "friend":
-				if _, err = tx.Exec(`UPDATE social_contacts SET displayName=?,state='friend',lastSeenAt=?,lastSeenOnlineAt=MAX(lastSeenOnlineAt,?),friendshipCount=friendshipCount+1 WHERE accountPuuid=? AND peerPuuid=?`, firstNonEmpty(name, current.name), now, lastOnline, account, peer); err != nil {
+				if _, err = tx.Exec(`UPDATE social_contacts SET displayName=?,playerCardId=CASE WHEN ?<>'' THEN ? ELSE playerCardId END,state='friend',lastSeenAt=?,lastSeenOnlineAt=MAX(lastSeenOnlineAt,?),friendshipCount=friendshipCount+1 WHERE accountPuuid=? AND peerPuuid=?`, firstNonEmpty(name, current.name), presence.CardID, presence.CardID, now, lastOnline, account, peer); err != nil {
 					return err
 				}
-				if err = insertSocialEvent(tx, account, peer, firstNonEmpty(name, current.name), "friend_readded", now, response.Source+":roster_transition"); err != nil {
-					return err
+				if !hasPendingRequest(peer) {
+					if err = insertSocialEvent(tx, account, peer, firstNonEmpty(name, current.name), "friend_readded", now, response.Source+":roster_transition_actor_unknown"); err != nil {
+						return err
+					}
 				}
 			default:
-				if _, err = tx.Exec(`UPDATE social_contacts SET displayName=?,lastSeenAt=?,lastSeenOnlineAt=MAX(lastSeenOnlineAt,?) WHERE accountPuuid=? AND peerPuuid=?`, firstNonEmpty(name, current.name), now, lastOnline, account, peer); err != nil {
+				if _, err = tx.Exec(`UPDATE social_contacts SET displayName=?,playerCardId=CASE WHEN ?<>'' THEN ? ELSE playerCardId END,lastSeenAt=?,lastSeenOnlineAt=MAX(lastSeenOnlineAt,?) WHERE accountPuuid=? AND peerPuuid=?`, firstNonEmpty(name, current.name), presence.CardID, presence.CardID, now, lastOnline, account, peer); err != nil {
 					return err
 				}
 			}
@@ -293,6 +349,26 @@ func readSocialActivity(db *sql.DB, account string, limit int) ([]SocialActivity
 			return nil, err
 		}
 		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func readFormerSocialContacts(db *sql.DB, account string, limit int) ([]SocialFormerContact, error) {
+	if limit < 1 || limit > 200 {
+		limit = 100
+	}
+	rows, err := db.Query(`SELECT peerPuuid,displayName,lastSeenAt FROM social_contacts WHERE accountPuuid=? AND state='former' ORDER BY lastSeenAt DESC,displayName COLLATE NOCASE LIMIT ?`, account, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]SocialFormerContact, 0, limit)
+	for rows.Next() {
+		var contact SocialFormerContact
+		if err := rows.Scan(&contact.Puuid, &contact.Name, &contact.LastSeenAt); err != nil {
+			return nil, err
+		}
+		out = append(out, contact)
 	}
 	return out, rows.Err()
 }

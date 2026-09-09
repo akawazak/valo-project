@@ -195,6 +195,36 @@ type AgentStat struct {
 	TimePlayedMillis int64   `json:"timePlayedMillis"`
 }
 
+// LivePlayerEvidence is derived only from match details already present in the
+// local tracking database. It deliberately carries its sample size and cache
+// timestamp so live-match UI can distinguish cached history from live Riot
+// session fields.
+type LivePlayerEvidence struct {
+	Puuid          string  `json:"puuid"`
+	AgentID        string  `json:"agentId,omitempty"`
+	LatestTier     int     `json:"latestTier,omitempty"`
+	PeakTier       int     `json:"peakTier,omitempty"`
+	Matches        int     `json:"matches,omitempty"`
+	Wins           int     `json:"wins,omitempty"`
+	Winrate        float64 `json:"winrate,omitempty"`
+	Kills          int     `json:"kills,omitempty"`
+	Deaths         int     `json:"deaths,omitempty"`
+	Assists        int     `json:"assists,omitempty"`
+	KD             float64 `json:"kd,omitempty"`
+	KDA            float64 `json:"kda,omitempty"`
+	LastMatchAt    int64   `json:"lastMatchAt,omitempty"`
+	CacheUpdatedAt int64   `json:"cacheUpdatedAt,omitempty"`
+}
+
+// CachedPartyGroup is factual evidence that the listed players shared one Riot
+// party ID in cached, completed matches. It is not a claim that they are in the
+// same party now.
+type CachedPartyGroup struct {
+	Players    []string `json:"players"`
+	Matches    int      `json:"matches"`
+	LastSeenAt int64    `json:"lastSeenAt"`
+}
+
 // MapStat is one row of `map_stats`.
 type MapStat struct {
 	MapID   string  `json:"mapID"`

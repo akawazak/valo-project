@@ -1,22 +1,107 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, RunEvent, State,
 };
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_shell::ShellExt;
 
+#[cfg(target_os = "android")]
+extern "C" {
+    fn StartVantaVaultBackend(
+        api_key: *const std::ffi::c_char,
+        config_dir: *const std::ffi::c_char,
+        chat_storage_key: *const std::ffi::c_char,
+    ) -> std::ffi::c_int;
+}
+
+#[cfg(target_os = "android")]
+struct AndroidBridge<R: tauri::Runtime>(tauri::plugin::PluginHandle<R>);
+
+#[cfg(target_os = "android")]
+fn android_bridge_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("android-bridge")
+        .setup(|app, api| {
+            let handle =
+                api.register_android_plugin("com.akawazak.valovault", "AndroidBridgePlugin")?;
+            app.manage(AndroidBridge(handle));
+            Ok(())
+        })
+        .build()
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidLoginArgs {
+    auth_url: String,
+    session_id: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidLoginResult {
+    session_id: String,
+    url: String,
+    cookies: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidSessionArgs {
+    session_id: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidCookiesResult {
+    cookies: Option<String>,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidSecretsArgs {
+    puuid: String,
+    access_token: Option<String>,
+    entitlements_token: Option<String>,
+    ssid: Option<String>,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+struct AndroidAccountArgs {
+    puuid: String,
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Deserialize)]
+struct AndroidChatStorageKey {
+    key: String,
+}
+
 const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const OVERLAY_WIDTH: i32 = 1280;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const OVERLAY_HEIGHT: i32 = 720;
 static MAIN_WINDOW_SHOWN_BY_HOTKEY: AtomicBool = AtomicBool::new(false);
 static LIVE_MATCH_OVERLAY_LOCAL_SESSION: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Clone, Copy)]
 struct WindowGeometry {
     position: tauri::PhysicalPosition<i32>,
@@ -25,6 +110,7 @@ struct WindowGeometry {
     style: isize,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn capture_main_window_geometry(
     app_handle: &AppHandle,
     window: &tauri::WebviewWindow,
@@ -127,7 +213,11 @@ fn show_main_window_without_activation(
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(
+    not(target_os = "windows"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
 fn show_main_window_without_activation(
     app_handle: &AppHandle,
     window: &tauri::WebviewWindow,
@@ -149,7 +239,11 @@ fn show_main_window_without_activation(
     window.show().map_err(|error| error.to_string())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(
+    not(target_os = "windows"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
 fn restore_main_window_geometry(app_handle: &AppHandle, window: &tauri::WebviewWindow) {
     let state = app_handle.state::<AppState>();
     let saved = state
@@ -166,8 +260,15 @@ fn restore_main_window_geometry(app_handle: &AppHandle, window: &tauri::WebviewW
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn show_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
     show_main_app_window(&app_handle)
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+async fn show_live_match_overlay(_app_handle: AppHandle) -> Result<(), String> {
+    Err("Live Match Overlay is only available in the Windows desktop app".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -242,12 +343,16 @@ fn live_match_overlay_available() -> bool {
 fn set_live_match_overlay_enabled(app_handle: AppHandle, enabled: bool) -> Result<bool, String> {
     LIVE_MATCH_OVERLAY_LOCAL_SESSION.store(enabled, Ordering::SeqCst);
     let available = live_match_overlay_available();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if !available && MAIN_WINDOW_SHOWN_BY_HOTKEY.load(Ordering::SeqCst) {
         hide_main_app_window(&app_handle)?;
     }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = app_handle;
     Ok(available)
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn show_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
     if !live_match_overlay_available() {
         return Err(
@@ -263,10 +368,18 @@ fn show_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn hide_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
     hide_main_app_window(&app_handle)
 }
 
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+async fn hide_live_match_overlay(_app_handle: AppHandle) -> Result<(), String> {
+    Err("Live Match Overlay is only available in the Windows desktop app".to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn hide_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
     if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
         window.hide().map_err(|error| error.to_string())?;
@@ -276,10 +389,18 @@ fn hide_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn toggle_live_match_overlay(app_handle: AppHandle) -> Result<(), String> {
     toggle_main_app_window(&app_handle)
 }
 
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+async fn toggle_live_match_overlay(_app_handle: AppHandle) -> Result<(), String> {
+    Err("Live Match Overlay is only available in the Windows desktop app".to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn toggle_main_app_window(app_handle: &AppHandle) -> Result<(), String> {
     if MAIN_WINDOW_SHOWN_BY_HOTKEY.load(Ordering::SeqCst) {
         hide_main_app_window(app_handle)
@@ -597,10 +718,12 @@ fn configured_discord_client_id(config_dir: &std::path::Path) -> Option<String> 
 }
 
 struct AppState {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     child: Mutex<Option<CommandChild>>,
     #[cfg(target_os = "windows")]
     backend_pid: Mutex<Option<u32>>,
     backend_token: String,
+    backend_port: u16,
     #[cfg(target_os = "windows")]
     discord_sender: Mutex<Option<std::sync::mpsc::Sender<DiscordActivity>>>,
     /// Per-window-label mutex map. Each label (`riot_login_<session_id>`)
@@ -612,12 +735,343 @@ struct AppState {
     window_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Normal desktop geometry saved while Alt+T uses the main window as a
     /// centered, fixed-size game overlay.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     main_window_geometry: Mutex<Option<WindowGeometry>>,
 }
 
+fn single_backend_segment(path: &str, prefix: &str, suffix: &str) -> bool {
+    let Some(value) = path
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    !value.is_empty() && !value.contains('/')
+}
+
+fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
+    let route = path.split('?').next().unwrap_or_default();
+    let lowered = route.to_ascii_lowercase();
+    if route.is_empty()
+        || route.contains('#')
+        || route.contains('\\')
+        || route.contains("..")
+        || lowered.contains("%2f")
+        || lowered.contains("%5c")
+        || lowered.contains("%2e")
+    {
+        return false;
+    }
+
+    match method.as_str() {
+        "GET" => {
+            matches!(
+                route,
+                "/v1/health"
+                    | "/v1/presets"
+                    | "/v1/owned-skins"
+                    | "/v1/owned-gun-buddies"
+                    | "/v1/owned-agents"
+                    | "/v1/owned-sprays"
+                    | "/v1/owned-cards"
+                    | "/v1/owned-titles"
+                    | "/v1/player-loadout"
+                    | "/v1/settings"
+                    | "/v1/storage"
+                    | "/v1/accounts"
+                    | "/v1/accounts/local"
+                    | "/v1/livematch"
+                    | "/v1/auth/url"
+                    | "/v1/storefront"
+                    | "/v1/wallet"
+                    | "/v1/missions"
+                    | "/v1/daily-ticket"
+                    | "/v1/career/account-xp"
+                    | "/v1/contracts"
+                    | "/v1/item-upgrades"
+                    | "/v1/progression/events"
+                    | "/v1/party"
+                    | "/v1/live-loadouts"
+                    | "/v1/social"
+                    | "/v1/social/events"
+                    | "/v1/chat/conversations"
+                    | "/v1/chat/summary"
+                    | "/v1/chat/events"
+                    | "/v1/account-health"
+                    | "/v1/profile/overview"
+                    | "/v1/profile/player-card"
+                    | "/v1/profile/rr-history"
+                    | "/v1/profile/season-summary"
+                    | "/v1/profile/agent-stats"
+                    | "/v1/profile/map-stats"
+                    | "/v1/profile/match-history"
+                    | "/v1/profile/sync-status"
+                    | "/v1/profile/leaderboard"
+            ) || single_backend_segment(route, "/v1/profile/match-details/", "")
+                || single_backend_segment(route, "/v1/chat/conversations/", "/messages")
+        }
+        "POST" => {
+            matches!(
+                route,
+                "/v1/presets"
+                    | "/v1/apply-loadout"
+                    | "/v1/livematch/ranks"
+                    | "/v1/livematch/likely-stacks"
+                    | "/v1/settings"
+                    | "/v1/storage/clear"
+                    | "/v1/accounts"
+                    | "/v1/auth/token"
+                    | "/v1/auth/ssid-reauth"
+                    | "/v1/social/requests"
+                    | "/v1/chat/messages"
+                    | "/v1/profile/sync"
+            ) || single_backend_segment(route, "/v1/social/requests/", "")
+                || single_backend_segment(route, "/v1/chat/conversations/", "/snapshot")
+                || single_backend_segment(route, "/v1/chat/conversations/", "/read")
+        }
+        "DELETE" => route == "/v1/chat/history",
+        _ => false,
+    }
+}
+
+async fn perform_backend_request(
+    state: State<'_, AppState>,
+    path: String,
+    method: String,
+    headers: HashMap<String, String>,
+    mut body: Option<String>,
+    secrets: RiotAccountSecrets,
+) -> Result<BackendResponse, String> {
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|_| "The local API method is invalid".to_string())?;
+    if !is_allowed_backend_request(&path, &method) {
+        return Err("The local API request is not allowed".to_string());
+    }
+    verify_backend_identity(state.backend_port, &state.backend_token)?;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("Could not initialize the local API client: {error}"))?;
+    let mut request = client
+        .request(
+            method,
+            format!("http://127.0.0.1:{}{}", state.backend_port, path),
+        )
+        .header("X-VantaVault-Key", &state.backend_token);
+    let selected_puuid = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| valid_riot_account_id(value));
+    let has_remote_tokens = secrets
+        .access_token
+        .as_ref()
+        .is_some_and(|value| !value.is_empty())
+        && secrets
+            .entitlements_token
+            .as_ref()
+            .is_some_and(|value| !value.is_empty());
+    for (name, value) in headers {
+        if forwardable_backend_header(&name, has_remote_tokens) {
+            request = request.header(name, value);
+        }
+    }
+    if let Some(puuid) = selected_puuid {
+        let access_token = secrets.access_token.filter(|value| !value.is_empty());
+        let entitlements_token = secrets.entitlements_token.filter(|value| !value.is_empty());
+        if let (Some(access_token), Some(entitlements_token)) = (access_token, entitlements_token) {
+            request = request
+                .header("X-Riot-Puuid", puuid)
+                .header("X-Riot-Access-Token", access_token)
+                .header("X-Riot-Entitlements-JWT", entitlements_token);
+        }
+        if path == "/v1/auth/ssid-reauth" {
+            let supplied_cookie = body
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| {
+                    value
+                        .get("cookies")
+                        .and_then(|item| item.as_str())
+                        .map(str::to_string)
+                })
+                .filter(|value| {
+                    value
+                        .split(';')
+                        .any(|part| part.trim_start().starts_with("ssid="))
+                });
+            if supplied_cookie.is_none() {
+                if let Some(ssid) = secrets.ssid.filter(|value| !value.is_empty()) {
+                    body = Some(serde_json::json!({ "cookies": ssid }).to_string());
+                }
+            }
+        }
+    }
+    if let Some(body) = body {
+        if body.len() > 4 * 1024 * 1024 {
+            return Err("The local API request body is too large".to_string());
+        }
+        request = request.body(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("The verified local API did not respond: {error}"))?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("text/plain; charset=utf-8")
+        .to_string();
+    if response.content_length().unwrap_or(0) > 16 * 1024 * 1024 {
+        return Err("The local API response is too large".to_string());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Could not read the local API response: {error}"))?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("The local API response is too large".to_string());
+    }
+    Ok(BackendResponse {
+        status,
+        content_type,
+        body: String::from_utf8_lossy(&bytes).into_owned(),
+    })
+}
+
+fn forwardable_backend_header(name: &str, has_remote_tokens: bool) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "content-type" | "x-riot-selected-puuid" => true,
+        "x-riot-region" => has_remote_tokens,
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
-fn get_backend_token(state: State<'_, AppState>) -> String {
-    state.backend_token.clone()
+async fn backend_request(
+    state: State<'_, AppState>,
+    path: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) -> Result<BackendResponse, String> {
+    let puuid = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
+        .map(|(_, value)| value.clone());
+    let secrets = match puuid {
+        Some(puuid) if valid_riot_account_id(&puuid) => {
+            tauri::async_runtime::spawn_blocking(move || load_windows_account_secrets(&puuid))
+                .await
+                .map_err(|error| format!("Could not unlock secure Riot credentials: {error}"))??
+        }
+        _ => RiotAccountSecrets::default(),
+    };
+    perform_backend_request(state, path, method, headers, body, secrets).await
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn backend_request(
+    state: State<'_, AppState>,
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    path: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) -> Result<BackendResponse, String> {
+    let puuid = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
+        .map(|(_, value)| value.clone());
+    let secrets = match puuid {
+        Some(puuid) if valid_riot_account_id(&puuid) => bridge
+            .0
+            .run_mobile_plugin_async::<RiotAccountSecrets>(
+                "loadSecrets",
+                AndroidAccountArgs { puuid },
+            )
+            .await
+            .map_err(|error| error.to_string())?,
+        _ => RiotAccountSecrets::default(),
+    };
+    perform_backend_request(state, path, method, headers, body, secrets).await
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+#[tauri::command]
+async fn backend_request(
+    state: State<'_, AppState>,
+    path: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) -> Result<BackendResponse, String> {
+    perform_backend_request(
+        state,
+        path,
+        method,
+        headers,
+        body,
+        RiotAccountSecrets::default(),
+    )
+    .await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendResponse {
+    status: u16,
+    content_type: String,
+    body: String,
+}
+
+fn choose_backend_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .unwrap_or(31719)
+}
+
+fn backend_proof(api_key: &str, nonce: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{api_key}:{nonce}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn verify_backend_identity(port: u16, api_key: &str) -> Result<(), String> {
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect_timeout(&address, std::time::Duration::from_secs(2))
+        .map_err(|error| format!("Could not connect to the VantaVault backend: {error}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .map_err(|error| format!("Could not secure the backend connection: {error}"))?;
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+        .map_err(|error| format!("Could not secure the backend connection: {error}"))?;
+    write!(
+        stream,
+        "GET /v1/bootstrap-proof?nonce={nonce} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|error| format!("Could not challenge the VantaVault backend: {error}"))?;
+    let mut response = String::new();
+    stream
+        .take(8 * 1024)
+        .read_to_string(&mut response)
+        .map_err(|error| format!("Could not read the backend identity proof: {error}"))?;
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "The local backend returned an invalid identity proof".to_string())?;
+    if !head.starts_with("HTTP/1.1 200") || body.trim() != backend_proof(api_key, &nonce) {
+        return Err("Another process is using VantaVault's local API endpoint".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -626,7 +1080,7 @@ fn prepare_for_update(state: State<'_, AppState>) {
     stop_backend_sidecar(&state);
 }
 
-#[derive(Clone, Default, serde::Serialize)]
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RiotAccountSecrets {
     access_token: Option<String>,
@@ -790,79 +1244,104 @@ fn delete_windows_secret(target: &str) -> Result<(), String> {
     delete_windows_credential(target)
 }
 
+#[cfg(target_os = "windows")]
+fn load_windows_account_secrets(puuid: &str) -> Result<RiotAccountSecrets, String> {
+    Ok(RiotAccountSecrets {
+        access_token: read_windows_secret(&credential_target(puuid, "access")?)?,
+        entitlements_token: read_windows_secret(&credential_target(puuid, "entitlements")?)?,
+        ssid: read_windows_secret(&credential_target(puuid, "ssid")?)?,
+    })
+}
+
 #[tauri::command]
+#[cfg(target_os = "windows")]
 async fn save_riot_account_secrets(
     puuid: String,
     access_token: Option<String>,
     entitlements_token: Option<String>,
     ssid: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        return tauri::async_runtime::spawn_blocking(move || {
-            for (kind, value) in [
-                ("access", access_token),
-                ("entitlements", entitlements_token),
-                ("ssid", ssid),
-            ] {
-                if let Some(value) = value.filter(|value| !value.is_empty()) {
-                    write_windows_secret(&credential_target(&puuid, kind)?, &puuid, &value)?;
-                }
+    tauri::async_runtime::spawn_blocking(move || {
+        for (kind, value) in [
+            ("access", access_token),
+            ("entitlements", entitlements_token),
+            ("ssid", ssid),
+        ] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                write_windows_secret(&credential_target(&puuid, kind)?, &puuid, &value)?;
             }
-            Ok(())
-        })
-        .await
-        .map_err(|error| format!("Could not run secure credential storage: {error}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (puuid, access_token, entitlements_token, ssid);
-        Err("Secure Riot account storage is only available on Windows".to_string())
-    }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Could not run secure credential storage: {error}"))?
 }
 
 #[tauri::command]
-async fn load_riot_account_secrets(puuid: String) -> Result<RiotAccountSecrets, String> {
-    #[cfg(target_os = "windows")]
-    {
-        return tauri::async_runtime::spawn_blocking(move || {
-            Ok(RiotAccountSecrets {
-                access_token: read_windows_secret(&credential_target(&puuid, "access")?)?,
-                entitlements_token: read_windows_secret(&credential_target(
-                    &puuid,
-                    "entitlements",
-                )?)?,
-                ssid: read_windows_secret(&credential_target(&puuid, "ssid")?)?,
-            })
-        })
+#[cfg(target_os = "android")]
+async fn save_riot_account_secrets(
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    puuid: String,
+    access_token: Option<String>,
+    entitlements_token: Option<String>,
+    ssid: Option<String>,
+) -> Result<(), String> {
+    bridge
+        .0
+        .run_mobile_plugin_async::<()>(
+            "saveSecrets",
+            AndroidSecretsArgs {
+                puuid,
+                access_token,
+                entitlements_token,
+                ssid,
+            },
+        )
         .await
-        .map_err(|error| format!("Could not load secure credential storage: {error}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = puuid;
-        Err("Secure Riot account storage is only available on Windows".to_string())
-    }
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+async fn save_riot_account_secrets(
+    _puuid: String,
+    _access_token: Option<String>,
+    _entitlements_token: Option<String>,
+    _ssid: Option<String>,
+) -> Result<(), String> {
+    Err("Secure Riot account storage is not implemented on this platform".to_string())
+}
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
 async fn delete_riot_account_secrets(puuid: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        return tauri::async_runtime::spawn_blocking(move || {
-            for kind in ["access", "entitlements", "ssid"] {
-                delete_windows_secret(&credential_target(&puuid, kind)?)?;
-            }
-            Ok(())
-        })
+    tauri::async_runtime::spawn_blocking(move || {
+        for kind in ["access", "entitlements", "ssid"] {
+            delete_windows_secret(&credential_target(&puuid, kind)?)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Could not delete secure credential storage: {error}"))?
+}
+
+#[tauri::command]
+#[cfg(target_os = "android")]
+async fn delete_riot_account_secrets(
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    puuid: String,
+) -> Result<(), String> {
+    bridge
+        .0
+        .run_mobile_plugin_async::<()>("deleteSecrets", AndroidAccountArgs { puuid })
         .await
-        .map_err(|error| format!("Could not delete secure credential storage: {error}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = puuid;
-        Err("Secure Riot account storage is only available on Windows".to_string())
-    }
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+async fn delete_riot_account_secrets(_puuid: String) -> Result<(), String> {
+    Err("Secure Riot account storage is not implemented on this platform".to_string())
 }
 
 #[tauri::command]
@@ -1015,6 +1494,7 @@ impl AppState {
             .clone()
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn take_backend_child(&self) -> Option<CommandChild> {
         match self.child.lock() {
             Ok(mut guard) => guard.take(),
@@ -1062,6 +1542,7 @@ fn kill_windows_process_tree(pid: u32) {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn stop_backend_sidecar(state: &AppState) {
     #[cfg(target_os = "windows")]
     let pid = state.take_backend_pid();
@@ -1075,6 +1556,46 @@ fn stop_backend_sidecar(state: &AppState) {
     #[cfg(target_os = "windows")]
     if let Some(pid) = pid {
         kill_windows_process_tree(pid);
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn stop_backend_sidecar(_state: &AppState) {}
+
+#[cfg(target_os = "android")]
+fn start_android_backend(app: &tauri::App) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let bridge = app.state::<AndroidBridge<tauri::Wry>>();
+    let chat_storage_key = bridge
+        .0
+        .run_mobile_plugin::<AndroidChatStorageKey>("loadChatStorageKey", ())
+        .map_err(|error| format!("Could not unlock Android chat storage: {error}"))?;
+    let api_key = std::ffi::CString::new(state.backend_token.clone())
+        .map_err(|error| format!("Invalid backend key: {error}"))?;
+    let chat_storage_key = std::ffi::CString::new(chat_storage_key.key)
+        .map_err(|error| format!("Invalid Android chat storage key: {error}"))?;
+    let config_dir = app
+        .handle()
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("Could not resolve Android data directory: {error}"))?;
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|error| format!("Could not create Android data directory: {error}"))?;
+    let config_dir = std::ffi::CString::new(config_dir.to_string_lossy().as_bytes())
+        .map_err(|error| format!("Invalid Android data directory: {error}"))?;
+    let result = unsafe {
+        StartVantaVaultBackend(
+            api_key.as_ptr(),
+            config_dir.as_ptr(),
+            chat_storage_key.as_ptr(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Embedded Android backend rejected its configuration ({result})"
+        ))
     }
 }
 
@@ -1225,6 +1746,7 @@ fn clear_session_caches(app_handle: tauri::AppHandle) -> Result<u64, String> {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn open_login_window(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1232,6 +1754,11 @@ async fn open_login_window(
     session_id: Option<String>,
     visible: Option<bool>,
 ) -> Result<(), String> {
+    if let Some(ref session_id) = session_id {
+        if !is_valid_login_session_id(session_id) {
+            return Err("Invalid login session ID".to_string());
+        }
+    }
     let window_label = format!("riot_login_{}", session_id.as_deref().unwrap_or("default"));
 
     // Serialise per-label: if another caller is already opening/closing
@@ -1387,44 +1914,124 @@ async fn open_login_window(
 }
 
 #[tauri::command]
+#[cfg(target_os = "android")]
+async fn open_login_window(
+    app_handle: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    auth_url: String,
+    session_id: Option<String>,
+    _visible: Option<bool>,
+) -> Result<(), String> {
+    let session_id = session_id.unwrap_or_else(|| "account_default".to_string());
+    let result = bridge
+        .0
+        .run_mobile_plugin_async::<AndroidLoginResult>(
+            "openLogin",
+            AndroidLoginArgs {
+                auth_url,
+                session_id: session_id.clone(),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if result.session_id != session_id {
+        return Err("Android Riot sign-in returned the wrong session".to_string());
+    }
+    if !result.cookies.is_empty() {
+        app_handle
+            .emit(
+                "riot-login-cookies-v2",
+                LoginCookiesPayload {
+                    session_id: session_id.clone(),
+                    cookies: result.cookies.clone(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        let _ = app_handle.emit("riot-login-cookies", result.cookies);
+    }
+    app_handle
+        .emit(
+            "riot-login-redirect-v2",
+            LoginRedirectPayload {
+                session_id,
+                url: result.url.clone(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let _ = app_handle.emit("riot-login-redirect", result.url);
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(target_os = "ios")]
+async fn open_login_window(
+    _app_handle: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    _auth_url: String,
+    _session_id: Option<String>,
+    _visible: Option<bool>,
+) -> Result<(), String> {
+    Err("Riot account sign-in is not implemented on iOS".to_string())
+}
+
+#[tauri::command]
 fn claim_login_session(app_handle: tauri::AppHandle, session_id: String) -> Result<(), String> {
-    if !is_valid_account_session_id(&session_id) {
+    if !is_valid_login_session_id(&session_id) {
         return Err("Invalid login session ID".to_string());
     }
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let session_dir = config_dir.join("sessions").join(session_id);
-    if !session_dir.is_dir() {
-        return Err("Login session directory is missing".to_string());
+    #[cfg(target_os = "android")]
+    {
+        let _ = app_handle;
+        return Ok(());
     }
-    std::fs::write(session_dir.join(".claimed"), b"")
-        .map_err(|e| format!("Failed to claim login session: {e}"))
+    #[cfg(not(target_os = "android"))]
+    {
+        let config_dir = app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?;
+        let session_dir = config_dir.join("sessions").join(session_id);
+        if !session_dir.is_dir() {
+            return Err("Login session directory is missing".to_string());
+        }
+        std::fs::write(session_dir.join(".claimed"), b"")
+            .map_err(|e| format!("Failed to claim login session: {e}"))
+    }
 }
 
 #[tauri::command]
 fn delete_login_session(app_handle: tauri::AppHandle, session_id: String) -> Result<(), String> {
-    if !is_valid_account_session_id(&session_id) {
+    if !is_valid_login_session_id(&session_id) {
         return Err("Invalid login session ID".to_string());
     }
-    let window_label = format!("riot_login_{session_id}");
-    if app_handle.get_webview_window(&window_label).is_some() {
-        return Err("Login session is still in use".to_string());
-    }
-    let config_dir = app_handle
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?;
-    let session_dir = config_dir.join("sessions").join(session_id);
-    if !session_dir.exists() {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app_handle;
         return Ok(());
     }
-    std::fs::remove_dir_all(session_dir).map_err(|e| format!("Failed to delete login session: {e}"))
+    #[cfg(not(target_os = "android"))]
+    {
+        let window_label = format!("riot_login_{session_id}");
+        if app_handle.get_webview_window(&window_label).is_some() {
+            return Err("Login session is still in use".to_string());
+        }
+        let config_dir = app_handle
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?;
+        let session_dir = config_dir.join("sessions").join(session_id);
+        if !session_dir.exists() {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(session_dir)
+            .map_err(|e| format!("Failed to delete login session: {e}"))
+    }
 }
 
-fn is_valid_account_session_id(session_id: &str) -> bool {
-    session_id.starts_with("account_")
+fn is_valid_login_session_id(session_id: &str) -> bool {
+    (session_id.starts_with("account_") || session_id.starts_with("session_"))
         && session_id.len() <= 128
         && session_id
             .chars()
@@ -1432,6 +2039,7 @@ fn is_valid_account_session_id(session_id: &str) -> bool {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn show_login_window(
     app_handle: tauri::AppHandle,
     session_id: Option<String>,
@@ -1445,6 +2053,35 @@ async fn show_login_window(
 }
 
 #[tauri::command]
+#[cfg(target_os = "android")]
+async fn show_login_window(
+    _app_handle: tauri::AppHandle,
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    bridge
+        .0
+        .run_mobile_plugin_async::<()>(
+            "showLogin",
+            AndroidSessionArgs {
+                session_id: session_id.unwrap_or_default(),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[cfg(target_os = "ios")]
+async fn show_login_window(
+    _app_handle: tauri::AppHandle,
+    _session_id: Option<String>,
+) -> Result<(), String> {
+    Err("Riot account sign-in is not implemented on iOS".to_string())
+}
+
+#[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn close_login_window(
     app_handle: tauri::AppHandle,
     session_id: Option<String>,
@@ -1456,21 +2093,80 @@ async fn close_login_window(
     Ok(())
 }
 
+#[tauri::command]
+#[cfg(target_os = "android")]
+async fn close_login_window(
+    app_handle: tauri::AppHandle,
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    let session_id = session_id.unwrap_or_default();
+    bridge
+        .0
+        .run_mobile_plugin_async::<()>(
+            "closeLogin",
+            AndroidSessionArgs {
+                session_id: session_id.clone(),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let _ = app_handle.emit(
+        "riot-login-closed-v2",
+        LoginSessionPayload {
+            session_id: session_id.clone(),
+        },
+    );
+    let _ = app_handle.emit("riot-login-closed", ());
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(target_os = "ios")]
+async fn close_login_window(
+    _app_handle: tauri::AppHandle,
+    _session_id: Option<String>,
+) -> Result<(), String> {
+    Ok(())
+}
+
 /// Reads the WebView2 cookie database for a given session and extracts the
 /// Riot `ssid` cookie value (decrypted via Windows DPAPI / AES-GCM).
 /// Returns `None` if the cookie is not found or cannot be decrypted.
 #[tauri::command]
+#[cfg(not(target_os = "android"))]
 async fn get_ssid_cookie(
     app_handle: tauri::AppHandle,
     session_id: String,
     wait_ms: Option<u64>,
 ) -> Result<Option<String>, String> {
+    if !is_valid_login_session_id(&session_id) {
+        return Err("Invalid login session ID".to_string());
+    }
     let config_dir = app_handle
         .path()
         .app_config_dir()
         .map_err(|e| e.to_string())?;
 
     read_session_cookies_with_wait(&config_dir, &session_id, wait_ms.unwrap_or(0))
+}
+
+#[tauri::command]
+#[cfg(target_os = "android")]
+async fn get_ssid_cookie(
+    bridge: State<'_, AndroidBridge<tauri::Wry>>,
+    session_id: String,
+    _wait_ms: Option<u64>,
+) -> Result<Option<String>, String> {
+    let result = bridge
+        .0
+        .run_mobile_plugin_async::<AndroidCookiesResult>(
+            "getLoginCookies",
+            AndroidSessionArgs { session_id },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(result.cookies)
 }
 
 // ---------------------------------------------------------------------------
@@ -1760,9 +2456,10 @@ fn strip_chromium_host_key_hash<'a>(host_key: &str, plaintext: &'a [u8]) -> &'a 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_riot_cookie_header, cleanup_stale_sessions, is_valid_account_session_id,
-        prune_session_cache, recover_session_swap_artifacts, session_cache_size,
-        strip_chromium_host_key_hash, valid_riot_account_id,
+        build_riot_cookie_header, cleanup_stale_sessions, forwardable_backend_header,
+        is_allowed_backend_request, is_valid_login_session_id, prune_session_cache,
+        recover_session_swap_artifacts, session_cache_size, strip_chromium_host_key_hash,
+        valid_riot_account_id,
     };
     use sha2::{Digest, Sha256};
 
@@ -1775,12 +2472,64 @@ mod tests {
         assert!(!valid_riot_account_id("account:other"));
     }
 
+    #[test]
+    fn backend_proxy_allows_only_registered_routes_and_methods() {
+        assert!(is_allowed_backend_request(
+            "/v1/profile/match-details/match-123?puuid=player",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/profile/player-card?puuid=player&region=eu",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/chat/conversations/dm%3Aplayer/read",
+            &reqwest::Method::POST,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/bootstrap-proof",
+            &reqwest::Method::GET,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/profile/match-details/../settings",
+            &reqwest::Method::GET,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/health",
+            &reqwest::Method::POST,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/not-registered",
+            &reqwest::Method::GET,
+        ));
+    }
+
+    #[test]
+    fn backend_proxy_never_forwards_region_without_complete_remote_tokens() {
+        assert!(forwardable_backend_header("Content-Type", false));
+        assert!(forwardable_backend_header("X-Riot-Selected-Puuid", false));
+        assert!(!forwardable_backend_header("X-Riot-Region", false));
+        assert!(forwardable_backend_header("X-Riot-Region", true));
+        assert!(!forwardable_backend_header("X-Riot-Access-Token", true));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_credential_manager_round_trip() {
         let target = format!("VantaVault:Test:{}", uuid::Uuid::new_v4());
         let secret = "secret-value".repeat(600);
-        super::write_windows_secret(&target, "test", &secret).unwrap();
+        if let Err(error) = super::write_windows_secret(&target, "test", &secret) {
+            // Some non-interactive Windows hosts (including isolated CI shells)
+            // expose the Credential Manager APIs without a usable logon session.
+            // The desktop app always runs in a user session; keep this a narrowly
+            // scoped environment skip, while every other credential failure fails
+            // the test normally.
+            if error.contains("0x80070520") || error.contains("logon session does not exist") {
+                eprintln!("Credential Manager unavailable in this Windows logon session; skipping round-trip.");
+                return;
+            }
+            panic!("could not save test Riot credentials: {error}");
+        }
         assert_eq!(
             super::read_windows_secret(&target).unwrap().as_deref(),
             Some(secret.as_str())
@@ -1910,14 +2659,16 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_bounded_account_session_ids() {
-        assert!(is_valid_account_session_id(
+    fn accepts_only_bounded_login_session_ids() {
+        assert!(is_valid_login_session_id(
             "account_01234567-89ab-cdef-0123-456789abcdef"
         ));
-        assert!(!is_valid_account_session_id("../account_escape"));
-        assert!(!is_valid_account_session_id("session_legacy"));
-        assert!(!is_valid_account_session_id(&format!(
-            "account_{}",
+        assert!(is_valid_login_session_id("session_1720000000000_abcd1234"));
+        assert!(!is_valid_login_session_id("../account_escape"));
+        assert!(!is_valid_login_session_id("C:\\account_escape"));
+        assert!(!is_valid_login_session_id("session_nested/path"));
+        assert!(!is_valid_login_session_id(&format!(
+            "session_{}",
             "a".repeat(121)
         )));
     }
@@ -2012,46 +2763,64 @@ pub fn run() {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let backend_port = choose_backend_port();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let backend_port = 31719;
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             child: Mutex::new(None),
             #[cfg(target_os = "windows")]
             backend_pid: Mutex::new(None),
             backend_token,
+            backend_port,
             #[cfg(target_os = "windows")]
             discord_sender: Mutex::new(None),
             window_locks: Mutex::new(HashMap::new()),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             main_window_geometry: Mutex::new(None),
         })
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![
-            get_session_cache_size,
-            clear_session_caches,
-            open_login_window,
-            show_login_window,
-            close_login_window,
-            claim_login_session,
-            delete_login_session,
-            get_ssid_cookie,
-            get_backend_token,
-            prepare_for_update,
-            save_riot_account_secrets,
-            load_riot_account_secrets,
-            delete_riot_account_secrets,
-            is_portable,
-            portable_update_status,
-            portable_start_update,
-            portable_restart_to_update,
-            set_discord_presence,
-            set_live_match_overlay_enabled,
-            show_live_match_overlay,
-            hide_live_match_overlay,
-            toggle_live_match_overlay,
-        ])
+        .plugin(tauri_plugin_http::init());
+
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_bridge_plugin());
+
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        get_session_cache_size,
+        clear_session_caches,
+        open_login_window,
+        show_login_window,
+        close_login_window,
+        claim_login_session,
+        delete_login_session,
+        get_ssid_cookie,
+        backend_request,
+        prepare_for_update,
+        save_riot_account_secrets,
+        delete_riot_account_secrets,
+        is_portable,
+        portable_update_status,
+        portable_start_update,
+        portable_restart_to_update,
+        set_discord_presence,
+        set_live_match_overlay_enabled,
+        show_live_match_overlay,
+        hide_live_match_overlay,
+        toggle_live_match_overlay,
+    ]);
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    let builder = builder
         .setup(|app| {
+            #[cfg(target_os = "android")]
+            start_android_backend(app)?;
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -2077,70 +2846,110 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             start_live_match_overlay_hotkey(app.handle().clone());
 
-            let state = app.state::<AppState>();
-            let sidecar_command = app
-                .shell()
-                .sidecar("valovault-backend")
-                .unwrap()
-                .env("VANTAVAULT_API_KEY", &state.backend_token);
-            let (mut sidecar_events, child) = sidecar_command
-                .spawn()
-                .expect("Failed to spawn backend sidecar");
-            tauri::async_runtime::spawn(async move {
-                while let Some(event) = sidecar_events.recv().await {
-                    match event {
-                        CommandEvent::Error(_) => {
-                            eprintln!("backend sidecar command event failed");
-                        }
-                        CommandEvent::Terminated(status) => {
-                            eprintln!(
-                                "backend sidecar terminated: exit_code={:?} signal={:?}",
-                                status.code, status.signal
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            });
-            #[cfg(target_os = "windows")]
-            let backend_pid = child.pid();
-            *state.child.lock().unwrap() = Some(child);
-            #[cfg(target_os = "windows")]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                *state.backend_pid.lock().unwrap() = Some(backend_pid);
-            }
-
-            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit_i])?;
-
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
-                        app.exit(0);
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            MAIN_WINDOW_SHOWN_BY_HOTKEY.store(false, Ordering::SeqCst);
-                            let _ = window.set_always_on_top(false);
-                            restore_main_window_geometry(app, &window);
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                let state = app.state::<AppState>();
+                let sidecar_command = app
+                    .shell()
+                    .sidecar("valovault-backend")
+                    .unwrap()
+                    .env("VANTAVAULT_API_KEY", &state.backend_token)
+                    .env("VANTAVAULT_PORT", state.backend_port.to_string());
+                let (mut sidecar_events, child) = sidecar_command
+                    .spawn()
+                    .expect("Failed to spawn backend sidecar");
+                tauri::async_runtime::spawn(async move {
+                    while let Some(event) = sidecar_events.recv().await {
+                        match event {
+                            CommandEvent::Error(_) => {
+                                eprintln!("backend sidecar command event failed");
+                            }
+                            CommandEvent::Terminated(status) => {
+                                eprintln!(
+                                    "backend sidecar terminated: exit_code={:?} signal={:?}",
+                                    status.code, status.signal
+                                );
+                            }
+                            _ => {}
                         }
                     }
-                })
-                .build(app)?;
+                });
+                #[cfg(target_os = "windows")]
+                let backend_pid = child.pid();
+                *state.child.lock().unwrap() = Some(child);
+                #[cfg(target_os = "windows")]
+                {
+                    *state.backend_pid.lock().unwrap() = Some(backend_pid);
+                }
+                let mut verified = false;
+                for _ in 0..50 {
+                    if verify_backend_identity(state.backend_port, &state.backend_token).is_ok() {
+                        verified = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if !verified {
+                    stop_backend_sidecar(&state);
+                    return Err("The VantaVault backend could not be verified.".into());
+                }
+
+                let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&quit_i])?;
+
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        if event.id.as_ref() == "quit" {
+                            app.exit(0);
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                MAIN_WINDOW_SHOWN_BY_HOTKEY.store(false, Ordering::SeqCst);
+                                let _ = window.set_always_on_top(false);
+                                restore_main_window_geometry(app, &window);
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+
+                // A normal desktop launch must always reveal the full app. The
+                // tray and live-match overlay may hide it later, but relying on
+                // the webview's default visibility can leave a healthy dev or
+                // restored session running with only a tray icon.
+                let window = if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    window
+                } else {
+                    tauri::webview::WebviewWindowBuilder::new(
+                        app,
+                        MAIN_WINDOW_LABEL,
+                        tauri::WebviewUrl::App("index.html".into()),
+                    )
+                    .title("VantaVault")
+                    .inner_size(1664.0, 936.0)
+                    .resizable(true)
+                    .build()?
+                };
+                MAIN_WINDOW_SHOWN_BY_HOTKEY.store(false, Ordering::SeqCst);
+                let _ = window.set_always_on_top(false);
+                restore_main_window_geometry(app.handle(), &window);
+                let _ = window.unminimize();
+                window.show()?;
+                let _ = window.set_focus();
+            }
 
             Ok(())
         });

@@ -284,7 +284,7 @@ body::after {
 
 .store-card::before {
   background-color: #0a0d11;
-  background-image: url("assets/storefront.png");
+  background-image: url("assets/social-preview-sanitized.png");
   background-position: center top;
   background-size: 100% auto;
 }
@@ -308,7 +308,7 @@ body::after {
 .live-card::before {
   background-image:
     linear-gradient(180deg, transparent 22%, rgba(8, 11, 14, .38) 54%, #080b0e 94%),
-    url("assets/live-match-fracture.png");
+    url("assets/homepage-profile-sanitized.png");
 }
 
 .privacy-card {
@@ -574,14 +574,14 @@ body::after {
 .store-card::before {
   background-image:
     linear-gradient(180deg, rgba(7, 10, 16, .05) 12%, rgba(7, 10, 16, .54) 52%, #080b12 92%),
-    url("assets/storefront.png");
+    url("assets/social-preview-sanitized.png");
   background-position: center top;
 }
 
 .live-card::before {
   background-image:
     linear-gradient(180deg, rgba(7, 10, 16, .08) 8%, rgba(7, 10, 16, .58) 57%, #080b12 94%),
-    url("assets/live-match-fracture.png");
+    url("assets/homepage-profile-sanitized.png");
   background-position: 41% top;
 }
 
@@ -840,7 +840,7 @@ body::after {
 
 .store-card::before {
   background-color: #0a0d11;
-  background-image: url("assets/storefront.png");
+  background-image: url("assets/social-preview-sanitized.png");
   background-position: center top;
   background-size: 100% auto;
 }
@@ -864,7 +864,7 @@ body::after {
 .live-card::before {
   background-image:
     linear-gradient(180deg, transparent 22%, rgba(8, 11, 14, .38) 54%, #080b0e 94%),
-    url("assets/live-match-fracture.png");
+    url("assets/homepage-profile-sanitized.png");
 }
 
 .visual-copy {

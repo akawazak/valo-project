@@ -17,10 +17,10 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
     const inputRef = useRef<HTMLInputElement>(null);
 
     const titleMap: Record<NamingMode, string> = {
-        [NamingMode.New]: 'Save New Preset',
-        [NamingMode.SaveAsNew]: 'Save Preset As New',
-        [NamingMode.Rename]: 'Rename Preset',
-        [NamingMode.Variant]: 'Create Variant',
+        [NamingMode.New]: 'New preset',
+        [NamingMode.SaveAsNew]: 'Save as new preset',
+        [NamingMode.Rename]: 'Rename preset',
+        [NamingMode.Variant]: 'New variant',
     };
 
     useEffect(() => {
@@ -41,16 +41,13 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
     return createPortal(
         <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && onCloseAction()}>
             <div className="unified-modal-container preset-name-modal" role="dialog" aria-modal="true" aria-labelledby="preset-name-modal-title">
-                {/* Header */}
                 <div className="unified-modal-header preset-name-modal-header">
                     <div className="unified-modal-title-wrap">
-                        <span className="kicker">// Preset</span>
                         <h3 id="preset-name-modal-title" className="unified-modal-title">{titleMap[namingMode]}</h3>
                     </div>
-                    <button type="button" className="unified-modal-close-btn" onClick={onCloseAction}>✕</button>
+                    <button type="button" className="unified-modal-close-btn" onClick={onCloseAction} aria-label="Close">×</button>
                 </div>
 
-                {/* Body */}
                 <form className="preset-name-modal-body" onSubmit={(event) => { event.preventDefault(); handleSave(); }}>
                     <label className="preset-name-modal-label" htmlFor="preset-name-input">
                         Preset Name
@@ -60,11 +57,10 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
                         id="preset-name-input"
                         type="text"
                         className="tactical-input preset-name-modal-input"
-                        placeholder="e.g. Competitive Main, Ranked Grind…"
+                        placeholder="Preset name"
                         value={presetName}
                         onChange={(e) => setPresetName(e.target.value)}
                     />
-                    <p className="preset-name-modal-help">You can rename or duplicate this preset later.</p>
                     <div className="preset-name-modal-actions">
                     <button
                         type="button"
@@ -79,7 +75,7 @@ export default function PresetNameModal({ show, onCloseAction, onSaveAction, ini
                         disabled={!presetName.trim()}
                         className="btn-tactical btn-tactical-accent"
                     >
-                        {namingMode === NamingMode.Rename ? "Rename" : "Create Preset"}
+                        {namingMode === NamingMode.Rename ? "Rename" : "Save"}
                     </button>
                     </div>
                 </form>

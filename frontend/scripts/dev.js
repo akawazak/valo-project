@@ -1,13 +1,13 @@
 const { spawn } = require("child_process");
 const path = require("path");
+const nextBin = require.resolve("next/dist/bin/next");
 
 console.log("[ValoVault Launcher] Starting Next.js dev server...");
 console.log("[ValoVault Launcher] Tauri owns the Go backend sidecar.");
 
-const frontend = spawn("npx", ["next", "dev", "--turbopack"], {
+const frontend = spawn(process.execPath, [nextBin, "dev", "--turbopack"], {
     cwd: path.resolve(__dirname, ".."),
     stdio: "inherit",
-    shell: true,
 });
 
 const cleanup = () => {

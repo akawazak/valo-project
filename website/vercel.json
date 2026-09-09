@@ -2,13 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "trailingSlash": false,
-  "redirects": [
-    { "source": "/valorant-store-checker", "destination": "/#features", "permanent": true },
-    { "source": "/valorant-loadout-manager", "destination": "/#features", "permanent": true },
-    { "source": "/valorant-match-history", "destination": "/#features", "permanent": true },
-    { "source": "/valorant-live-match", "destination": "/#features", "permanent": true },
-    { "source": "/privacy-and-security", "destination": "/#download", "permanent": true }
-  ],
   "headers": [
     {
       "source": "/(.*)",

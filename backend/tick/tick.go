@@ -55,25 +55,25 @@ func (t *Ticker) Start() {
 		t.originalLoadout = snapshot
 		slog.Info("recovered pending loadout restoration")
 	} else if !os.IsNotExist(err) {
-		slog.Error("unable to recover pending loadout restoration", "err", err)
+		slog.Error("unable to recover pending loadout restoration")
 	}
 
 	ws, err := t.Val.GetLocalWebsocket()
 	if err != nil {
-		slog.Error("unable to get websocket", "err", err)
+		slog.Error("unable to get websocket")
 		return
 	}
 	defer ws.Close()
 
 	if err := ws.SubscribeEvent("OnJsonApiEvent"); err != nil {
-		slog.Error("unable to subscribe event", "err", err)
+		slog.Error("unable to subscribe event")
 		return
 	}
 
 	events := make(chan *valclient.LocalWebsocketApiEvent)
 	go func() {
 		if err := ws.Read(events); err != nil {
-			slog.Info("unable to read event", "err", err)
+			slog.Info("unable to read event")
 			return
 		}
 	}()
@@ -98,7 +98,7 @@ func (t *Ticker) Start() {
 
 			dataBytes, err := json.Marshal(event.Payload.Data)
 			if err != nil {
-				slog.Error("error marshalling event payload", "err", err)
+				slog.Error("error marshalling event payload")
 				continue
 			}
 			if t.OnProgressionChanged != nil && (bytes.Contains(dataBytes, []byte("daily-ticket")) || bytes.Contains(dataBytes, []byte("contracts")) || bytes.Contains(dataBytes, []byte("account-xp")) || bytes.Contains(dataBytes, []byte("match-details"))) {
@@ -126,7 +126,7 @@ func (t *Ticker) Start() {
 
 			match, err := t.Val.GetPreGameMatch()
 			if err != nil {
-				slog.Info("pregame over", "err", err)
+				slog.Info("pregame over")
 				continue
 			}
 
@@ -134,7 +134,7 @@ func (t *Ticker) Start() {
 
 			player, err := t.Val.GetPreGamePlayer()
 			if err != nil {
-				slog.Error("error when getting pre game player", "err", err)
+				slog.Error("error when getting pre game player")
 				continue
 			}
 
@@ -157,7 +157,7 @@ func (t *Ticker) Start() {
 
 			settings, err := settings.Get()
 			if err != nil {
-				slog.Error("error when getting settings", "err", err)
+				slog.Error("error when getting settings")
 				continue
 			}
 
@@ -167,7 +167,7 @@ func (t *Ticker) Start() {
 
 			existingPresets, err := presets.GetForOwner(t.Val.Player.Uuid)
 			if err != nil {
-				slog.Error("error when getting presets", "err", err)
+				slog.Error("error when getting presets")
 				continue
 			}
 
@@ -209,7 +209,7 @@ func (t *Ticker) Start() {
 				continue
 			}
 
-			slog.Info("found active variants for preset", "amount", variantAmount, "preset", selectedPreset.Name, "uuid", selectedPreset.Uuid)
+			slog.Info("found active variants for preset", "amount", variantAmount)
 
 			selectedVariant := variants[rand.IntN(variantAmount)]
 			// Do not mutate the stored base preset while combining a variant.
@@ -241,18 +241,18 @@ func (t *Ticker) Start() {
 
 			originalLoadout, err := t.Val.GetPlayerLoadout()
 			if err != nil {
-				slog.Error("error when saving original loadout", "err", err)
+				slog.Error("error when saving original loadout")
 				continue
 			}
 			if t.originalLoadout == nil {
 				if err := presets.SaveRestoreSnapshot(t.Val.Player.Uuid, originalLoadout); err != nil {
-					slog.Error("error when persisting original loadout", "err", err)
+					slog.Error("error when persisting original loadout")
 					continue
 				}
 			}
 
 			if err := presets.Apply(t.Val, loadout, identity, sprays, expressions); err != nil {
-				slog.Error("error when applying", "err", err)
+				slog.Error("error when applying")
 				if t.originalLoadout == nil {
 					_ = presets.ClearRestoreSnapshot(t.Val.Player.Uuid)
 				}
@@ -263,7 +263,7 @@ func (t *Ticker) Start() {
 			}
 			t.inactiveChecks = 0
 
-			slog.Info("applied preset with variant", "name", selectedPreset.Name, "uuid", selectedPreset.Uuid, "variant", selectedVariant.Name, "variantUuid", selectedVariant.Uuid)
+			slog.Info("applied preset with variant")
 		}
 	}
 }
@@ -307,12 +307,12 @@ func (t *Ticker) restoreOriginalLoadout() {
 		return
 	}
 	if err := presets.Restore(t.Val, t.originalLoadout); err != nil {
-		slog.Error("error when restoring original loadout", "err", err)
+		slog.Error("error when restoring original loadout")
 		return
 	}
 	slog.Info("restored original loadout after match")
 	if err := presets.ClearRestoreSnapshot(t.Val.Player.Uuid); err != nil {
-		slog.Error("unable to clear restored loadout snapshot", "err", err)
+		slog.Error("unable to clear restored loadout snapshot")
 	}
 	t.originalLoadout = nil
 	t.inactiveChecks = 0

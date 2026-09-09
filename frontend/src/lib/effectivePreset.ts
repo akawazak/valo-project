@@ -9,6 +9,36 @@ export type GameLoadoutMeta = {
     identity?: IdentityV1;
 };
 
+export type PresetApplyRequest = {
+    loadout: Record<string, LoadoutItemV1>;
+    identity?: IdentityV1;
+    sprays?: SpraySlot[];
+    flexes?: ExpressionSlot[];
+    expressions?: ExpressionSlot[];
+};
+
+/** Build the exact payload shared by desktop and Android, including variant inheritance. */
+export function buildPresetApplyRequest(preset: Preset, allPresets: Preset[]): PresetApplyRequest {
+    const loadout = { ...preset.loadout };
+    let identity = preset.identity;
+    let sprays = preset.sprays;
+    let flexes = preset.flexes;
+    let expressions = preset.expressions;
+    if (preset.parentUuid) {
+        const parent = allPresets.find(item => item.uuid === preset.parentUuid);
+        if (parent) {
+            for (const [weaponId, item] of Object.entries(parent.loadout)) {
+                if (!loadout[weaponId]) loadout[weaponId] = item;
+            }
+            if (!identity) identity = parent.identity;
+            if (!sprays?.length) sprays = parent.sprays;
+            if (!flexes?.length) flexes = parent.flexes;
+            if (!expressions?.length) expressions = parent.expressions;
+        }
+    }
+    return { loadout, identity, sprays, flexes, expressions };
+}
+
 export function effectiveSprays(preset: Preset | null | undefined, game: GameLoadoutMeta): SpraySlot[] {
     if (preset?.sprays && preset.sprays.length > 0) {
         return [...preset.sprays];

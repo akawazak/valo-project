@@ -22,7 +22,7 @@ export function useLoadout() {
                 setErrorMessage(error.message);
                 setShowErrorModal(true);
             } else {
-                console.error(error);
+                console.warn('Loadout could not be applied:', error instanceof Error ? error.message : String(error));
                 setErrorMessage('An unexpected error occurred.');
                 setShowErrorModal(true);
             }

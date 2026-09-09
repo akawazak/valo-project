@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatArchiveDiagnostic, ChatConversation, ChatMessage, SocialPresence, clearChatHistory, getChatConversations, getChatMessages, getChatSummary, markChatRead, requestChatSnapshot, sendChatMessage, subscribeChatEvents, subscribeSocialEvents } from "@/services/api";
-import { presenceActivity, presenceState } from "./presence";
+import { presenceActivity, presenceSection, presenceSectionRank, presenceState } from "./presence";
 
 type ChatContact = SocialPresence & { avatar?: string };
 type Props = { open: boolean; accountPuuid?: string; initialPeer?: string | null; contacts?: ChatContact[]; onClose: () => void; onUnreadChange?: (count: number, party?: ChatConversation) => void };
@@ -15,6 +15,19 @@ function conversationIdentity(conversation: ChatConversation) {
 
 const messageDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 const messageSentFormatter = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const conversationTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+
+function friendlyChatError(value: unknown) {
+	const message = value instanceof Error ? value.message : String(value || "");
+	const normalized = message.toLowerCase();
+	if (normalized.includes("unauthorized") || normalized.includes("401")) {
+		return "Reconnect your Riot account to load chat.";
+	}
+	if (normalized.includes("failed to fetch") || normalized.includes("backend offline")) {
+		return "Chat will reconnect when the VantaVault service is available.";
+	}
+	return message || "Chat is temporarily unavailable.";
+}
 
 function calendarDay(timestamp: number) {
 	const date = new Date(timestamp);
@@ -23,6 +36,53 @@ function calendarDay(timestamp: number) {
 
 function messageDateLabel(timestamp: number) {
 	return messageDateFormatter.format(new Date(timestamp));
+}
+
+function ConversationRow({
+	conversation,
+	contact,
+	name,
+	avatar,
+	selected,
+	showMessagePreview,
+	onSelect,
+}: {
+	conversation: ChatConversation;
+	contact?: ChatContact;
+	name: string;
+	avatar: string;
+	selected: boolean;
+	showMessagePreview: boolean;
+	onSelect: () => void;
+}) {
+	const activity = contact ? presenceActivity(contact) : undefined;
+	const preview = showMessagePreview && conversation.latestMessage
+		? conversation.latestMessage.body
+		: conversation.type === "party"
+			? "Party chat"
+			: activity
+				? [activity.label, activity.detail].filter(Boolean).join(" · ")
+				: "Saved conversation";
+	return (
+		<button type="button" className={selected ? "is-active" : ""} onClick={onSelect}>
+			<span className={`live-party-chat-avatar${contact ? ` is-${presenceState(contact)}` : ""}`}>
+				{conversation.type === "party" ? "P" : (name || "?")[0]}
+				{avatar ? <img src={avatar} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : null}
+				{contact ? <i /> : null}
+			</span>
+			<span>
+				<strong>{name}</strong>
+				<small>{preview}</small>
+			</span>
+			<span className="live-party-chat-row-meta">
+				{conversation.unreadCount > 0
+					? <em>{conversation.unreadCount}</em>
+					: conversation.latestMessage?.timestamp
+						? <time dateTime={new Date(conversation.latestMessage.timestamp).toISOString()}>{conversationTimeFormatter.format(conversation.latestMessage.timestamp)}</time>
+						: null}
+			</span>
+		</button>
+	);
 }
 
 export default function ChatModal({ open, accountPuuid, initialPeer, contacts = [], onClose, onUnreadChange }: Props) {
@@ -38,6 +98,8 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
     const [loading, setLoading] = useState(false);
 	const [loadingMessagesFor, setLoadingMessagesFor] = useState("");
     const [showList, setShowList] = useState(true);
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [conversationMenuOpen, setConversationMenuOpen] = useState(false);
     const [newBelow, setNewBelow] = useState(false);
     const messagePane = useRef<HTMLDivElement>(null);
     const nearBottom = useRef(true);
@@ -61,6 +123,8 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 		setDraft("");
 		setSendError("");
 		setShowList(true);
+		setSearchOpen(false);
+		setConversationMenuOpen(false);
 	}, [open, accountPuuid, initialPeer]);
     const contactNames = useMemo(() => new Map(contacts.filter((item) => item.puuid && item.name).map((item) => [item.puuid!.toLowerCase(), item.name!])), [contacts]);
     const contactAvatars = useMemo(() => new Map(contacts.filter((item) => item.puuid && item.avatar).map((item) => [item.puuid!.toLowerCase(), item.avatar!])), [contacts]);
@@ -123,7 +187,7 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 				return contact && presenceState(contact) !== "offline";
 			});
 			const firstSaved = next.find((item) => item.latestMessage || item.unreadCount);
-            return next.some((item) => item.key === current) ? current : requested || firstActive?.key || firstSaved?.key || next[0]?.key || "";
+            return next.some((item) => item.key === current) ? current : requested || firstSaved?.key || firstActive?.key || next[0]?.key || "";
         });
 	}, [initialPeer]);
 
@@ -145,7 +209,16 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 				messageCache.current.set(key, merged);
 				return merged;
 			});
-			void markChatRead(key).catch(() => undefined);
+			void markChatRead(key).then(() => {
+				setConversations((current) => {
+					const updated = current.map((conversation) => conversation.key === key ? { ...conversation, unreadCount: 0 } : conversation);
+					unreadCallback.current?.(
+						updated.reduce((sum, conversation) => sum + conversation.unreadCount, 0),
+						updated.find((conversation) => conversation.type === "party" && conversation.source === "local"),
+					);
+					return updated;
+				});
+			}).catch(() => undefined);
 		} finally {
 			if (foreground) setLoadingMessagesFor((current) => current === key ? "" : current);
 		}
@@ -155,7 +228,7 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
         if (!open) return;
         setLoading(true); setError("");
         void refreshConversations(false)
-			.catch((err) => setError(err instanceof Error ? err.message : "Chat is unavailable."))
+			.catch((err) => setError(friendlyChatError(err)))
 			.finally(() => {
 				setLoading(false);
 				void refreshConversations(true).catch(() => undefined);
@@ -204,6 +277,7 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 		setArchiveDiagnostic(undefined);
 		setSnapshotState("");
 		setNewBelow(false);
+		setConversationMenuOpen(false);
         void refreshMessages(selectedKey, true)
 			.then(async () => {
 				const snapshot = await requestChatSnapshot(selectedKey);
@@ -213,30 +287,49 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
     }, [open, selectedKey, refreshMessages]);
     useEffect(() => { if (nearBottom.current) requestAnimationFrame(() => messagePane.current?.scrollTo({ top: messagePane.current.scrollHeight })); }, [messages]);
 
-    const filtered = useMemo(() => {
+    const conversationGroups = useMemo(() => {
         const query = search.trim().toLowerCase();
         const visible = conversations.filter((conversation) => {
             if (query && !displayName(conversation).toLowerCase().includes(query)) return false;
+            if (query) return true;
             if (conversation.key === selectedKey) return true;
             if (conversation.type === "party") return Boolean(conversation.latestMessage || conversation.unreadCount);
             const contact = conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined;
             if (contact && presenceState(contact) !== "offline") return true;
             return Boolean(conversation.latestMessage || conversation.unreadCount);
         });
-        const rank = (conversation: ChatConversation) => {
+        const presenceRank = (conversation: ChatConversation) => {
             const contact = conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined;
             const state = contact ? presenceState(contact) : "offline";
-            return state === "game" ? 0 : state === "online" ? 1 : state === "chat" ? 2 : 3;
+            return state === "game" ? 0 : state === "online" ? 1 : state === "away" || state === "dnd" ? 2 : state === "chat" ? 3 : state === "mobile" ? 4 : 5;
         };
-        return visible.sort((a, b) => {
-            const stateOrder = rank(a) - rank(b);
+        const byPresenceThenName = (a: ChatConversation, b: ChatConversation) => {
+            const stateOrder = presenceRank(a) - presenceRank(b);
             if (stateOrder) return stateOrder;
-            if (rank(a) === 3) {
-                const recentOrder = (b.latestMessage?.timestamp || 0) - (a.latestMessage?.timestamp || 0);
-                if (recentOrder) return recentOrder;
-            }
             return displayName(a).localeCompare(displayName(b), undefined, { sensitivity: "base" });
-        });
+        };
+        const messages = visible
+            .filter((conversation) => Boolean(conversation.latestMessage || conversation.unreadCount))
+            .sort((a, b) => {
+                const unreadOrder = Number(b.unreadCount > 0) - Number(a.unreadCount > 0);
+                if (unreadOrder) return unreadOrder;
+                const recentOrder = (b.latestMessage?.timestamp || 0) - (a.latestMessage?.timestamp || 0);
+                return recentOrder || byPresenceThenName(a, b);
+            });
+        const contactsWithoutMessages = visible
+            .filter((conversation) => !conversation.latestMessage && !conversation.unreadCount)
+            .sort(byPresenceThenName);
+		const contactSections = Array.from(contactsWithoutMessages.reduce((sections, conversation) => {
+			const contact = conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined;
+			const label = conversation.type === "party" ? "Party" : contact ? presenceSection(contact) : "Other contacts";
+			const items = sections.get(label) || [];
+			items.push(conversation);
+			sections.set(label, items);
+			return sections;
+		}, new Map<string, ChatConversation[]>()).entries())
+			.map(([label, items]) => ({ label, items }))
+			.sort((left, right) => presenceSectionRank(left.label) - presenceSectionRank(right.label) || left.label.localeCompare(right.label));
+        return { messages, contactSections, available: contactsWithoutMessages.length, total: visible.length };
     }, [contactPresences, conversations, displayName, search, selectedKey]);
     if (!open) return null;
 
@@ -259,8 +352,17 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 	const selectedPresence = selected?.peerPuuid ? contactPresences.get(selected.peerPuuid.toLowerCase()) : undefined;
 	const selectedActivity = selectedPresence ? presenceActivity(selectedPresence) : undefined;
 
-	const archiveStatus = !archiveDiagnostic ? "" : archiveDiagnostic.responseType === "pending" ? "History request pending" : archiveDiagnostic.responseType === "deferred" ? "Another history lookup is in progress" : archiveDiagnostic.responseType === "paused" ? "History lookup paused for this session" : archiveDiagnostic.responseType === "request_failed" ? "History lookup unavailable; keeping saved messages" : archiveDiagnostic.responseType === "result" ? `History IQ result · ${archiveDiagnostic.messageCount} message elements` : `History IQ ${archiveDiagnostic.responseType}${archiveDiagnostic.errorCode ? ` ${archiveDiagnostic.errorCode}` : ""}${archiveDiagnostic.errorText ? ` · ${archiveDiagnostic.errorText}` : ""}`;
-	const snapshotStatus = snapshotState === "pending" ? "Saving this conversation…" : snapshotState === "requested" ? "History request sent. This chat remains usable while Riot responds." : snapshotState === "failed" ? "Riot history was unavailable; saved messages are still here." : "";
+	const archiveStatus = !archiveDiagnostic ? ""
+		: archiveDiagnostic.responseType === "pending" ? "Checking Riot for earlier messages…"
+			: archiveDiagnostic.responseType === "deferred" ? "Another conversation history check is finishing first."
+				: archiveDiagnostic.responseType === "paused" ? "History checks are paused for this session."
+					: archiveDiagnostic.responseType === "request_failed" ? "Riot history is unavailable. Your saved messages are still here."
+						: archiveDiagnostic.responseType === "result" ? `${archiveDiagnostic.messageCount} Riot message${archiveDiagnostic.messageCount === 1 ? "" : "s"} checked`
+							: `Riot history is unavailable${archiveDiagnostic.errorCode ? ` (${archiveDiagnostic.errorCode})` : ""}.`;
+	const snapshotStatus = snapshotState === "pending" ? "Saving this conversation…"
+		: snapshotState === "requested" ? "Checking Riot for any retained history. You can keep chatting."
+			: snapshotState === "failed" ? "Riot history is unavailable; saved messages are still here."
+				: "";
 	const retrySnapshot = async () => {
 		if (!selected) return;
 		setError("");
@@ -271,21 +373,40 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
     return <div className="live-party-chat-backdrop" data-party-portal onMouseDown={onClose}>
         <section className="live-party-chat-modal" role="dialog" aria-modal="true" aria-label="Riot chat" onMouseDown={(event) => event.stopPropagation()}>
             <aside className={`live-party-chat-list${!showList ? " is-mobile-hidden" : ""}`}>
-                <header><div><small>RIOT CHAT</small><strong>Messages</strong><span>{filtered.length} conversations</span></div><button onClick={onClose} aria-label="Close chat">×</button></header>
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" />
+                <header><div><small>RIOT CHAT</small><strong>Messages</strong><span>{conversationGroups.messages.length} recent · {conversationGroups.available} available</span></div><span className="live-party-chat-header-actions"><button type="button" onClick={async () => { setLoading(true); setError(""); try { await refreshConversations(true); if (selectedKeyRef.current) await refreshMessages(selectedKeyRef.current, true); } catch (reason) { setError(friendlyChatError(reason)); } finally { setLoading(false); } }} aria-label="Refresh Riot conversations" title="Refresh conversations">↻</button><button type="button" className={searchOpen ? "is-active" : ""} onClick={() => { setSearchOpen((current) => !current); if (searchOpen) setSearch(""); }} aria-label="Search conversations" title="Search">⌕</button><button onClick={onClose} aria-label="Close chat">×</button></span></header>
+                {searchOpen && <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a Riot contact" aria-label="Search conversations" />}
                 <div className="live-party-chat-conversations">
-                    {filtered.map((conversation) => { const contact = conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined; const activity = contact ? presenceActivity(contact) : undefined; return <button key={conversation.key} className={conversation.key === selectedKey ? "is-active" : ""} onClick={() => { setSelectedKey(conversation.key); setShowList(false); }}>
-                        <span className={`live-party-chat-avatar${contact ? ` is-${presenceState(contact)}` : ""}`}>{conversation.type === "party" ? "P" : (displayName(conversation) || "?")[0]}{avatar(conversation) && <img src={avatar(conversation)} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = "none"; }} />}{contact && <i />}</span>
-                        <span><strong>{displayName(conversation)}</strong><small>{conversation.latestMessage?.body || (conversation.type === "party" ? "Party chat" : activity ? [activity.label, activity.detail].filter(Boolean).join(" · ") : "Start a conversation")}</small></span>
-                        {conversation.unreadCount > 0 && <em>{conversation.unreadCount}</em>}
-                    </button>; })}
+                    {conversationGroups.messages.length > 0 && <div className="live-party-chat-group-label"><strong>Recent</strong><span>{conversationGroups.messages.length}</span></div>}
+                    {conversationGroups.messages.map((conversation) => <ConversationRow
+						key={conversation.key}
+						conversation={conversation}
+						contact={conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined}
+						name={displayName(conversation)}
+						avatar={avatar(conversation)}
+						selected={conversation.key === selectedKey}
+						showMessagePreview
+						onSelect={() => { setSelectedKey(conversation.key); setShowList(false); }}
+					/>)}
+                    {conversationGroups.contactSections.map((section) => <Fragment key={section.label}>
+						<div className="live-party-chat-group-label"><strong>{section.label}</strong><span>{section.items.length}</span></div>
+						{section.items.map((conversation) => <ConversationRow
+							key={conversation.key}
+							conversation={conversation}
+							contact={conversation.peerPuuid ? contactPresences.get(conversation.peerPuuid.toLowerCase()) : undefined}
+							name={displayName(conversation)}
+							avatar={avatar(conversation)}
+							selected={conversation.key === selectedKey}
+							showMessagePreview={false}
+							onSelect={() => { setSelectedKey(conversation.key); setShowList(false); }}
+						/>)}
+					</Fragment>)}
 					{loading && <p>Loading conversations…</p>}
-                    {!loading && !filtered.length && <p>No conversations yet.</p>}
+                    {!loading && !conversationGroups.total && <p>{search.trim() ? "No Riot contacts match." : "No conversations or active contacts yet."}</p>}
                 </div>
                 <button className="live-party-chat-clear-all" onClick={async () => { if (confirm("Clear all archived chat history?")) { await clearChatHistory(); messageCache.current.clear(); await refreshConversations(); } }}>Clear all history</button>
             </aside>
             <main className={`live-party-chat-view${showList ? " is-mobile-hidden" : ""}`}>
-                <header><button className="live-party-chat-back" onClick={() => setShowList(true)} aria-label="Back to conversations">‹</button>{selected && <span className={`live-party-chat-header-avatar${selectedPresence ? ` is-${presenceState(selectedPresence)}` : ""}`} aria-hidden="true">{(displayName(selected) || "?")[0]}{avatar(selected) && <img src={avatar(selected)} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />}{selectedPresence && <i />}</span>}<div><strong>{displayName(selected) || "Select a conversation"}</strong><small>{selectedActivity ? <><b>{selectedActivity.label}</b>{selectedActivity.detail ? ` · ${selectedActivity.detail}` : ""}</> : selected ? availability : "Your Riot conversations"}</small></div>{selected && <button onClick={async () => { if (confirm(`Clear history with ${displayName(selected)}?`)) { await clearChatHistory(selected.key); messageCache.current.delete(selected.key); setMessages([]); await refreshConversations(); } }} title="Clear conversation">Clear</button>}</header>
+                <header><button className="live-party-chat-back" onClick={() => setShowList(true)} aria-label="Back to conversations">‹</button>{selected && <span className={`live-party-chat-header-avatar${selectedPresence ? ` is-${presenceState(selectedPresence)}` : ""}`} aria-hidden="true">{(displayName(selected) || "?")[0]}{avatar(selected) && <img src={avatar(selected)} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />}{selectedPresence && <i />}</span>}<div><strong>{displayName(selected) || "Select a conversation"}</strong><small>{selectedActivity ? <><b>{selectedActivity.label}</b>{selectedActivity.detail ? ` · ${selectedActivity.detail}` : ""}</> : selected ? availability : "Your Riot conversations"}</small></div>{selected && <span className="live-party-chat-menu-wrap"><button className="live-party-chat-menu-toggle" onClick={() => setConversationMenuOpen((current) => !current)} aria-label="Conversation options" title="Conversation options">•••</button>{conversationMenuOpen && <span className="live-party-chat-menu"><button onClick={async () => { setConversationMenuOpen(false); if (confirm(`Clear history with ${displayName(selected)}?`)) { await clearChatHistory(selected.key); messageCache.current.delete(selected.key); setMessages([]); await refreshConversations(); } }}>Clear saved history</button></span>}</span>}</header>
 				{error && <div className="live-party-chat-error">{error}</div>}
 				{sendError && <div className="live-party-chat-error">Send failed: {sendError}</div>}
 				{selected?.source === "remote" && archiveStatus && loadingMessagesFor !== selected.key && <div className="live-party-chat-archive-status">{archiveStatus}</div>}
@@ -299,7 +420,7 @@ export default function ChatModal({ open, accountPuuid, initialPeer, contacts = 
 							<div className={`live-party-chat-message is-${message.direction}`}><div>{message.body}</div><small><time dateTime={sentAt.toISOString()} title={sentAt.toLocaleString()}>{messageSentFormatter.format(sentAt)}</time>{message.direction === "outgoing" ? ` · ${message.status}` : ""}</small>{message.status === "failed" && <button onClick={() => void send(message)}>Retry</button>}</div>
 						</Fragment>;
 					})}
-					{!messages.length && selected && (loadingMessagesFor === selected.key ? <div className="live-party-chat-empty"><span className="live-party-chat-loading" aria-hidden="true" /><strong>Checking saved messages…</strong><p>This only loads the conversation you opened.</p></div> : <div className="live-party-chat-empty"><span aria-hidden="true">{(displayName(selected) || "?")[0]}{avatar(selected) && <img src={avatar(selected)} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />}</span><strong>No messages saved yet</strong><p>{snapshotState === "pending" || snapshotState === "requested" ? "Riot has not returned any history. You can keep using the rest of VantaVault." : "New messages appear here while VantaVault is connected."}</p></div>)}
+					{!messages.length && selected && (loadingMessagesFor === selected.key ? <div className="live-party-chat-empty"><span className="live-party-chat-loading" aria-hidden="true" /><strong>Opening conversation…</strong><p>Loading saved messages and checking Riot in the background.</p></div> : <div className="live-party-chat-empty"><span aria-hidden="true">{(displayName(selected) || "?")[0]}{avatar(selected) && <img src={avatar(selected)} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />}</span><strong>Start the conversation</strong><p>{snapshotState === "pending" || snapshotState === "requested" ? "Riot is still checking for retained history. You can send a message now." : "Messages sent while VantaVault is connected will appear here."}</p></div>)}
                 </div>
                 {newBelow && <button className="live-party-chat-new" onClick={() => { nearBottom.current = true; setNewBelow(false); messagePane.current?.scrollTo({ top: messagePane.current.scrollHeight, behavior: "smooth" }); }}>New messages</button>}
                 <div className="live-party-chat-compose">{!canSend && selected && <small>{selected.type === "party" ? "Open Riot Client to use Party chat." : selected.state === "connecting" ? "Chat is connecting…" : "Archived history is available while chat is offline."}</small>}<textarea value={draft} disabled={!canSend} placeholder={canSend ? "Message…" : "Sending unavailable"} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} /><button disabled={!canSend || !draft.trim()} onClick={() => void send()} aria-label="Send message">Send</button></div>

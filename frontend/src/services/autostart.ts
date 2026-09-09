@@ -38,7 +38,7 @@ export async function setLaunchAtStartup(enabled: boolean): Promise<void> {
         if (enabled) await enable();
         else await disable();
     } catch (err) {
-        console.error('Autostart registration failed:', err);
+        console.warn('Autostart registration failed:', err instanceof Error ? err.message : String(err));
         setLaunchAtStartupPreference(false);
         throw err;
     }

@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS social_contacts (
     accountPuuid TEXT NOT NULL,
     peerPuuid TEXT NOT NULL,
     displayName TEXT NOT NULL DEFAULT '',
+    playerCardId TEXT NOT NULL DEFAULT '',
     state TEXT NOT NULL DEFAULT 'friend',
     firstSeenAt INTEGER NOT NULL,
     lastSeenAt INTEGER NOT NULL,
@@ -329,6 +330,10 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := addColumnIfMissing(db, "chat_conversations", "unreadCount", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(db, "social_contacts", "playerCardId", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1725,6 +1730,165 @@ func GetLatestPlayerCards(db *sql.DB, puuids []string) (map[string]string, error
 		}
 	}
 	return out, rows.Err()
+}
+
+// GetLivePlayerEvidence reads a bounded recent-agent sample and rank evidence
+// from the persistent match cache. It performs no Riot requests.
+func GetLivePlayerEvidence(db *sql.DB, puuid, agentID string) (LivePlayerEvidence, error) {
+	puuid = strings.ToLower(strings.TrimSpace(puuid))
+	agentID = strings.ToLower(strings.TrimSpace(agentID))
+	out := LivePlayerEvidence{Puuid: puuid, AgentID: agentID}
+	if puuid == "" {
+		return out, nil
+	}
+
+	_ = db.QueryRow(`
+		SELECT mp.competitiveTier
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE lower(mp.subject) = ? AND mp.competitiveTier > 0
+		  AND (m.isRanked = 1 OR lower(m.queueID) = 'competitive')
+		ORDER BY m.gameStartMillis DESC
+		LIMIT 1
+	`, puuid).Scan(&out.LatestTier)
+	_ = db.QueryRow(`
+		SELECT COALESCE(MAX(mp.competitiveTier), 0)
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE lower(mp.subject) = ?
+		  AND (m.isRanked = 1 OR lower(m.queueID) = 'competitive')
+	`, puuid).Scan(&out.PeakTier)
+
+	if agentID != "" {
+		err := db.QueryRow(`
+			SELECT COUNT(*),
+			       COALESCE(SUM(win), 0),
+			       COALESCE(SUM(kills), 0),
+			       COALESCE(SUM(deaths), 0),
+			       COALESCE(SUM(assists), 0),
+			       COALESCE(MAX(gameStartMillis), 0),
+			       COALESCE(MAX(cachedAt), 0)
+			FROM (
+				SELECT mp.kills, mp.deaths, mp.assists, m.gameStartMillis, m.cachedAt,
+				       CASE WHEN (m.blueWins = 1 AND lower(mp.teamId) = 'blue')
+				                  OR (m.blueWins = 0 AND lower(mp.teamId) = 'red')
+				            THEN 1 ELSE 0 END AS win
+				FROM match_players mp
+				JOIN matches m ON m.matchID = mp.matchID
+				WHERE lower(mp.subject) = ? AND lower(mp.characterId) = ?
+				ORDER BY m.gameStartMillis DESC
+				LIMIT 20
+			)
+		`, puuid, agentID).Scan(
+			&out.Matches, &out.Wins, &out.Kills, &out.Deaths, &out.Assists,
+			&out.LastMatchAt, &out.CacheUpdatedAt,
+		)
+		if err != nil && err != sql.ErrNoRows {
+			return out, fmt.Errorf("tracking: GetLivePlayerEvidence sample: %w", err)
+		}
+	}
+	out.Winrate = pct(out.Wins, out.Matches)
+	out.KD = ratio(out.Kills, out.Deaths)
+	out.KDA = ratio(out.Kills+out.Assists, out.Deaths)
+	return out, nil
+}
+
+// GetCachedPartyGroups returns prior shared-party evidence between the requested
+// players from the latest 90 days of cached matches. It performs no network
+// work and never returns Riot's raw party IDs.
+func GetCachedPartyGroups(db *sql.DB, puuids []string, now time.Time) ([]CachedPartyGroup, error) {
+	unique := make(map[string]struct{}, len(puuids))
+	args := make([]any, 0, len(puuids)+1)
+	for _, puuid := range puuids {
+		puuid = strings.ToLower(strings.TrimSpace(puuid))
+		if puuid == "" {
+			continue
+		}
+		if _, ok := unique[puuid]; ok {
+			continue
+		}
+		unique[puuid] = struct{}{}
+		args = append(args, puuid)
+	}
+	if len(args) < 2 {
+		return nil, nil
+	}
+	cutoff := now.Add(-90 * 24 * time.Hour).UnixMilli()
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	args = append(args, cutoff)
+	rows, err := db.Query(`
+		SELECT mp.matchID, mp.partyId, lower(mp.subject), m.gameStartMillis
+		FROM match_players mp
+		JOIN matches m ON m.matchID = mp.matchID
+		WHERE lower(mp.subject) IN (`+placeholders+`)
+		  AND trim(mp.partyId) != ''
+		  AND m.gameStartMillis >= ?
+		ORDER BY m.gameStartMillis DESC
+		LIMIT 500
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: GetCachedPartyGroups query: %w", err)
+	}
+	defer rows.Close()
+
+	type partySample struct {
+		players map[string]struct{}
+		seenAt  int64
+	}
+	samples := make(map[string]*partySample)
+	for rows.Next() {
+		var matchID, partyID, subject string
+		var seenAt int64
+		if err := rows.Scan(&matchID, &partyID, &subject, &seenAt); err != nil {
+			return nil, fmt.Errorf("tracking: GetCachedPartyGroups scan: %w", err)
+		}
+		key := matchID + "\x00" + partyID
+		sample := samples[key]
+		if sample == nil {
+			sample = &partySample{players: make(map[string]struct{}), seenAt: seenAt}
+			samples[key] = sample
+		}
+		sample.players[subject] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: GetCachedPartyGroups rows: %w", err)
+	}
+
+	groups := make(map[string]*CachedPartyGroup)
+	for _, sample := range samples {
+		players := make([]string, 0, len(sample.players))
+		for player := range sample.players {
+			players = append(players, player)
+		}
+		sort.Strings(players)
+		if len(players) < 2 {
+			continue
+		}
+		key := strings.Join(players, "\x00")
+		group := groups[key]
+		if group == nil {
+			group = &CachedPartyGroup{Players: players}
+			groups[key] = group
+		}
+		group.Matches++
+		if sample.seenAt > group.LastSeenAt {
+			group.LastSeenAt = sample.seenAt
+		}
+	}
+	out := make([]CachedPartyGroup, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, *group)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Matches != out[j].Matches {
+			return out[i].Matches > out[j].Matches
+		}
+		if len(out[i].Players) != len(out[j].Players) {
+			return len(out[i].Players) > len(out[j].Players)
+		}
+		return out[i].LastSeenAt > out[j].LastSeenAt
+	})
+	return out, nil
 }
 
 // HydratePeakRankEvidence adds the exact promotion timestamp only when an RR

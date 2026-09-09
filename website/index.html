@@ -17,7 +17,7 @@
 <link rel="icon" href="/assets/app-icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/assets/app-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="preload" as="image" href="/assets/homepage-profile-detail.webp" type="image/webp" fetchpriority="high">
+<link rel="preload" as="image" href="/assets/homepage-profile-sanitized.png" type="image/png" fetchpriority="high">
 <link rel="preconnect" href="https://api.github.com" crossorigin>
 
 <meta property="og:type" content="website">
@@ -26,17 +26,17 @@
 <meta property="og:title" content="VantaVault — VALORANT Store Checker, Loadouts & Stats">
 <meta property="og:description" content="Check your VALORANT store, manage skins and loadouts, track rank and matches, and follow your party from one private Windows app.">
 <meta property="og:url" content="https://vanta-vault-app.vercel.app/">
-<meta property="og:image" content="https://vanta-vault-app.vercel.app/assets/social-preview.png">
-<meta property="og:image:secure_url" content="https://vanta-vault-app.vercel.app/assets/social-preview.png">
+<meta property="og:image" content="https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png">
+<meta property="og:image:secure_url" content="https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png">
 <meta property="og:image:type" content="image/png">
-<meta property="og:image:width" content="1280">
-<meta property="og:image:height" content="640">
+<meta property="og:image:width" content="1774">
+<meta property="og:image:height" content="887">
 <meta property="og:image:alt" content="VantaVault showing a VALORANT storefront and featured bundle">
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="VantaVault — VALORANT Store Checker, Loadouts & Stats">
 <meta name="twitter:description" content="Check your VALORANT store, manage skins and loadouts, track rank and matches, and follow your party from one private Windows app.">
-<meta name="twitter:image" content="https://vanta-vault-app.vercel.app/assets/social-preview.png">
+<meta name="twitter:image" content="https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png">
 <meta name="twitter:image:alt" content="VantaVault showing a VALORANT storefront and featured bundle">
 
 <title>VantaVault — VALORANT Store Checker, Loadouts & Stats</title>
@@ -76,12 +76,12 @@
       "downloadUrl": "https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe",
       "codeRepository": "https://github.com/akawazak/valo-project",
       "license": "https://github.com/akawazak/valo-project/blob/main/LICENSE",
-      "image": "https://vanta-vault-app.vercel.app/assets/storefront.png",
+      "image": "https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png",
       "screenshot": [
-        "https://vanta-vault-app.vercel.app/assets/storefront.png",
-        "https://vanta-vault-app.vercel.app/assets/current-loadout.png",
-        "https://vanta-vault-app.vercel.app/assets/profile.png",
-        "https://vanta-vault-app.vercel.app/assets/live-match.png"
+        "https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png",
+        "https://vanta-vault-app.vercel.app/assets/homepage-loadout-sanitized.png",
+        "https://vanta-vault-app.vercel.app/assets/homepage-profile-sanitized.png",
+        "https://vanta-vault-app.vercel.app/assets/cosmetic-picker.png"
       ],
       "description": "A free open-source VALORANT companion for Windows with a store checker, skin and loadout manager, rank stats, match history, party, friends, and live-match tools.",
       "applicationCategory": "GameApplication",
@@ -329,7 +329,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
     <span class="brand-word">Vanta<span>Vault</span></span>
   </a>
   <nav class="nav" aria-label="Primary">
-    <a href="#features">Features</a><a href="#screens">Screens</a><a href="#download">Download</a>
+    <a href="#features">Features</a><a href="#guides">Guides</a><a href="#screens">Screens</a><a href="#download">Download</a>
     <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a>
   </nav>
   <button class="mini-download download-menu-trigger" type="button" aria-haspopup="dialog" aria-controls="download-dialog">
@@ -411,7 +411,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
         <span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span>
         <span class="controls"><i></i><i></i><i></i></span>
       </div>
-      <img src="assets/homepage-profile-detail.webp" width="1800" height="967" decoding="async" fetchpriority="high" alt="VantaVault profile and competitive history interface">
+      <img src="assets/homepage-profile-sanitized.png" width="1711" height="919" decoding="async" fetchpriority="high" alt="VantaVault profile and competitive history interface using a demo identity">
     </div>
   </div>
 </section>
@@ -419,6 +419,28 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
 <div class="trust">
   <span>Open source</span><i></i><span>Portable for Windows</span><i></i><span>Multiple accounts</span><i></i><span>Local match history</span><i></i><span>No injection</span>
 </div>
+
+<section id="guides" class="section shell">
+  <div class="heading reveal">
+    <div class="kicker">Explore VantaVault</div>
+    <h2>Built around the parts of<br><em>VALORANT you check every day.</em></h2>
+    <p>Read exactly how store checks, cosmetic loadouts, and local match history work before downloading.</p>
+  </div>
+  <div class="feature-grid">
+    <a class="card reveal" href="/valorant-store-checker/">
+      <span class="card-label">STORE CHECKER</span><h3>VALORANT store checker for Windows</h3>
+      <p>View daily offers, featured bundles, Night Market, accessories, prices, and wishlist matches from your local client session.</p>
+    </a>
+    <a class="card reveal" href="/valorant-loadout-manager/">
+      <span class="card-label">LOADOUTS</span><h3>VALORANT loadout manager</h3>
+      <p>Organize skins, variants, buddies, cards, sprays, titles, and reusable cosmetic presets in one desktop app.</p>
+    </a>
+    <a class="card reveal" href="/valorant-match-history/">
+      <span class="card-label">MATCH HISTORY</span><h3>VALORANT match history tracker</h3>
+      <p>Review rank progression, agent and map performance, and locally stored match history while keeping account data on your device.</p>
+    </a>
+  </div>
+</section>
 
 <section id="features" class="section shell">
   <div class="heading reveal">
@@ -430,7 +452,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
   <div class="feature-grid">
     <article class="card visual-card loadout-card reveal">
       <span class="card-label">LOADOUTS</span>
-      <img src="assets/homepage-loadout-detail.webp" width="1661" height="957" loading="lazy" decoding="async" alt="VantaVault complete loadout and preset editor">
+      <img src="assets/homepage-loadout-sanitized.png" width="1652" height="952" loading="lazy" decoding="async" alt="VantaVault complete loadout and preset editor using a demo identity">
       <div class="visual-copy"><h3>Your full loadout</h3><p>Change weapons, variants, buddies, cards, sprays, titles, expressions, and saved presets from one screen.</p></div>
     </article>
 
@@ -451,13 +473,13 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
       <span class="card-label">LIVE MATCH</span>
       <div class="live-map" aria-hidden="true"><i class="ring"></i><i class="ping"></i></div>
       <h3>See who you are playing with</h3>
-      <p>Map, queue, teams, agents, ranks, parties, recent form, and live score when the data is available.</p>
+      <p>Map, queue, teams, agents, confirmed party context, and live score when Riot exposes it to the active session.</p>
       <div class="live-tags"><span>AGENT SELECT</span><span>RANK CONTEXT</span><span>PARTY EVIDENCE</span></div>
     </article>
 
     <article class="card visual-card profile-card reveal">
       <span class="card-label">PROFILES</span>
-      <img src="assets/homepage-profile-detail.webp" width="1800" height="967" loading="lazy" decoding="async" alt="VantaVault detailed player profile and ranked progression">
+      <img src="assets/homepage-profile-sanitized.png" width="1711" height="919" loading="lazy" decoding="async" alt="VantaVault detailed demo profile and ranked progression">
       <div class="visual-copy"><h3>Ranks and matches that make sense</h3><p>Current RR, peak rank, win rate, agents, maps, and locally stored match history.</p></div>
     </article>
 
@@ -465,10 +487,10 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
       <div class="privacy-copy">
         <span class="card-label" style="position:static;display:block;margin-bottom:20px">PRIVACY</span>
         <h3>Your accounts stay on your PC</h3>
-        <p>VantaVault keeps Riot sessions in local WebView2 profiles and does not inject into VALORANT.</p>
+        <p>VantaVault protects reusable Riot session secrets with Windows Credential Manager and does not inject into VALORANT.</p>
       </div>
       <div class="privacy-list">
-        <div><b>Saved locally</b><span>Account sessions never leave your PC.</span></div>
+        <div><b>Protected locally</b><span>Reusable session secrets stay in native OS storage.</span></div>
         <div><b>History you control</b><span>Choose how long match data is kept.</span></div>
         <div><b>Safe diagnostics</b><span>Export errors without exposing account tokens.</span></div>
       </div>
@@ -491,7 +513,7 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
     </div>
     <div class="stage" id="screen-panel" role="tabpanel" aria-labelledby="screen-tab-profile" tabindex="0">
       <div class="stage-head"><span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span><span class="controls"><i></i><i></i><i></i></span></div>
-      <img id="stage-image" src="assets/homepage-profile-detail.webp" width="1800" height="967" loading="lazy" decoding="async" alt="VantaVault profile screen">
+      <img id="stage-image" src="assets/homepage-profile-sanitized.png" width="1711" height="919" loading="lazy" decoding="async" alt="VantaVault profile screen using a demo identity">
     </div>
   </div>
 </section>
@@ -527,13 +549,13 @@ h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246
 </footer>
 
 <script>
-const PROFILE_IMAGE="assets/homepage-profile-detail.webp";
-const LOADOUT_IMAGE="assets/homepage-loadout-detail.webp";
+const PROFILE_IMAGE="assets/homepage-profile-sanitized.png";
+const LOADOUT_IMAGE="assets/homepage-loadout-sanitized.png";
 const SCREENS={
-  profile:{src:PROFILE_IMAGE,alt:"VantaVault profile and competitive history interface"},
-  loadout:{src:LOADOUT_IMAGE,alt:"VantaVault complete loadout interface"},
+  profile:{src:PROFILE_IMAGE,alt:"VantaVault profile and competitive history interface using a demo identity",width:1711,height:919},
+  loadout:{src:LOADOUT_IMAGE,alt:"VantaVault complete loadout interface using a demo identity",width:1652,height:952},
   customization:{src:"assets/cosmetic-picker.webp",alt:"VantaVault cosmetic picker interface",width:1280,height:720},
-  social:{src:"assets/party-friends.webp",alt:"VantaVault party and friends interface",width:430,height:774}
+  social:{src:"assets/party-friends-sanitized.png",alt:"VantaVault party and friends interface using demo identities",width:934,height:1683}
 };
 const RELEASES_API="https://api.github.com/repos/akawazak/valo-project/releases?per_page=30";
 const RELEASE_PAGE="https://github.com/akawazak/valo-project/releases/latest";

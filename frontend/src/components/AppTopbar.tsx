@@ -108,6 +108,8 @@ export default function AppTopbar({
                 </nav>
 
                 <div className="topbar-actions">
+                    {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
+
                     <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title="Manage Accounts">
                         <div className="profile-pill-avatar">
                             {playerCard?.displayIcon ? (
@@ -134,8 +136,6 @@ export default function AppTopbar({
                             <span className={`profile-status-indicator ${useLocalSso ? isLocalClientActive ? "online" : "waiting" : activeAccount ? "online" : "offline"}`} />
                         </div>
                     </button>
-
-                    {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
 
                     {notificationControl}
 

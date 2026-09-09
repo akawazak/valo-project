@@ -1,5 +1,7 @@
 "use client";
 
+import { createPortal } from "react-dom";
+
 interface AccountDeleteModalProps {
     show: boolean;
     onCancel: () => void;
@@ -12,15 +14,15 @@ export default function AccountDeleteModal({
     show, onCancel, onConfirm, dontAskAgain, onToggleDontAskAgain
 }: AccountDeleteModalProps) {
     if (!show) return null;
-    return (
-        <div className="acc-delete-modal-overlay" onClick={onCancel}>
-            <div className="acc-delete-modal" onClick={e => e.stopPropagation()}>
-                <div className="acc-delete-modal-icon">×</div>
-                <h5 className="acc-delete-modal-title">Disconnect Account</h5>
-                <p className="acc-delete-modal-body">
-                    Are you sure you want to remove this account from VantaVault?
-                </p>
-                <label className="acc-delete-modal-skip">
+    return createPortal(
+        <div className="unified-modal-overlay compact-dialog-overlay" onClick={(event) => event.target === event.currentTarget && onCancel()}>
+            <section className="unified-modal-container compact-dialog" role="alertdialog" aria-modal="true" aria-labelledby="disconnect-account-title" aria-describedby="disconnect-account-message">
+                <header className="compact-dialog-header">
+                    <h2 id="disconnect-account-title">Disconnect account</h2>
+                    <button type="button" className="unified-modal-close-btn" onClick={onCancel} aria-label="Close">×</button>
+                </header>
+                <p id="disconnect-account-message" className="compact-dialog-message">Remove this account from VantaVault on this device?</p>
+                <label className="compact-dialog-check">
                     <input
                         type="checkbox"
                         checked={dontAskAgain}
@@ -28,15 +30,12 @@ export default function AccountDeleteModal({
                     />
                     <span>Don&apos;t ask again</span>
                 </label>
-                <div className="acc-delete-modal-actions">
-                    <button type="button" className="acc-delete-modal-btn cancel" onClick={onCancel}>
-                        Cancel
-                    </button>
-                    <button type="button" className="acc-delete-modal-btn confirm" onClick={onConfirm}>
-                        Remove
-                    </button>
-                </div>
-            </div>
-        </div>
+                <footer className="compact-dialog-actions">
+                    <button type="button" className="compact-dialog-button secondary" onClick={onCancel}>Cancel</button>
+                    <button type="button" className="compact-dialog-button danger" onClick={onConfirm}>Disconnect</button>
+                </footer>
+            </section>
+        </div>,
+        document.body,
     );
 }

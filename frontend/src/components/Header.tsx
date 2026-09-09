@@ -60,7 +60,7 @@ export default function Header() {
                     console.log('update installed');
                 }
             } catch (err) {
-                console.error("Update failed:", err);
+                console.warn("Update failed:", err instanceof Error ? err.message : String(err));
             }
         }
     }

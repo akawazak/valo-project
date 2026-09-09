@@ -958,7 +958,7 @@ func (h *Handler) remoteChatMessageSink(account string, session *xmppSocialSessi
 			Capabilities: ChatCapabilities{History: true, DirectMessages: true},
 		}
 		if err := h.archiveConversation(account, conversation); err != nil {
-			slog.Warn("remote chat conversation persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "err", err)
+			slog.Warn("remote chat conversation persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer))
 			return
 		}
 		message := ChatArchiveMessage{ID: raw.ID, ConversationKey: conversation.Key, SenderPuuid: raw.FromPuuid, Body: raw.Body, Timestamp: raw.Time, Direction: "incoming", Status: "sent"}
@@ -967,7 +967,7 @@ func (h *Handler) remoteChatMessageSink(account string, session *xmppSocialSessi
 		}
 		inserted, err := h.archiveMessageResult(account, message)
 		if err != nil {
-			slog.Warn("remote chat message persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "message_id_length", len(raw.ID), "err", err)
+			slog.Warn("remote chat message persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "message_id_length", len(raw.ID))
 			return
 		}
 		if inserted && message.Direction == "incoming" && !raw.Archived {
@@ -976,7 +976,7 @@ func (h *Handler) remoteChatMessageSink(account string, session *xmppSocialSessi
 				_, dbErr = db.Exec(`UPDATE chat_conversations SET unreadCount=unreadCount+1 WHERE accountPuuid=? AND conversationKey=?`, account, conversation.Key)
 			}
 			if dbErr != nil {
-				slog.Warn("remote chat unread increment failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "err", dbErr)
+				slog.Warn("remote chat unread increment failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer))
 			}
 		}
 		h.NotifyChatChanged()
@@ -994,7 +994,7 @@ func (h *Handler) remoteChatArchiveSink(account string) func(peer string, diagno
 			state = "failed"
 		}
 		if err := h.setChatSnapshotState(account, chatKey("dm", peer), state); err != nil {
-			slog.Warn("remote chat archive state persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "state", state, "err", err)
+			slog.Warn("remote chat archive state persistence failed", "account_puuid_length", len(account), "peer_puuid_length", len(peer), "state", state)
 		}
 		h.NotifyChatChanged()
 	}
@@ -1134,7 +1134,9 @@ func (h *Handler) PostChatRead(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteChatHistory(w http.ResponseWriter, r *http.Request) {
 	account, _, err := chatAccount(r)
-	if requested := strings.TrimSpace(r.URL.Query().Get("accountPuuid")); requested != "" {
+	requestedAccount := strings.TrimSpace(r.URL.Query().Get("accountPuuid"))
+	if requestedAccount != "" {
+		requested := requestedAccount
 		account = strings.ToLower(requested)
 		err = nil
 	}
@@ -1160,6 +1162,9 @@ func (h *Handler) DeleteChatHistory(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				_, err = tx.Exec(`DELETE FROM chat_conversations WHERE accountPuuid=?`, account)
 			}
+			if err == nil && requestedAccount != "" {
+				err = deleteAccountSocialRows(tx, account)
+			}
 		}
 	}
 	if err != nil {
@@ -1169,9 +1174,29 @@ func (h *Handler) DeleteChatHistory(w http.ResponseWriter, r *http.Request) {
 		h.returnError(w, err)
 		return
 	}
-	_ = tx.Commit()
+	if err = tx.Commit(); err != nil {
+		h.returnError(w, err)
+		return
+	}
+	if requestedAccount != "" && key == "" {
+		remoteSocialHub.forgetAccount(account)
+		h.NotifySocialChanged()
+	}
 	h.NotifyChatChanged()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func deleteAccountSocialRows(db sqlExecer, account string) error {
+	for _, table := range []string{"social_events", "social_requests", "social_contacts", "social_snapshot_state"} {
+		if _, err := db.Exec(`DELETE FROM `+table+` WHERE accountPuuid=?`, account); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) NotifyChatChanged() {

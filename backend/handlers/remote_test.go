@@ -10,11 +10,65 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/truearken/valclient/valclient"
 )
 
 func unsignedTestJWT(claims map[string]string) string {
 	payload, _ := json.Marshal(claims)
 	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+func unsignedTestJWTAny(claims map[string]any) string {
+	payload, _ := json.Marshal(claims)
+	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+func TestGetRemoteAuthHeadersRejectsExpiredAccessToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/storefront", nil)
+	req.Header.Set("X-Riot-Access-Token", unsignedTestJWTAny(map[string]any{
+		"sub": "player-one",
+		"exp": time.Now().Add(-time.Minute).Unix(),
+	}))
+	req.Header.Set("X-Riot-Entitlements-JWT", "entitlement")
+	req.Header.Set("X-Riot-Puuid", "player-one")
+	req.Header.Set("X-Riot-Region", "eu")
+
+	_, ok, err := getRemoteAuthHeaders(req)
+	if err == nil || ok || !strings.Contains(err.Error(), "authentication required") {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+
+func TestGetRemoteAuthHeadersIgnoresRegionOnlyMetadata(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/storefront", nil)
+	req.Header.Set("X-Riot-Selected-Puuid", "player-one")
+	req.Header.Set("X-Riot-Region", "eu")
+
+	auth, ok, err := getRemoteAuthHeaders(req)
+	if err != nil || ok || auth != nil {
+		t.Fatalf("auth=%v ok=%v err=%v", auth, ok, err)
+	}
+}
+
+func TestGetClientUsesLocalClientOnlyForSelectedAccount(t *testing.T) {
+	local := &valclient.ValClient{Player: &valclient.ValClientPlayer{Uuid: "player-one"}}
+	h := NewHandler(local)
+
+	same := httptest.NewRequest(http.MethodGet, "/v1/owned-skins", nil)
+	same.Header.Set("X-Riot-Selected-Puuid", "player-one")
+	same.Header.Set("X-Riot-Region", "eu")
+	client, err := h.getClient(same)
+	if err != nil || client != local {
+		t.Fatalf("same-account fallback client=%p err=%v", client, err)
+	}
+
+	different := httptest.NewRequest(http.MethodGet, "/v1/owned-skins", nil)
+	different.Header.Set("X-Riot-Selected-Puuid", "player-two")
+	different.Header.Set("X-Riot-Region", "eu")
+	if _, err := h.getClient(different); err == nil || !strings.Contains(err.Error(), "authentication required") {
+		t.Fatalf("expected mismatched account rejection, got %v", err)
+	}
 }
 
 func TestOAuthAttemptsAreRandomAndSingleUse(t *testing.T) {

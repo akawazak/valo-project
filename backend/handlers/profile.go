@@ -101,14 +101,15 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	if len(overview.RankActs) > 0 || len(overview.LastDeltas) > 0 {
 		overview.RankSource = "cache"
 	}
-	if h.applyCachedLiveRankToOverview(db, overview, puuid) {
-		overview.RankSource = "live"
-		overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
-	} else if err := h.applyLiveMMRToOverview(r, db, overview, puuid); err != nil {
-		overview.RankError = err.Error()
-	} else {
-		overview.RankSource = "live"
-		overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
+	cacheOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("cacheOnly")), "true") ||
+		strings.TrimSpace(r.URL.Query().Get("cacheOnly")) == "1"
+	if !cacheOnly {
+		if err := h.applyLiveMMRToOverview(r, db, overview, puuid); err != nil {
+			overview.RankError = err.Error()
+		} else {
+			overview.RankSource = "live"
+			overview.LastLiveRankRefreshedAt = time.Now().UnixMilli()
+		}
 	}
 	tracking.HydratePeakRankEvidence(db, puuid, &overview.PeakRank)
 	overview.PeakRank.SeasonID = tracking.NormalizeSeasonID(overview.PeakRank.SeasonID)
@@ -116,6 +117,46 @@ func (h *Handler) GetProfileOverview(w http.ResponseWriter, r *http.Request) {
 	overview.Puuid = puuid
 	overview.Region = region
 	h.returnAny(w, overview)
+}
+
+// GetProfilePlayerCard resolves a saved account's current player card through
+// the same target-loadout request used by the social avatar resolver. The
+// caller authenticates once as the selected account; puuid identifies only the
+// profile whose public loadout identity should be read.
+func (h *Handler) GetProfilePlayerCard(w http.ResponseWriter, r *http.Request) {
+	targetPuuid := profilePuuid(r)
+	if targetPuuid == "" {
+		h.returnError(w, fmt.Errorf("missing target puuid"))
+		return
+	}
+
+	client, err := h.getClient(r)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	if client.Player == nil {
+		h.returnError(w, fmt.Errorf("selected Riot account is unavailable"))
+		return
+	}
+
+	targetRegion := strings.ToLower(profileRegion(r))
+	target := &valclient.ValClient{
+		Shard:  valclient.Shard(getShardFromRegion(targetRegion)),
+		Region: valclient.Region(targetRegion),
+		Player: &valclient.ValClientPlayer{Uuid: targetPuuid},
+		Header: client.Header.Clone(),
+	}
+	loadout, err := target.GetPlayerLoadout()
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	playerCardID := ""
+	if loadout != nil && loadout.Identity != nil {
+		playerCardID = loadout.Identity.PlayerCardID
+	}
+	h.returnAny(w, map[string]string{"playerCardId": playerCardID})
 }
 
 func currentSeasonRRSnapshots(snapshots []tracking.RRSnapshot, seasonID string) []tracking.RRSnapshot {
@@ -128,30 +169,6 @@ func currentSeasonRRSnapshots(snapshots []tracking.RRSnapshot, seasonID string) 
 		}
 	}
 	return current
-}
-
-func (h *Handler) applyCachedLiveRankToOverview(db *sql.DB, overview *tracking.Overview, puuid string) bool {
-	if overview == nil {
-		return false
-	}
-	rank, ok := h.lookupCachedLiveRank(puuid)
-	if !ok {
-		return false
-	}
-	// The overlay cache intentionally contains only the compact rank values,
-	// not Riot's current-act game count. A carried rank from a previous act is
-	// therefore not authoritative for an account with no current competitive
-	// games. Let the full MMR response resolve that case instead.
-	currentRankIsEstablished := overview.CurrentRank.NumberOfGames > 0
-	if currentRankIsEstablished && rank.CompetitiveTier > 0 {
-		overview.CurrentRank.CompetitiveTier = rank.CompetitiveTier
-		overview.CurrentRank.RankedRating = rank.RankedRating
-	}
-	if rank.PeakTier > overview.PeakRank.CompetitiveTier {
-		overview.PeakRank.CompetitiveTier = rank.PeakTier
-	}
-	hydrateOverviewRankNames(db, overview)
-	return currentRankIsEstablished
 }
 
 func hydrateOverviewRankNames(db *sql.DB, overview *tracking.Overview) {
@@ -846,7 +863,7 @@ func resolveMatchPlayerNames(cache *tracking.MatchCache, client *valclient.ValCl
 		} `json:"players"`
 	}
 	if err := json.Unmarshal(raw, &matchPayload); err != nil {
-		slog.Warn("profile: could not inspect match player identities", "err", err)
+		slog.Warn("profile: could not inspect match player identities")
 		return resolved
 	}
 
@@ -871,7 +888,7 @@ func resolveMatchPlayerNames(cache *tracking.MatchCache, client *valclient.ValCl
 	nameURL := fmt.Sprintf("https://pd.%s.a.pvp.net/name-service/v2/players", client.Shard)
 	body, err := runRiotRaw(http.MethodPut, nameURL, client.Header, missing)
 	if err != nil {
-		slog.Warn("profile: match player name resolution failed", "err", err)
+		slog.Warn("profile: match player name resolution failed")
 		return resolved
 	}
 	var response []struct {
@@ -880,7 +897,7 @@ func resolveMatchPlayerNames(cache *tracking.MatchCache, client *valclient.ValCl
 		TagLine  string `json:"TagLine"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		slog.Warn("profile: could not parse match player names", "err", err)
+		slog.Warn("profile: could not parse match player names")
 		return resolved
 	}
 	for _, player := range response {

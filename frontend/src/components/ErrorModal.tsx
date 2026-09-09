@@ -1,3 +1,7 @@
+"use client";
+
+import { createPortal } from "react-dom";
+
 type ErrorModalProps = {
     show: boolean;
     onClose: () => void;
@@ -5,23 +9,21 @@ type ErrorModalProps = {
 };
 
 export default function ErrorModal({ show, onClose, message }: ErrorModalProps) {
-    if (!show) {
-        return null;
-    }
+    if (!show) return null;
 
-    return (
-        <div className="modal" style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-            <div className="modal-dialog modal-dialog-centered">
-                <div className="modal-content">
-                    <div className="modal-header">
-                        <h5 className="modal-title">Error</h5>
-                        <button type="button" className="btn-close" onClick={onClose}></button>
-                    </div>
-                    <div className="modal-body">
-                        <p>{message}</p>
-                    </div>
-                </div>
-            </div>
-        </div>
+    return createPortal(
+        <div className="unified-modal-overlay compact-dialog-overlay" onClick={(event) => event.target === event.currentTarget && onClose()}>
+            <section className="unified-modal-container compact-dialog" role="alertdialog" aria-modal="true" aria-labelledby="error-dialog-title" aria-describedby="error-dialog-message">
+                <header className="compact-dialog-header">
+                    <h2 id="error-dialog-title">Couldn&apos;t complete that</h2>
+                    <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">×</button>
+                </header>
+                <p id="error-dialog-message" className="compact-dialog-message">{message}</p>
+                <footer className="compact-dialog-actions">
+                    <button type="button" className="compact-dialog-button primary" onClick={onClose}>Close</button>
+                </footer>
+            </section>
+        </div>,
+        document.body,
     );
 }

@@ -4,20 +4,20 @@ const PORTABLE_FALLBACK = `${RELEASE_PAGE}/download/VantaVault-portable.exe`;
 
 const screens = {
   loadout: {
-    src: "assets/current-loadout.png",
-    alt: "VantaVault current loadout screen showing every equipped weapon and cosmetic",
+    src: "assets/homepage-loadout-sanitized.png",
+    alt: "VantaVault loadout screen using a demo identity",
   },
   store: {
-    src: "assets/storefront.png",
-    alt: "VantaVault storefront showing current offers and a featured bundle",
+    src: "assets/social-preview-sanitized.png",
+    alt: "VantaVault storefront using a demo account",
   },
   lobby: {
-    src: "assets/live-match.png",
-    alt: "VantaVault live match screen showing both teams and lobby context",
+    src: "assets/party-friends-sanitized.png",
+    alt: "VantaVault party and friends screen using demo identities",
   },
   profile: {
-    src: "assets/profile.png",
-    alt: "VantaVault profile screen showing rank history and performance context",
+    src: "assets/homepage-profile-sanitized.png",
+    alt: "VantaVault profile screen using a demo identity",
   },
 };
 

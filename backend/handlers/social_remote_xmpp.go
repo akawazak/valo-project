@@ -21,7 +21,7 @@ import (
 var remoteSocialHub = &xmppSocialHub{sessions: map[string]*xmppSocialSession{}, subscribers: map[chan struct{}]struct{}{}}
 
 // ChatMessage remains internal to the XMPP transport so incoming message
-// stanzas can be safely consumed. VantaVault no longer exposes chat routes.
+// stanzas can be normalized before the chat handlers persist or return them.
 type ChatMessage struct {
 	ID        string `json:"id"`
 	FromPuuid string `json:"fromPuuid"`
@@ -140,18 +140,23 @@ type xmppIQ struct {
 }
 
 type xmppPresence struct {
-	From   string `xml:"from,attr"`
-	Type   string `xml:"type,attr"`
-	Name   string `xml:"name,attr"`
-	Show   string `xml:"show"`
-	Status string `xml:"status"`
-	Games  *struct {
-		Valorant *struct {
-			State     string `xml:"st"`
-			Timestamp int64  `xml:"s.t"`
-			Payload   string `xml:"p"`
-		} `xml:"valorant"`
-	} `xml:"games"`
+	From   string     `xml:"from,attr"`
+	Type   string     `xml:"type,attr"`
+	Name   string     `xml:"name,attr"`
+	Show   string     `xml:"show"`
+	Status string     `xml:"status"`
+	Games  *xmppGames `xml:"games"`
+}
+
+type xmppGames struct {
+	Products []xmppGamePresence `xml:",any"`
+}
+
+type xmppGamePresence struct {
+	XMLName   xml.Name
+	State     string `xml:"st"`
+	Timestamp int64  `xml:"s.t"`
+	Payload   string `xml:"p"`
 }
 
 func fetchRemoteSocialStatus(auth *remoteAuthHeaders) SocialStatusResponse {
@@ -185,6 +190,50 @@ func (h *xmppSocialHub) ensure(auth *remoteAuthHeaders) *xmppSocialSession {
 	h.mu.Unlock()
 	session.ensureRunning(*auth)
 	return session
+}
+
+// forgetAccount closes every remote chat connection for an account and drops
+// the in-memory roster, message cache, and short-lived Riot credentials. It is
+// called as part of account deletion so removing an account is a real privacy
+// boundary rather than only a UI change.
+func (h *xmppSocialHub) forgetAccount(account string) {
+	prefix := strings.ToLower(strings.TrimSpace(account)) + ":"
+	if prefix == ":" {
+		return
+	}
+	h.mu.Lock()
+	forgotten := make([]*xmppSocialSession, 0)
+	for key, session := range h.sessions {
+		if strings.HasPrefix(key, prefix) {
+			delete(h.sessions, key)
+			forgotten = append(forgotten, session)
+		}
+	}
+	h.mu.Unlock()
+
+	for _, session := range forgotten {
+		session.mu.Lock()
+		conn := session.conn
+		session.conn = nil
+		session.auth = remoteAuthHeaders{}
+		session.roster = map[string]xmppRosterItem{}
+		session.requests = map[string]SocialFriendRequest{}
+		session.requestJIDs = map[string]string{}
+		session.presences = map[string]chatPresenceEntry{}
+		session.selfPresences = map[string]chatPresenceEntry{}
+		session.messages = map[string][]ChatMessage{}
+		session.archiveRequests = map[string]string{}
+		session.archiveRequested = map[string]time.Time{}
+		session.archiveQueued = map[string]struct{}{}
+		session.archiveDiagnostics = map[string]xmppArchiveDiagnostic{}
+		session.messageSink = nil
+		session.archiveSink = nil
+		session.state = "closed"
+		session.mu.Unlock()
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}
 }
 
 func (s *xmppSocialSession) ensureRunning(auth remoteAuthHeaders) {
@@ -492,7 +541,7 @@ func (s *xmppSocialSession) requestArchive(peer string) error {
 		remoteSocialHub.broadcast()
 		return fmt.Errorf("request XMPP chat archive: %w", err)
 	}
-	slog.Info("xmpp archive request sent", "request_id", id, "recipient_jid_length", len(recipient))
+	slog.Info("xmpp archive request sent", "recipient_jid_length", len(recipient))
 	return nil
 }
 
@@ -519,7 +568,7 @@ func (s *xmppSocialSession) applyArchive(iq xmppIQ) {
 	}
 	s.mu.Unlock()
 	go s.flushArchiveRequests()
-	slog.Info("xmpp archive response", "request_id", diagnostic.RequestID, "response_type", diagnostic.ResponseType, "error_code", diagnostic.ErrorCode, "error_text", diagnostic.ErrorText, "message_count", diagnostic.MessageCount, "message_shapes", strings.Join(diagnostic.MessageShapes, ","))
+	slog.Info("xmpp archive response", "response_type", diagnostic.ResponseType, "error_code", diagnostic.ErrorCode, "message_count", diagnostic.MessageCount)
 	remoteSocialHub.broadcast()
 	payload := iqArchivePayload(iq)
 	if !strings.EqualFold(iq.Type, "result") || strings.TrimSpace(payload) == "" {
@@ -930,11 +979,11 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	if p.Type == "unavailable" {
 		entry.State = "offline"
 	}
-	if payload := p.Games; payload != nil && payload.Valorant != nil && payload.Valorant.Payload != "" {
-		entry.Product = "valorant"
-		entry.State = firstNonEmpty(payload.Valorant.State, entry.State)
-		entry.TimeStamp = payload.Valorant.Timestamp
-		entry.Private = payload.Valorant.Payload
+	if game, ok := currentXMPPGame(p.Games); ok {
+		entry.Product = strings.ToLower(strings.TrimSpace(game.XMLName.Local))
+		entry.State = firstNonEmpty(game.State, entry.State)
+		entry.TimeStamp = game.Timestamp
+		entry.Private = game.Payload
 	}
 
 	s.mu.Lock()
@@ -943,8 +992,8 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 		remoteSocialHub.broadcast()
 	}()
 	if current, exists := s.presences[resourceKey]; exists &&
-		strings.EqualFold(entry.Product, "valorant") &&
-		strings.EqualFold(current.Product, "valorant") &&
+		entry.Product != "" &&
+		strings.EqualFold(entry.Product, current.Product) &&
 		entry.TimeStamp > 0 && current.TimeStamp > entry.TimeStamp {
 		// XMPP resources can deliver an older presence after a newer update.
 		// Riot clients resolve the newest game timestamp, so keep it here too.
@@ -973,6 +1022,25 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 		return
 	}
 	s.presences[resourceKey] = entry
+}
+
+func currentXMPPGame(games *xmppGames) (xmppGamePresence, bool) {
+	if games == nil {
+		return xmppGamePresence{}, false
+	}
+	var selected xmppGamePresence
+	found := false
+	for _, candidate := range games.Products {
+		if strings.TrimSpace(candidate.XMLName.Local) == "" {
+			continue
+		}
+		if !found || candidate.Timestamp > selected.Timestamp ||
+			(candidate.Timestamp == selected.Timestamp && selected.Payload == "" && candidate.Payload != "") {
+			selected = candidate
+			found = true
+		}
+	}
+	return selected, found
 }
 
 func bareJID(value string) string {
@@ -1243,12 +1311,21 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 	for puuid, roster := range s.roster {
 		var entry chatPresenceEntry
 		ok := false
+		var cardID string
+		var cardTimestamp int64
 		for _, key := range presenceKeys {
 			candidate := s.presences[key]
-			if !strings.EqualFold(candidate.Puuid, puuid) || !strings.EqualFold(candidate.Product, "valorant") {
+			if !strings.EqualFold(candidate.Puuid, puuid) {
 				continue
 			}
-			if !ok || candidate.TimeStamp > entry.TimeStamp {
+			if strings.EqualFold(candidate.Product, "valorant") && strings.TrimSpace(candidate.Private) != "" {
+				candidatePresence := normalizeChatPresence(candidate, nil)
+				if candidatePresence.CardID != "" && (cardID == "" || candidate.TimeStamp >= cardTimestamp) {
+					cardID = candidatePresence.CardID
+					cardTimestamp = candidate.TimeStamp
+				}
+			}
+			if !ok || shouldReplacePresence(entry, candidate) {
 				entry = candidate
 				ok = true
 			}
@@ -1266,6 +1343,10 @@ func (s *xmppSocialSession) snapshot() SocialStatusResponse {
 		normalized := normalizeChatPresence(entry, map[string]string{
 			puuid: firstNonEmpty(roster.Name, friendDisplayName(roster.GameName, roster.GameTag, puuid)),
 		})
+		// A player may expose their current activity through League/Riot Mobile
+		// while a separate VALORANT presence carries their player card. Keep the
+		// selected activity, but merge the best avatar metadata from every record.
+		normalized.CardID = firstNonEmpty(normalized.CardID, cardID)
 		if socialPresenceIsActive(normalized) {
 			onlineCount++
 		}

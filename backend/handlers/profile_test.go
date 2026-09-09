@@ -4,34 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"backend/tracking"
 )
-
-func TestCachedOverlayRankDoesNotRankUnplacedCurrentAct(t *testing.T) {
-	h := NewHandler(nil)
-	h.liveRanks["live-match"] = liveRankCache{
-		Players: map[string]liveRankSnapshot{
-			"player-1": {CompetitiveTier: 18, RankedRating: 14, PeakTier: 18},
-		},
-		ExpiresAt: time.Now().Add(time.Hour),
-		UpdatedAt: time.Now(),
-	}
-	overview := &tracking.Overview{
-		CurrentRank: tracking.CurrentRank{TierName: "Unranked"},
-	}
-
-	if h.applyCachedLiveRankToOverview(nil, overview, "player-1") {
-		t.Fatal("an overlay rank without current-act games was treated as authoritative")
-	}
-	if overview.CurrentRank.CompetitiveTier != 0 || overview.CurrentRank.RankedRating != 0 {
-		t.Fatalf("cached overlay rank leaked into current rank: %+v", overview.CurrentRank)
-	}
-	if overview.PeakRank.CompetitiveTier != 18 {
-		t.Fatalf("historical peak was lost: %+v", overview.PeakRank)
-	}
-}
 
 func TestRiotFailureReasonKeepsRankErrorsActionable(t *testing.T) {
 	if got := riotFailureReason(errors.New(`Riot API returned status 404: {"message":"resource not found"}`)); got != "HTTP 404" {

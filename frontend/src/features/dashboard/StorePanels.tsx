@@ -6,11 +6,14 @@ import { createPortal } from "react-dom";
 import SkinVideoPlayer from "@/components/SkinVideoPlayer";
 import {
     AccessoryStoreOffer, BundleInfo, ContentTier, StorefrontBonusOffer, StorefrontBundleItem,
-    StorefrontOffer, StorefrontResponse, Weapon, SprayAsset, PlayerCardAsset, GunBuddy, Skin,
+    StorefrontOffer, StorefrontResponse, Weapon, SprayAsset, PlayerCardAsset, GunBuddy, Skin, FlexAsset,
 } from "@/lib/types";
 import { getStorefront, getWallet } from "@/services/api";
 import { useData } from "@/context/DataContext";
 import { publishAppNotification } from "@/lib/appNotifications";
+import { playUiSound } from "@/lib/uiSounds";
+import ResilientAssetImage from "@/components/ResilientAssetImage";
+import { AppRequestError } from "@/lib/errors";
 
 const VP_ID = "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741";
 const RP_ID = "e59aa87c-4cbf-517a-5983-6e81511be9b7";
@@ -18,8 +21,18 @@ const RP_ID = "e59aa87c-4cbf-517a-5983-6e81511be9b7";
 const VP_ICON = "https://media.valorant-api.com/currencies/85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741/displayicon.png";
 const RP_ICON = "https://media.valorant-api.com/currencies/e59aa87c-4cbf-517a-5983-6e81511be9b7/displayicon.png";
 const BUNDLE_ROTATION_MS = 8000;
+const SKIN_LEVEL_TYPE_ID = "e7c63390-eda7-46e0-bb7a-a6abdacd2433";
+const PLAYER_CARD_TYPE_ID = "3f296c07-64c3-494c-923b-fe692a4fa1bd";
+const SPRAY_TYPE_ID = "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475";
+const FLEX_TYPE_ID = "03a572de-4234-31ed-d344-ababa488f981";
 
 function readableStorefrontError(message: string) {
+    try {
+        const parsed = JSON.parse(message) as { message?: string };
+        if (parsed.message) message = parsed.message;
+    } catch {
+        // The normal path is already a friendly AppRequestError message.
+    }
     if (/BAD_CLAIMS|validating\/decoding RSO Access Token/i.test(message)) {
         return "This Riot session needs to be renewed before the store can load.";
     }
@@ -32,6 +45,7 @@ type StoreOfferCard = {
     name: string;
     weaponName: string;
     image: string;
+    imageFallbacks?: string[];
     tierName: string;
     tierIcon?: string;
     tierColor?: string;
@@ -114,10 +128,10 @@ function findSkinOffer(
 }
 
 function findBundleOffer(
-    itemId: string, weapons: Weapon[], tierMap: Record<string, ContentTier>,
+    itemId: string, itemTypeId: string | undefined, weapons: Weapon[], tierMap: Record<string, ContentTier>,
     priceValue: number, ownedLevelIDs: string[],
     sprayMap: Record<string, SprayAsset>, playerCardMap: Record<string, PlayerCardAsset>,
-    buddyMap: Record<string, GunBuddy>, discount?: number
+    buddyMap: Record<string, GunBuddy>, flexMap: Record<string, FlexAsset>, discount?: number
 ): StoreOfferCard | null {
     const skinOffer = findSkinOffer(itemId, weapons, tierMap, priceValue, ownedLevelIDs, discount);
     if (skinOffer) return skinOffer;
@@ -168,6 +182,82 @@ function findBundleOffer(
         };
     }
 
+    const flex = flexMap[target];
+    if (flex) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
+            name: flex.displayName,
+            weaponName: "Flex",
+            image: flex.displayIcon || "",
+            imageFallbacks: [`https://media.valorant-api.com/flex/${target}/displayicon.png`],
+            tierName: "Accessory",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+
+    if (itemTypeId?.toLowerCase() === FLEX_TYPE_ID) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
+            name: "New Flex",
+            weaponName: "Flex",
+            image: "",
+            imageFallbacks: [`https://media.valorant-api.com/flex/${target}/displayicon.png`],
+            tierName: "New Collection",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+    if (itemTypeId?.toLowerCase() === SKIN_LEVEL_TYPE_ID) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
+            name: "New weapon skin",
+            weaponName: "Weapon Skin",
+            image: "",
+            imageFallbacks: [`https://media.valorant-api.com/weaponskinlevels/${target}/displayicon.png`],
+            tierName: "New Collection",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+    if (itemTypeId?.toLowerCase() === PLAYER_CARD_TYPE_ID) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
+            name: "New player card",
+            weaponName: "Player Card",
+            image: "",
+            imageFallbacks: [
+                `https://media.valorant-api.com/playercards/${target}/largeart.png`,
+                `https://media.valorant-api.com/playercards/${target}/displayicon.png`,
+            ],
+            tierName: "New Collection",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+    if (itemTypeId?.toLowerCase() === SPRAY_TYPE_ID) {
+        return {
+            uuid: `${itemId}-${discount ?? 0}`,
+            wishlistId: target,
+            name: "New spray",
+            weaponName: "Spray",
+            image: "",
+            imageFallbacks: [`https://media.valorant-api.com/sprays/${target}/displayicon.png`],
+            tierName: "New Collection",
+            priceValue,
+            discount,
+            isOwned: false,
+        };
+    }
+
     return null;
 }
 
@@ -179,6 +269,39 @@ function cardFromOffer(
     const card = findSkinOffer(rewardId, weapons, tierMap, firstCost(discountedCost || offer.Cost), ownedLevelIDs, discount);
     if (!card || !discountedCost) return card;
     return { ...card, basePrice: firstCost(offer.Cost) };
+}
+
+function StoreAssetPlaceholder({ kind, name }: { kind: string; name: string }) {
+    const normalizedKind = kind.toLowerCase();
+    const isCard = normalizedKind.includes("card");
+    const isSpray = normalizedKind.includes("spray");
+    return (
+        <div
+            className="store-card-asset-pending"
+            data-kind={isCard ? "card" : isSpray ? "spray" : "weapon"}
+            aria-label={`${name} artwork is pending from Riot`}
+        >
+            {isCard ? (
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                    <rect x="17" y="8" width="30" height="48" rx="3" />
+                    <path d="m22 45 8-9 6 6 6-8" />
+                    <circle cx="37" cy="23" r="5" />
+                </svg>
+            ) : isSpray ? (
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                    <path d="M19 43c0-14 8-24 23-24 3 0 6 .4 8 1-5 3-8 7-9 11 5 1 8 5 8 10 0 8-7 13-16 13-8 0-14-4-14-11Z" />
+                    <path d="m18 13 2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6Z" />
+                </svg>
+            ) : (
+                <svg viewBox="0 0 96 48" aria-hidden="true">
+                    <path d="M7 25h50l8-7h20l4 5-9 5H63l-7 5H33l-4 7H16l3-10H7Z" />
+                    <path d="M31 25h26M70 18l5 10" />
+                </svg>
+            )}
+            <span>{kind}</span>
+            <small>Riot artwork pending</small>
+        </div>
+    );
 }
 
 function accessoryFromOffer(
@@ -210,6 +333,7 @@ function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOf
     const discountPercent = offer.discount == null
         ? 0
         : Math.round(offer.discount <= 1 ? offer.discount * 100 : offer.discount);
+    const assetFallback = <StoreAssetPlaceholder kind={offer.weaponName} name={offer.name} />;
     return (
         <div
             className={`store-card store-card--${categoryClass}${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
@@ -241,11 +365,12 @@ function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOf
             <div className="store-card-name">{offer.name}</div>
             <div className="store-card-category">{offer.weaponName}</div>
             <div className="store-card-image-container">
-                {offer.image ? (
-                    <Image className="store-card-image" src={offer.image} alt={offer.name} width={320} height={160} unoptimized />
-                ) : (
-                    <div className="store-card-no-image">No image</div>
-                )}
+                <ResilientAssetImage
+                    sources={[offer.image, ...(offer.imageFallbacks || [])]}
+                    alt={offer.name}
+                    className="store-card-image"
+                    fallback={assetFallback}
+                />
             </div>
             <div className="store-card-footer">
                 {offer.included ? (
@@ -358,7 +483,7 @@ interface StorePanelsProps {
 }
 
 export default function StorePanels({ refreshKey = 0, onConnectAccount }: StorePanelsProps) {
-    const { weapons, contentTiers, bundles, ownedLevelIDs, sprays, playerCards, activeAccount, isTokenExpired, setIsTokenExpired, allBuddies } = useData();
+    const { weapons, contentTiers, bundles, ownedLevelIDs, sprays, flexes, playerCards, activeAccount, isTokenExpired, setIsTokenExpired, allBuddies } = useData();
     const [storefront, setStorefront] = useState<StorefrontResponse | null>(null);
     const [wallet, setWallet] = useState<Record<string, number> | null>(null);
     const [storefrontError, setStorefrontError] = useState("");
@@ -436,6 +561,14 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         [allBuddies]
     );
 
+    const flexMap = useMemo(() =>
+        flexes.reduce<Record<string, FlexAsset>>((acc, flex) => {
+            acc[flex.uuid.toLowerCase()] = flex;
+            return acc;
+        }, {}),
+        [flexes]
+    );
+
     const refreshStorefront = useCallback(() => {
         if (!activeAccount) {
             setStorefront(null);
@@ -470,7 +603,10 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 setWallet(null);
                 const msg = e instanceof Error ? e.message : "Live storefront unavailable.";
                 setStorefrontError(msg);
-                if (msg.includes("status 401") || msg.includes("unauthorized") || msg.includes("authentication required") || msg.includes("token")) {
+                if (
+                    (e instanceof AppRequestError && (e.status === 401 || e.status === 403))
+                    || /status 401|unauthorized|authentication required|token|renew/i.test(msg)
+                ) {
                     setIsTokenExpired(true);
                 }
             })
@@ -550,7 +686,18 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             const meta: BundleInfo | undefined = assetId ? bundles.find(bundle => bundle.uuid.toLowerCase() === assetId) : undefined;
             const items = rawBundle.Items.map((item: StorefrontBundleItem) => {
                 const priceValue = item.DiscountedPrice ?? item.BasePrice;
-                const card = findBundleOffer(item.Item.ItemID, weapons, tierMap, priceValue, ownedLevelIDs, sprayMap, playerCardMap, buddyMap);
+                const card = findBundleOffer(
+                    item.Item.ItemID,
+                    item.Item.ItemTypeID,
+                    weapons,
+                    tierMap,
+                    priceValue,
+                    ownedLevelIDs,
+                    sprayMap,
+                    playerCardMap,
+                    buddyMap,
+                    flexMap,
+                );
                 return {
                     ...(card ?? {
                         uuid: item.Item.ItemID,
@@ -558,6 +705,12 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                         name: "Bundle Item",
                         weaponName: "Cosmetic",
                         image: "",
+                        imageFallbacks: [
+                            `https://media.valorant-api.com/flex/${item.Item.ItemID.toLowerCase()}/displayicon.png`,
+                            `https://media.valorant-api.com/weaponskinlevels/${item.Item.ItemID.toLowerCase()}/displayicon.png`,
+                            `https://media.valorant-api.com/playercards/${item.Item.ItemID.toLowerCase()}/displayicon.png`,
+                            `https://media.valorant-api.com/sprays/${item.Item.ItemID.toLowerCase()}/displayicon.png`,
+                        ],
                         tierName: "Bundle",
                         isOwned: false,
                     }),
@@ -580,7 +733,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 totalDisc,
             };
         }).filter((bundle): bundle is NonNullable<typeof bundle> => bundle !== null);
-    }, [storefront, weapons, tierMap, ownedLevelIDs, bundles, sprayMap, playerCardMap, buddyMap]);
+    }, [storefront, weapons, tierMap, ownedLevelIDs, bundles, sprayMap, playerCardMap, buddyMap, flexMap]);
 
     useEffect(() => {
         setActiveBundleIndex(current => resolvedBundles.length ? Math.min(current, resolvedBundles.length - 1) : 0);
@@ -621,6 +774,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             action: "store",
             accountPuuid: activeAccount?.puuid,
         });
+        playUiSound("wishlist");
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
             new Notification("Wishlist item available", { body: names });
         }
@@ -719,7 +873,14 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     <button type="button" className="storefront-bundle-toggle" onClick={() => setOpenBundles(current => ({ ...current, [bundle.key]: !current[bundle.key] }))}>
                         {bundle.banner && (
                             <div className="storefront-bundle-banner">
-                                <Image src={bundle.banner} alt={bundle.name} fill unoptimized style={{ objectFit: "cover", objectPosition: "center" }} />
+                                <Image
+                                    src={bundle.banner}
+                                    alt={bundle.name}
+                                    fill
+                                    unoptimized
+                                    loading="eager"
+                                    style={{ objectFit: "cover", objectPosition: "center" }}
+                                />
                                 <div className="storefront-bundle-banner-overlay" />
                             </div>
                         )}

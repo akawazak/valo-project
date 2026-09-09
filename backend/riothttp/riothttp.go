@@ -1,6 +1,7 @@
 package riothttp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -11,6 +12,54 @@ import (
 )
 
 const maxAttempts = 3
+
+// RemoteSessionHeader marks valclient requests that use a stored remote Riot
+// session rather than the locally running game client. It is removed before
+// the request leaves the machine.
+const RemoteSessionHeader = "X-ValoVault-Remote-Session"
+
+// RemoteSessionTransport prevents valclient from trying its local lockfile
+// reauthentication path for an expired remote token. The dependency assumes
+// every BAD_CLAIMS response belongs to a local client and dereferences
+// ValClient.Local, which is nil for remote accounts. Converting only marked
+// responses to 401 lets valclient return Riot's original JSON error so the UI
+// can renew the correct saved account.
+type RemoteSessionTransport struct {
+	Base http.RoundTripper
+}
+
+func (t RemoteSessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	isRemote := req.Header.Get(RemoteSessionHeader) == "1"
+	outbound := req
+	if isRemote {
+		outbound = req.Clone(req.Context())
+		outbound.Header = req.Header.Clone()
+		outbound.Header.Del(RemoteSessionHeader)
+	}
+
+	resp, err := base.RoundTrip(outbound)
+	if err != nil || !isRemote || resp == nil || resp.StatusCode != http.StatusBadRequest {
+		return resp, err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+	_ = resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	if bytes.Contains(body, []byte("BAD_CLAIMS")) {
+		resp.StatusCode = http.StatusUnauthorized
+		resp.Status = "401 Unauthorized"
+	}
+	return resp, nil
+}
 
 type APIError struct {
 	StatusCode int

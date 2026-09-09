@@ -59,6 +59,38 @@ func TestChatArchivePersistsAcrossHandlerReads(t *testing.T) {
 	}
 }
 
+func TestAccountDeletionRemovesPersistedSocialHistory(t *testing.T) {
+	db, err := tracking.OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	account := "account-a"
+	statements := []string{
+		`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,firstSeenAt,lastSeenAt) VALUES('account-a','peer-a','Friend#TAG',1,2)`,
+		`INSERT INTO social_requests(accountPuuid,peerPuuid,direction,displayName,firstSeenAt,lastSeenAt) VALUES('account-a','peer-a','outgoing','Friend#TAG',1,2)`,
+		`INSERT INTO social_events(accountPuuid,peerPuuid,displayName,eventType,occurredAt,evidence) VALUES('account-a','peer-a','Friend#TAG','friendship_ended',2,'test')`,
+		`INSERT INTO social_snapshot_state(accountPuuid,friendsBaselineAt,requestsBaselineAt,lastCompleteAt) VALUES('account-a',1,1,2)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := deleteAccountSocialRows(db, account); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"social_contacts", "social_requests", "social_events", "social_snapshot_state"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE accountPuuid=?`, account).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s retained %d account rows", table, count)
+		}
+	}
+}
+
 func TestLocalMessagesFromWrappedEvent(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{
 		"data": map[string]any{

@@ -1,7 +1,14 @@
 # Android Security, Riot API, and Play Release Plan
 
-> Status: design and release decision record; not yet implemented.
-> Last reviewed: 2026-07-15 against repository revision `27bbb21` and the linked policies.
+> Status: design and release decision record; the development architecture is implemented.
+> Last implementation update: 2026-07-24.
+>
+> The current tree includes a native Android Riot sign-in WebView, an Android
+> Keystore AES-256-GCM session vault, no-backup encrypted credential envelopes,
+> an embedded ARM Go backend, and a separate phone-oriented React interface.
+> Statements later in this document saying that Android secure storage or the
+> native sign-in bridge are missing describe the original 2026-07-15 audit state.
+> The public-release policy gates remain open.
 
 ## Purpose
 
@@ -44,9 +51,9 @@ We should use Android Keystore, not Android Credential Manager, for this vault. 
 
 This behavior is unacceptable on Android and must be removed before any Android build. Secure storage failure must be fail-closed: keep the session in memory only, tell the user it will not be remembered, and never persist plaintext.
 
-### Observed: Android secure storage is not implemented
+### Original audit finding: Android secure storage was not implemented
 
-`frontend/src-tauri/src/lib.rs:748-821` implements Riot secret storage only for Windows Credential Manager. Non-Windows targets return `Secure Riot account storage is only available on Windows` for save, load, and delete operations. Without an Android implementation, the current frontend would enter the insecure fallback above.
+At revision `27bbb21`, `frontend/src-tauri/src/lib.rs:748-821` implemented Riot secret storage only for Windows Credential Manager. This finding is resolved in the current development tree by the native Android Keystore bridge; it is retained here to document the issue the implementation had to close.
 
 ### Observed: secrets currently cross the JavaScript boundary
 
@@ -410,4 +417,3 @@ Existing companion-app disclosures, useful as implementation precedent but not a
 
 - [VALPAW privacy policy](https://valpaw.com/privacy-policy/)
 - [ValPal support and security description](https://www.valpal-companion.com/support)
-
