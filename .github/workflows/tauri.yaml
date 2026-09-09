@@ -144,7 +144,7 @@ jobs:
         run: |
           throw "TAURI_SIGNING_PRIVATE_KEY is required for a production release."
 
-      - uses: tauri-apps/tauri-action@bef7b83ae45d5399cc8e382d06e8a13f1fd1cb7e # v0.5.20
+      - uses: tauri-apps/tauri-action@42e9df6c59070d114bf90dcd3943a1b8f138b113 # v0.5.20
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
