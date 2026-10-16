@@ -19,6 +19,8 @@ interface AppTopbarProps {
     playerCardId?: string;
     socialControl?: ReactNode;
     notificationControl?: ReactNode;
+    /** Shown first in the top bar while an update is downloading or ready. */
+    updateControl?: ReactNode;
 }
 
 const TABS: Array<{ key: AppTopbarProps["activeTab"]; label: string }> = [
@@ -39,6 +41,7 @@ export default function AppTopbar({
     playerCardId,
     socialControl,
     notificationControl,
+    updateControl,
 }: AppTopbarProps) {
     const { playerCards } = useData();
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
@@ -108,6 +111,7 @@ export default function AppTopbar({
                 </nav>
 
                 <div className="topbar-actions">
+                    {updateControl}
                     {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
 
                     <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title="Manage Accounts">

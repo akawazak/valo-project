@@ -1,0 +1,68 @@
+/* Top-bar update button: loud enough to notice, never covering the page unless opened. */
+.vv-update-btn {
+  position: relative; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 12px; overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); color: #fff;
+  font: 700 12.5px "Segoe UI Variable Text", "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+}
+.vv-update-btn > * { position: relative; }
+.vv-update-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.vv-update-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, #fff); outline-offset: 2px; }
+.vv-update-fill { position: absolute !important; inset: 0 auto 0 0; width: var(--pct); background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 30%, transparent), color-mix(in srgb, var(--accent) 48%, transparent)); transition: width .4s ease; }
+.vv-update-btn.is-retry .vv-update-fill { display: none; }
+.vv-update-btn.is-ready { border-color: transparent; background: var(--accent); animation: vvUpdatePulse 2.2s ease-out infinite; }
+.vv-update-btn.is-open { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); animation: none; }
+.vv-update-dot { position: absolute !important; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #fff; animation: vvUpdateBlink 1.1s ease-in-out infinite alternate; }
+@keyframes vvUpdatePulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes vvUpdateBlink { to { opacity: .35; } }
+
+/* Shared by the short pop and the card: they hang from the button with a small pointer. */
+.vv-update-peek, .vv-update-card {
+  position: fixed; z-index: 4000; border: 1px solid var(--border-strong); border-radius: 12px;
+  background: rgba(12, 19, 24, .97); box-shadow: 0 18px 44px rgba(0, 0, 0, .55); backdrop-filter: blur(10px);
+  color: var(--text-primary); font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; animation: vvUpdateIn .18s ease both;
+}
+.vv-update-peek::before, .vv-update-card::before {
+  content: ""; position: absolute; top: -6px; right: var(--pointer, 40px); width: 10px; height: 10px;
+  border-top: 1px solid var(--border-strong); border-left: 1px solid var(--border-strong); background: rgba(12, 19, 24, .97); transform: rotate(45deg);
+}
+@keyframes vvUpdateIn { from { opacity: 0; transform: translateY(-4px); } }
+
+.vv-update-peek { display: grid; gap: 3px; max-width: 330px; padding: 10px 14px; border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong)); font-size: 12.5px; }
+.vv-update-peek::before { border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong)); }
+.vv-update-peek span { color: #b9c3cd; }
+.vv-update-peek button { justify-self: start; margin-top: 3px; padding: 0; border: 0; background: none; color: color-mix(in srgb, var(--accent) 40%, #fff); font: inherit; font-weight: 700; cursor: pointer; }
+
+.vv-update-card { display: grid; gap: 10px; width: 360px; max-width: calc(100vw - 24px); padding: 16px; }
+.vv-update-card header { display: flex; align-items: center; justify-content: space-between; margin-bottom: -6px; color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.vv-update-x { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font-size: 18px; line-height: 1; cursor: pointer; }
+.vv-update-x:hover { background: var(--surface-hover); color: var(--text-primary); }
+.vv-update-card h3 { margin: 0; font: 700 18px "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+.vv-update-card p { margin: 0; color: #b9c3cd; font-size: 13px; line-height: 1.45; }
+.vv-update-mini { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.vv-update-mini-card { --tone: #8a9aaa; display: grid; align-content: end; gap: 6px; min-height: 52px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--tone) 26%, rgba(255, 255, 255, .06)); border-radius: 10px; background: color-mix(in srgb, var(--tone) 7%, #0b141a); }
+.vv-update-mini-art { position: relative; height: 54px; overflow: hidden; }
+.vv-update-mini-scale { position: absolute !important; top: 0; left: 0; width: 300px; height: 150px !important; transform: scale(.36); transform-origin: top left; }
+.vv-update-mini-card > span { padding: 0 8px 8px; font-size: 11.5px; font-weight: 700; line-height: 1.25; }
+.vv-update-status { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.vv-update-status > span { display: inline-flex; align-items: center; gap: 8px; }
+.vv-update-status .is-ready { color: #8ff0d4; }
+.vv-update-status .is-ready i { width: 7px; height: 7px; border-radius: 50%; background: #34e3b8; box-shadow: 0 0 0 3px rgba(52, 227, 184, .18); }
+.vv-update-status .is-error { color: #ffb3bb; }
+.vv-update-bar { position: relative; width: 90px; height: 4px; overflow: hidden; border-radius: 2px; background: rgba(255, 255, 255, .08); }
+.vv-update-bar b { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--accent); transition: width .4s ease; }
+.vv-update-card footer { display: flex; align-items: center; justify-content: space-between; }
+.vv-update-ghost, .vv-update-primary { height: 32px; padding: 0 14px; border-radius: 8px; font: 700 12.5px "Segoe UI Variable Text", "Segoe UI", sans-serif; cursor: pointer; }
+.vv-update-ghost { border: 0; background: transparent; color: var(--text-secondary); }
+.vv-update-ghost:hover { color: var(--text-primary); }
+.vv-update-primary { border: 1px solid transparent; background: var(--accent); color: #fff; }
+.vv-update-primary:disabled { border-color: var(--border-strong); background: var(--bg-elevated); color: var(--text-secondary); cursor: default; }
+
+[data-theme="light"] .vv-update-btn:not(.is-ready) { color: var(--text-primary); }
+[data-theme="light"] .vv-update-peek, [data-theme="light"] .vv-update-card, [data-theme="light"] .vv-update-peek::before, [data-theme="light"] .vv-update-card::before { background: var(--bg-elevated); }
+[data-theme="light"] .vv-update-peek span, [data-theme="light"] .vv-update-card p { color: var(--text-secondary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .vv-update-btn.is-ready, .vv-update-dot, .vv-update-peek, .vv-update-card { animation: none; }
+  .vv-update-btn.is-ready { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+}

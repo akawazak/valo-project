@@ -26,9 +26,13 @@ const TONE: Record<ReleasePreviewKind, string> = { insights: "#4fd6ff", compare:
 type Props = {
     notes: ReleaseNotes;
     onClose: () => void;
+    /** Footer for previewing an update that is not installed yet. */
+    footerNote?: string;
+    actionLabel?: string;
+    onAction?: () => void;
 };
 
-export default function ReleaseNotesModal({ notes, onClose }: Props) {
+export default function ReleaseNotesModal({ notes, onClose, footerNote, actionLabel, onAction }: Props) {
     const closeRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
@@ -87,8 +91,8 @@ export default function ReleaseNotesModal({ notes, onClose }: Props) {
                 </div>
 
                 <footer className="release-notes-footer">
-                    <span>Updated to {notes.version}</span>
-                    <button type="button" onClick={onClose}>Continue to VantaVault</button>
+                    <span>{footerNote ?? `Updated to ${notes.version}`}</span>
+                    <button type="button" onClick={onAction ?? onClose}>{actionLabel ?? "Continue to VantaVault"}</button>
                 </footer>
             </section>
         </div>

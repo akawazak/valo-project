@@ -36,6 +36,8 @@ import SettingsModal from '@/components/SettingsModal';
 import LiveMatchOverlay from '@/features/livematch/LiveMatchOverlay';
 import LivePartyStatus from '@/features/party/LivePartyStatus';
 import ReleaseNotesModal, { type ReleaseNotes } from '@/components/ReleaseNotesModal';
+import UpdateButton, { type UpdatePhase } from '@/components/UpdateButton';
+import { parseReleaseNotes } from '@/lib/releaseNotes.mjs';
 import NotificationCenter from '@/features/notifications/NotificationCenter';
 import { publishAppNotification, useAppNotifications } from '@/lib/appNotifications';
 import type { AppTab } from '@/lib/appTabs';
@@ -266,6 +268,8 @@ function HomeApp() {
     const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
     const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+    const [updateNotes, setUpdateNotes] = useState<ReleaseNotes | null>(null);
+    const [showUpdateNotes, setShowUpdateNotes] = useState(false);
     const [updateReady, setUpdateReady] = useState(false);
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
@@ -606,6 +610,31 @@ function HomeApp() {
         }
     }, [availableUpdate, isPortable, setErrorMessage, setShowErrorModal]);
 
+    // What the top-bar update button shows. Nothing while checking or up to date.
+    const pendingVersion = isPortable ? portableUpdate?.version ?? "" : availableUpdate?.version ?? "";
+    const updatePhase: UpdatePhase | null = isPortable
+        ? portableUpdate?.status === "ready" ? "ready" : portableUpdate?.status === "downloading" ? "downloading" : null
+        : updateReady ? "ready" : availableUpdate ? isUpdating ? "downloading" : "retry" : null;
+
+    // The new version's notes, so players can see what is coming before it installs. The installer's
+    // update already carries them; the portable build reads the same release from GitHub.
+    useEffect(() => {
+        if (!updatePhase || !/^d+.d+.d+$/.test(pendingVersion) || updateNotes?.version === pendingVersion) return;
+        let alive = true;
+        const load = async () => {
+            let body = !isPortable ? availableUpdate?.body ?? "" : "";
+            if (!body) {
+                const { fetch } = await import("@tauri-apps/plugin-http");
+                const response = await fetch(`https://api.github.com/repos/akawazak/valo-project/releases/tags/v${pendingVersion}`, { headers: { Accept: "application/vnd.github+json" } });
+                if (!response.ok) return;
+                body = String((await response.json() as { body?: unknown }).body ?? "");
+            }
+            if (alive && body) setUpdateNotes(parseReleaseNotes(body, pendingVersion));
+        };
+        void load().catch(() => undefined);
+        return () => { alive = false; };
+    }, [updatePhase, pendingVersion, isPortable, availableUpdate, updateNotes?.version]);
+
     const loadInitialData = useCallback(async () => {
         const owner = accountOwner ? { puuid: accountOwner, region: activeAccount?.region || "" } : undefined;
         const ownerId = owner?.puuid || "";
@@ -921,6 +950,16 @@ function HomeApp() {
                 onOpenAccounts={() => setIsAccountsOpen(true)}
                 playerCardId={gameMeta.identity?.playerCardId || scopedInitialData.gameMeta.identity?.playerCardId}
                 socialControl={(showPartyWidget ?? true) ? <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} /> : null}
+                updateControl={updatePhase && pendingVersion ? <UpdateButton
+                    phase={updatePhase}
+                    version={pendingVersion}
+                    progress={isPortable ? portableUpdate?.progress ?? null : updateProgress}
+                    notes={updateNotes?.version === pendingVersion ? updateNotes : null}
+                    busy={!isPortable && updatePhase === "ready" && isUpdating}
+                    onRestart={() => void restartForUpdate()}
+                    onRetry={() => void installUpdate()}
+                    onSeeAll={() => setShowUpdateNotes(true)}
+                /> : null}
                 notificationControl={<NotificationCenter items={notifications.items} unreadCount={notifications.unreadCount} onRead={notifications.markRead} onReadAll={notifications.markAllRead} onClear={notifications.clear} onNavigate={selectAppTab} />}
             />
 
@@ -1045,6 +1084,13 @@ function HomeApp() {
                 ))}
             </div>
             {showReleaseNotes && CURRENT_RELEASE && <ReleaseNotesModal notes={CURRENT_RELEASE} onClose={dismissReleaseNotes} />}
+            {showUpdateNotes && updateNotes && <ReleaseNotesModal
+                notes={updateNotes}
+                onClose={() => setShowUpdateNotes(false)}
+                footerNote={updatePhase === "ready" ? "Downloaded and verified" : "Downloading in the background"}
+                actionLabel={updatePhase === "ready" ? "Restart to update" : "Keep using VantaVault"}
+                onAction={updatePhase === "ready" ? () => { setShowUpdateNotes(false); void restartForUpdate(); } : undefined}
+            />}
             <ConfirmationModal
                 show={showConfirmationModal}
                 onClose={handleCloseConfirmationModal}
