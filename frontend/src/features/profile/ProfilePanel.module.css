@@ -7695,3 +7695,70 @@ button.mapEvent .mapHeat { inset: -34px; }
 .railNav svg.railNavChevron { opacity: 0.7; }
 .railNavGroup .railNavQuick button { border-color: color-mix(in srgb, var(--tone) 30%, var(--border-strong)); }
 .railNavIcon[data-tone="compare"] { --tone: #ffb03a; }
+
+/* Map tab in the framed style shared with Round review and Duos: the map's art behind glass panels with
+   numbered headers, normal fonts, mint for kills and amber for deaths (no red for data). */
+.mapStep { margin-right: 10px; color: #fff; font-weight: 800; }
+.mapAnalytics[data-look="framed"] { --ally: #34e3b8; --enemy: #ffb03a; --dim: #8e99a5; position: relative; isolation: isolate; padding: 12px; background: #0b0e12; }
+.mapAnalytics[data-look="framed"]::before { content: ""; position: absolute; inset: 0; z-index: -2; background: var(--rr-map, none) center 30% / cover; }
+.mapAnalytics[data-look="framed"]::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(7, 9, 12, 0.5), rgba(7, 9, 12, 0.88) 40%, rgba(7, 9, 12, 0.95)); }
+.mapAnalytics[data-look="framed"] * { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; }
+.mapAnalytics[data-look="framed"] .mapAnalyticsLayout { gap: 8px; }
+.mapAnalytics[data-look="framed"] .mapPlotPanel,
+.mapAnalytics[data-look="framed"] .mapInsights { padding: 0; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 10px; background: rgba(9, 12, 16, 0.86); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 30px rgba(0, 0, 0, 0.35); backdrop-filter: blur(14px); }
+.mapAnalytics[data-look="framed"] .mapInsights { overflow-y: auto; scrollbar-width: thin; }
+.mapAnalytics[data-look="framed"] .mapPlotToolbar,
+.mapAnalytics[data-look="framed"] .mapInsightsHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; margin: 0; padding: 7px 14px 7px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); background: rgba(255, 255, 255, 0.035); }
+.mapAnalytics[data-look="framed"] .mapPlotToolbar > strong { color: #d7dde3; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.mapAnalytics[data-look="framed"] .mapInsightsHeader span { color: var(--dim); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.mapAnalytics[data-look="framed"] .mapInsightsHeader strong { display: block; margin-top: 2px; font: 800 17px "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -0.01em; }
+.mapAnalytics[data-look="framed"] .mapInsightsHeader small { color: var(--dim); font-size: 11.5px; }
+.mapAnalytics[data-look="framed"] .mapPlotFilters { display: flex; gap: 2px; padding: 3px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 9px; background: rgba(9, 12, 16, 0.6); }
+.mapAnalytics[data-look="framed"] .mapPlotFilters button { height: 28px; padding: 0 14px; border: 0; border-radius: 6px; background: none; color: #aeb8c3; font-size: 12.5px; font-weight: 650; box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapPlotFilters button.mapPlotFilterActive { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.mapAnalytics[data-look="framed"] .mapPlot { margin: 10px auto 4px; border: 0; background: transparent; box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapPlotImage { opacity: 0.8; }
+.mapAnalytics[data-look="framed"] .mapCallout { padding: 0; border: 0; background: none; box-shadow: none; color: rgba(225, 233, 240, 0.6); font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; text-shadow: 0 1px 3px #000; }
+.mapAnalytics[data-look="framed"] .mapEventKill,
+.mapAnalytics[data-look="framed"] .mapKillText { color: var(--ally) !important; }
+.mapAnalytics[data-look="framed"] .mapEventDeath,
+.mapAnalytics[data-look="framed"] .mapDeathText { color: var(--enemy) !important; }
+.mapAnalytics[data-look="framed"] .mapPoint { width: 9px; height: 9px; left: -4.5px; top: -4.5px; border: 2px solid #0b0e12; background: currentColor; box-shadow: 0 0 0 1px currentColor; }
+.mapAnalytics[data-look="framed"] .mapLegend { padding: 8px 18px 12px; color: var(--dim); font-size: 12px; }
+.mapAnalytics[data-look="framed"] .mapLegendKill { background: var(--ally); box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapLegendDeath { background: var(--enemy); box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapZoneList { gap: 8px; padding: 12px; }
+.mapAnalytics[data-look="framed"] .mapZoneCard { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; background: rgba(255, 255, 255, 0.03); box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapZoneCard:hover { background: rgba(255, 255, 255, 0.06); }
+.mapAnalytics[data-look="framed"] .mapZoneCard[aria-pressed="true"] { border-color: rgba(255, 255, 255, 0.4); background: rgba(255, 255, 255, 0.08); }
+.mapAnalytics[data-look="framed"] .mapZoneCard strong { font-size: 14px; font-weight: 750; }
+.mapAnalytics[data-look="framed"] .mapZoneCard small { color: var(--dim); font-size: 11.5px; letter-spacing: 0; text-transform: none; }
+.mapAnalytics[data-look="framed"] .mapZoneCard small b { color: #d7dde3; }
+.mapAnalytics[data-look="framed"] .mapZoneStats > span { border-radius: 8px; background: rgba(255, 255, 255, 0.04) !important; }
+.mapAnalytics[data-look="framed"] .mapZoneStats > span:nth-child(1) { background: color-mix(in srgb, var(--ally) 12%, transparent) !important; }
+.mapAnalytics[data-look="framed"] .mapZoneStats > span:nth-child(2) { background: color-mix(in srgb, var(--enemy) 12%, transparent) !important; }
+.mapAnalytics[data-look="framed"] .mapZoneStats small { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.mapAnalytics[data-look="framed"] .mapZoneStats b { font: 800 18px "Segoe UI Variable Display", "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+.mapAnalytics[data-look="framed"] .mapZoneShare { background: rgba(255, 255, 255, 0.06); }
+.mapAnalytics[data-look="framed"] .mapZoneShare b { background: linear-gradient(90deg, color-mix(in srgb, var(--ally) 50%, transparent), var(--ally)); }
+.mapAnalytics[data-look="framed"] .mapHotspotSummary,
+.mapAnalytics[data-look="framed"] .mapMatchInsight { padding: 4px 12px 12px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+.mapAnalytics[data-look="framed"] .mapInsightSectionHeading,
+.mapAnalytics[data-look="framed"] .mapMatchInsight > span { display: flex; justify-content: space-between; padding: 12px 6px 8px; color: #d7dde3; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.mapAnalytics[data-look="framed"] .mapInsightSectionHeading small { color: var(--dim); font-size: 11.5px; letter-spacing: 0; text-transform: none; }
+.mapAnalytics[data-look="framed"] .mapHotspotItem,
+.mapAnalytics[data-look="framed"] .mapReviewCard { --c: #7f97ad; border: 1px solid color-mix(in srgb, var(--c) 26%, rgba(255, 255, 255, 0.06)); border-radius: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--c) 12%, rgba(9, 12, 16, 0.9)), rgba(9, 12, 16, 0.9) 70%); box-shadow: none; }
+.mapAnalytics[data-look="framed"] .mapHotspotKill,
+.mapAnalytics[data-look="framed"] .mapReviewCard[data-tone="good"] { --c: var(--ally); }
+.mapAnalytics[data-look="framed"] .mapHotspotDeath,
+.mapAnalytics[data-look="framed"] .mapReviewCard[data-tone="danger"] { --c: var(--enemy); }
+.mapAnalytics[data-look="framed"] .mapReviewCard small { color: var(--c); font-size: 10.5px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.mapAnalytics[data-look="framed"] .mapReviewCard strong,
+.mapAnalytics[data-look="framed"] .mapHotspotItem strong { font-size: 14px; font-weight: 750; }
+.mapAnalytics[data-look="framed"] .mapReviewCard p > span,
+.mapAnalytics[data-look="framed"] .mapHotspotItem small { color: #b9c3cd; font-size: 12px; line-height: 1.4; }
+.mapAnalytics[data-look="framed"] .mapMatchInsight > span { justify-content: flex-start; }
+.mapAnalytics[data-look="framed"] .mapHotspotKill { --hotspot-color: var(--ally); }
+.mapAnalytics[data-look="framed"] .mapHotspotDeath { --hotspot-color: var(--enemy); }
+.mapAnalytics[data-look="framed"] .mapReviewCard { --review-color: var(--c); }
+.mapAnalytics[data-look="framed"] .mapReviewThumb i { background: var(--c); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 34%, transparent), 0 0 12px var(--c); }
