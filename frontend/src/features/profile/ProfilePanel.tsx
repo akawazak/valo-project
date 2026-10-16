@@ -3484,11 +3484,11 @@ export function MatchMapAnalytics({
     }
 
     return (
-        <section className={s.mapAnalytics} data-look="framed" style={map?.splash ? { "--rr-map": `url("${map.splash}")` } as CSSProperties : undefined}>
+        <section className={s.mapAnalytics}>
             <div className={s.mapAnalyticsLayout}>
                 <div className={s.mapPlotPanel}>
                     <div className={s.mapPlotToolbar}>
-                        <strong><b className={s.mapStep}>01</b>
+                        <strong>
                             {duelFocus && selectedFight && duelData
                                 ? `Fight detail · R${selectedFight.roundNum + 1} · ${duelData.area}`
                                 : map?.name || "Map"}
@@ -3658,7 +3658,7 @@ export function MatchMapAnalytics({
                     </section> : null}
                     <header className={s.mapInsightsHeader}>
                         <div>
-                            <span><b className={s.mapStep}>02</b>Fight report</span>
+                            <span>Fight report</span>
                             <strong>Where you fought</strong>
                         </div>
                         <small>Whole match · {analysis.kills + analysis.deaths} fights</small>
@@ -3730,7 +3730,7 @@ export function MatchMapAnalytics({
                     </div>
                     {(analysis.killSpot || analysis.deathSpot) && <div className={s.mapHotspotSummary}>
                         <div className={s.mapInsightSectionHeading}>
-                            <span><b className={s.mapStep}>03</b>Repeat positions</span>
+                            <span>Repeat positions</span>
                             <small>Select to isolate</small>
                         </div>
                         {([{ type: "kill", spot: analysis.killSpot }, { type: "death", spot: analysis.deathSpot }] as const).map(({ type, spot }) => {
@@ -3770,7 +3770,7 @@ export function MatchMapAnalytics({
                         })}
                     </div>}
                     <div className={s.mapMatchInsight}>
-                        <span><b className={s.mapStep}>04</b>Round impact</span>
+                        <span>Round impact</span>
                         <div className={s.mapReviewList}>
                             {reviewNotes.slice(0, 4).map((note, index) => {
                                 const markerLeft = canPlot ? Math.max(0, Math.min(1, note.y * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
