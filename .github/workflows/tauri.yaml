@@ -41,11 +41,12 @@ jobs:
           $tauri = Get-Content "frontend/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
           $cargoManifest = Get-Content "frontend/src-tauri/Cargo.toml" -Raw
           $cargoLock = Get-Content "frontend/src-tauri/Cargo.lock" -Raw
-          $appPage = Get-Content "frontend/src/app/page.tsx" -Raw
+          # The What's new popup is built from the canonical notes file, so its heading carries the release version.
+          $releaseNotes = [string](Get-Content ".github/release-notes/$tag.md" -Raw -ErrorAction SilentlyContinue)
 
           $cargoVersionMatch = [regex]::Match($cargoManifest, '(?m)^version\s*=\s*"([^"]+)"')
           $cargoLockVersionMatch = [regex]::Match($cargoLock, '(?ms)^\[\[package\]\]\r?\nname = "app"\r?\nversion = "([^"]+)"')
-          $releaseVersionMatch = [regex]::Match($appPage, '(?s)const CURRENT_RELEASE: ReleaseNotes = \{.*?version:\s*"([^"]+)"')
+          $releaseVersionMatch = [regex]::Match($releaseNotes, '(?m)^## VantaVault v(\S+)')
           $packageLockVersionMatch = [regex]::Match($packageLock, '(?s)^\s*\{\s*"name"\s*:\s*"frontend"\s*,\s*"version"\s*:\s*"([^"]+)"')
           $rootLockVersionMatch = [regex]::Match($packageLock, '(?s)"packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"frontend"\s*,\s*"version"\s*:\s*"([^"]+)"')
           if (!$cargoVersionMatch.Success -or !$cargoLockVersionMatch.Success -or !$releaseVersionMatch.Success -or !$packageLockVersionMatch.Success -or !$rootLockVersionMatch.Success) {
@@ -60,7 +61,7 @@ jobs:
             'frontend/src-tauri/tauri.conf.json' = $version
             'frontend/src-tauri/Cargo.toml' = $cargoVersionMatch.Groups[1].Value
             'frontend/src-tauri/Cargo.lock app package' = $cargoLockVersionMatch.Groups[1].Value
-            'frontend/src/app/page.tsx CURRENT_RELEASE' = $releaseVersionMatch.Groups[1].Value
+            ".github/release-notes/$tag.md heading" = $releaseVersionMatch.Groups[1].Value
           }
           foreach ($entry in $versions.GetEnumerator()) {
             if ($entry.Value -ne $version) {
