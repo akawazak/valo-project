@@ -1,5 +1,6 @@
 import { useData } from '@/context/DataContext';
 import { LoadoutItemV1, Weapon } from '@/lib/types';
+import { CONTENT_TIERS, TIER_COLORS } from "@/lib/contentTiers";
 
 type WeaponCardProps = {
     weapon: Weapon;
@@ -7,19 +8,10 @@ type WeaponCardProps = {
     onHandleResetSkinClick: () => void;
     selectedItem: LoadoutItemV1;
     parentItem: LoadoutItemV1 | undefined;
+    isOverride?: boolean;
+    selectionLabel?: string;
 };
 
-/* Tier colors */
-const TIER_COLORS: Record<string, string> = {
-    "12683d2c-44af-d54e-12a6-cf4fb56b09d7": "#5e9296",
-    "0c052332-f437-42f8-a2e6-8f4a7bf2a75a": "#4a9f6e",
-    "7c5ac5b0-49f4-9766-e57e-de0e08ee30b8": "#8e5bc8",
-    "4b0f4478-7fb6-7c1b-e23a-6371d8aaf2d4": "#d652a0",
-    "3ee4d8e2-4d71-b8b5-f97f-915f0f47d1ee": "#e09c32",
-    "dd7f1161-3c94-a4be-9df7-b9e56b073f43": "#f04e50",
-    "e1c8a98f-4e32-4964-b1ec-51c66a25216e": "#b44d4d",
-    "c564c281-c776-4467-9157-0a94cba04e6b": "#6b7280",
-};
 
 export default function WeaponCard({
     weapon,
@@ -27,6 +19,8 @@ export default function WeaponCard({
     onHandleResetSkinClick,
     selectedItem,
     parentItem,
+    isOverride = false,
+    selectionLabel = "Selected",
 }: WeaponCardProps) {
     const { ownedBuddies } = useData();
 
@@ -70,8 +64,9 @@ export default function WeaponCard({
     }
 
     const tierColor = TIER_COLORS[safeSkin.contentTierUuid] || "#6b7280";
+    const edition = CONTENT_TIERS[safeSkin.contentTierUuid];
 
-    const buddy = ownedBuddies.find(b => b.levels[0].uuid === item.charmLevelID);
+    const buddy = ownedBuddies.find(b => b.levels[0]?.uuid === item.charmLevelID);
 
     const handleResetSkinClick = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -91,14 +86,16 @@ export default function WeaponCard({
     if (["odin", "ares"].includes(wName)) cardClass += " valorant-weapon-card--heavy";
     if (wName === "melee" || wName === "tactical knife") cardClass += " valorant-weapon-card--melee";
     if (isEquipped) cardClass += " is-active";
+    if (edition) cardClass += " has-edition";
 
     const cardStyle = { cursor: 'pointer', '--tier-color': tierColor } as React.CSSProperties;
 
     return (
-        <div className={cardClass} onClick={onClick} title={displayName} style={cardStyle}>
-            <div className="valorant-weapon-card-body">
+        <div className={cardClass} title={displayName} style={cardStyle}>
+            <button type="button" className="valorant-weapon-card-body" onClick={onClick} aria-label={`Customize ${weapon.displayName}: ${displayName}`}>
                 {/* Content Tier Bar */}
                 <div className="valorant-weapon-card-tier" style={{ backgroundColor: tierColor }} />
+                {edition && <img className="valorant-weapon-card-edition" src={edition.icon} alt={edition.name} title={`${edition.name} Edition`} />}
 
                 <div className="valorant-weapon-card-media">
                     {displayIcon ? (
@@ -119,6 +116,7 @@ export default function WeaponCard({
                     </div>
                 </div>
 
+            </button>
                 <div className="valorant-weapon-card-actions">
                     {/* Buddy Display Bubble */}
                     {weapon.category !== 'EEquippableCategory::Melee' && buddy && (
@@ -133,7 +131,7 @@ export default function WeaponCard({
 
                     {/* Equipped indicator badge */}
                     {isEquipped && (
-                        <div className="weapon-card-equipped-badge" aria-label="Equipped">
+                        <div className="weapon-card-equipped-badge" aria-label={selectionLabel} title={selectionLabel} style={{ pointerEvents: 'none' }}>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="20 6 9 17 4 12"></polyline>
                             </svg>
@@ -141,8 +139,8 @@ export default function WeaponCard({
                     )}
 
                     {/* Reset custom skin option */}
-                    {isEquipped && parentItem && (
-                        <button type="button" className="weapon-card-reset-btn" onClick={handleResetSkinClick} title="Reset to parent preset loadout">
+                    {isOverride && parentItem && (
+                        <button type="button" className="weapon-card-reset-btn" onClick={handleResetSkinClick} aria-label={`Reset ${weapon.displayName} to parent preset`} title="Reset to parent preset loadout">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
                                 <path d="M3 3v5h5"></path>
@@ -150,7 +148,6 @@ export default function WeaponCard({
                         </button>
                     )}
                 </div>
-            </div>
         </div>
     );
 }

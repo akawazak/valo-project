@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useMemo, useState, type PointerEvent } from "react";
+import { useEffect, useId, useMemo, useState, type PointerEvent } from "react";
 import type { ProfileRRSnapshot } from "@/services/api";
+import { useCompetitiveTiers, type CompetitiveTier } from "@/lib/gameMeta";
 
 interface Props {
     snapshots: ProfileRRSnapshot[];
@@ -10,69 +11,45 @@ interface Props {
     loading?: boolean;
 }
 
-const WIDTH = 720;
-const PAD_LEFT = 54;
-const PAD_RIGHT = 18;
-const PAD_TOP = 22;
-const PAD_BOTTOM = 34;
-const RANKS = ["I", "B", "S", "G", "P", "D", "A", "Im"];
-const RANK_NAMES = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
-const TIER_COLORS = [
-    "#64748b", "#64748b", "#64748b",
-    "#6f7a87", "#84909d", "#9aa7b4",
-    "#9a6348", "#b57955", "#cf9064",
-    "#8996a6", "#a8b3c1", "#c7d0db",
-    "#c99b2e", "#e3b63e", "#ffd761",
-    "#189b98", "#2bb8b2", "#55d7ce",
-    "#5c70d6", "#7588ef", "#96a5ff",
-    "#168f62", "#24b77d", "#52d69e",
-    "#9f3f8c", "#c451a7", "#eb6bc5",
-    "#f3d176",
-] as const;
+const DEFAULT_WIDTH = 720;
+const MIN_WIDTH = 280;
+const PAD_LEFT = 88;
+const PAD_RIGHT = 16;
+const PAD_TOP = 32;
+const PAD_BOTTOM = 24;
+// Per-game RR bars sit in their own strip under the line.
+const BAR_GAP = 12;
+const BAR_STRIP = 30;
+const FORM_COUNT = 10;
+const FALLBACK_COLOR = "#94a3b8";
 
-function rankColor(tier: number) {
-    return TIER_COLORS[Math.max(0, Math.min(TIER_COLORS.length - 1, Math.round(tier)))] || TIER_COLORS[0];
+type Tiers = Map<number, CompetitiveTier>;
+type Result = "win" | "loss" | "neutral";
+
+function rankColor(tiers: Tiers, tier: number) {
+    return tiers.get(Math.round(tier))?.color || FALLBACK_COLOR;
 }
 
-function rankTierLabel(tier: number) {
-    if (tier < 3) return "Unranked";
-    if (tier >= 27) return "Radiant";
-    const group = RANK_NAMES[Math.floor((tier - 3) / 3)] || "Rank";
-    return `${group} ${((tier - 3) % 3) + 1}`;
+function rankTierLabel(tiers: Tiers, tier: number) {
+    return tiers.get(Math.round(tier))?.name || `Tier ${Math.round(tier)}`;
 }
 
 function rankPosition(tier: number, rr: number) {
     return Math.max(0, tier) * 100 + Math.max(0, rr);
 }
 
-function rankPositionLabel(value: number) {
+function rankPositionLabel(tiers: Tiers, value: number, exactRR: boolean) {
     const tier = Math.max(0, Math.floor(value / 100));
     const rr = Math.max(0, Math.round(value % 100));
-    if (tier < 3) return `${rr} RR`;
-    if (tier >= 27) return "Rad";
-    const group = RANKS[Math.floor((tier - 3) / 3)] || "R";
-    return `${group}${((tier - 3) % 3) + 1} ${rr}`;
+    return exactRR ? `${rankTierLabel(tiers, tier)} · ${rr} RR` : rankTierLabel(tiers, tier);
 }
 
-function fullRankPositionLabel(value: number) {
-    const tier = Math.max(0, Math.floor(value / 100));
-    const rr = Math.max(0, Math.round(value % 100));
-    if (tier < 3) return `${rr} RR`;
-    if (tier >= 27) return "Radiant";
-    const group = RANK_NAMES[Math.floor((tier - 3) / 3)] || "Rank";
-    return `${group} ${((tier - 3) % 3) + 1} · ${rr} RR`;
+function resultOf(snapshot: ProfileRRSnapshot): Result {
+    return snapshot.rrEarned > 0 ? "win" : snapshot.rrEarned < 0 ? "loss" : "neutral";
 }
 
-function smoothPath(points: Array<{ x: number; y: number }>) {
-    if (points.length < 2) return "";
-    let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-    for (let index = 0; index < points.length - 1; index += 1) {
-        const current = points[index];
-        const next = points[index + 1];
-        const middle = (current.x + next.x) / 2;
-        path += ` C ${middle.toFixed(1)} ${current.y.toFixed(1)}, ${middle.toFixed(1)} ${next.y.toFixed(1)}, ${next.x.toFixed(1)} ${next.y.toFixed(1)}`;
-    }
-    return path;
+function signed(value: number) {
+    return `${value > 0 ? "+" : value < 0 ? "−" : ""}${Math.abs(value)}`;
 }
 
 function compactTimestamp(timestamp: number, sameDay: boolean) {
@@ -80,103 +57,163 @@ function compactTimestamp(timestamp: number, sameDay: boolean) {
     if (sameDay) {
         return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     }
-    return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "numeric" })}`;
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export default function RRHistoryChart({ snapshots, height = 220, source = "rr", loading = false }: Props) {
     const gradientId = useId().replace(/:/g, "");
     const exactRR = source === "rr";
     const [activeIndex, setActiveIndex] = useState<number | null>(null);
+    const tiers = useCompetitiveTiers();
+    const [stage, setStage] = useState<HTMLDivElement | null>(null);
+    const [width, setWidth] = useState(DEFAULT_WIDTH);
+
+    // Draw the SVG at the stage's real pixel width instead of stretching a
+    // fixed viewBox, so text, dots and bars keep their proportions. The stage
+    // only mounts once data arrives, so observe it through a callback ref.
+    useEffect(() => {
+        if (!stage || typeof ResizeObserver === "undefined") return;
+        const update = () => {
+            const next = Math.max(MIN_WIDTH, Math.round(stage.clientWidth));
+            setWidth((current) => current === next ? current : next);
+        };
+        update();
+        const observer = new ResizeObserver(update);
+        observer.observe(stage);
+        return () => observer.disconnect();
+    }, [stage]);
     const sorted = useMemo(
         () => [...snapshots]
-            .filter((snapshot) => snapshot && Number.isFinite(snapshot.matchStartTime))
+            // Unranked or unknown-tier games have no place on a rank axis.
+            .filter((snapshot) => snapshot && Number.isFinite(snapshot.matchStartTime) && snapshot.tierAfter > 0)
             .sort((left, right) => left.matchStartTime - right.matchStartTime),
         [snapshots],
     );
 
     const model = useMemo(() => {
         if (!sorted.length) return null;
+        const showBars = exactRR && sorted.length > 1;
         const values = sorted.map((snapshot) => rankPosition(snapshot.tierAfter, exactRR ? snapshot.rrAfter : 0));
         const minimum = Math.min(...values);
         const maximum = Math.max(...values);
-        const padding = Math.max(exactRR ? 18 : 45, (maximum - minimum) * 0.18);
+        const padding = Math.max(exactRR ? 16 : 45, (maximum - minimum) * 0.16);
         const low = Math.max(0, Math.floor((minimum - padding) / 10) * 10);
         const high = Math.max(low + 20, Math.ceil((maximum + padding) / 10) * 10);
         const range = high - low;
-        const plotWidth = WIDTH - PAD_LEFT - PAD_RIGHT;
-        const plotHeight = height - PAD_TOP - PAD_BOTTOM;
+        const plotRight = width - PAD_RIGHT;
+        const plotWidth = plotRight - PAD_LEFT;
+        const plotBottom = height - PAD_BOTTOM - (showBars ? BAR_GAP + BAR_STRIP : 0);
+        const plotHeight = Math.max(40, plotBottom - PAD_TOP);
+        const step = sorted.length > 1 ? plotWidth / (sorted.length - 1) : plotWidth;
         const xOf = (index: number) => sorted.length === 1
             ? PAD_LEFT + plotWidth / 2
-            : PAD_LEFT + (index / (sorted.length - 1)) * plotWidth;
+            : PAD_LEFT + index * step;
         const yOf = (value: number) => PAD_TOP + (1 - (value - low) / range) * plotHeight;
         const points = sorted.map((snapshot, index) => ({
             x: xOf(index),
             y: yOf(values[index]),
             value: values[index],
-            color: rankColor(snapshot.tierAfter),
+            color: rankColor(tiers, snapshot.tierAfter),
+            result: resultOf(snapshot),
             snapshot,
         }));
-        const line = smoothPath(points);
+        const line = points.map((point, index) => `${index ? "L" : "M"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
         const segments = points.slice(1).map((next, index) => {
             const current = points[index];
-            const middle = (current.x + next.x) / 2;
             return {
-                path: `M ${current.x.toFixed(1)} ${current.y.toFixed(1)} C ${middle.toFixed(1)} ${current.y.toFixed(1)}, ${middle.toFixed(1)} ${next.y.toFixed(1)}, ${next.x.toFixed(1)} ${next.y.toFixed(1)}`,
                 key: `${next.snapshot.matchId}-${index}`,
-                gradientId: `${gradientId}-rank-segment-${index}`,
+                path: `M ${current.x.toFixed(1)} ${current.y.toFixed(1)} L ${next.x.toFixed(1)} ${next.y.toFixed(1)}`,
+                gradientId: `${gradientId}-segment-${index}`,
                 fromColor: current.color,
                 toColor: next.color,
                 fromX: current.x,
-                toX: next.x,
+                toX: next.x === current.x ? current.x + 1 : next.x,
             };
         });
-        const baseline = yOf(low);
         const area = points.length > 1
-            ? `${line} L ${points[points.length - 1].x.toFixed(1)} ${baseline.toFixed(1)} L ${points[0].x.toFixed(1)} ${baseline.toFixed(1)} Z`
+            ? `${line} L ${points[points.length - 1].x.toFixed(1)} ${plotBottom.toFixed(1)} L ${points[0].x.toFixed(1)} ${plotBottom.toFixed(1)} Z`
             : "";
-        const ticks = Array.from({ length: 5 }, (_, index) => {
-            const value = low + ((high - low) * index) / 4;
-            return { value, y: yOf(value), color: rankColor(Math.floor(value / 100)) };
-        });
+
+        // One band per rank tier inside the visible range, labelled in its middle.
         const firstTier = Math.max(0, Math.floor(low / 100));
-        const lastTier = Math.min(27, Math.floor(high / 100));
-        const rankBands = Array.from({ length: lastTier - firstTier + 1 }, (_, index) => {
+        const lastTier = Math.floor(high / 100);
+        const bands = Array.from({ length: lastTier - firstTier + 1 }, (_, index) => {
             const tier = firstTier + index;
-            const bottomValue = Math.max(low, tier * 100);
-            const topValue = Math.min(high, (tier + 1) * 100);
-            const y = yOf(topValue);
+            const top = yOf(Math.min(high, (tier + 1) * 100));
+            const bottom = yOf(Math.max(low, tier * 100));
             return {
                 tier,
-                y,
-                height: Math.max(0, yOf(bottomValue) - y),
-                color: rankColor(tier),
-                label: rankTierLabel(tier),
+                top,
+                height: Math.max(0, bottom - top),
+                color: rankColor(tiers, tier),
+                label: rankTierLabel(tiers, tier),
+                boundary: tier * 100 > low ? bottom : null,
             };
-        }).filter((band) => band.height > 0);
+        }).filter((band) => band.height > 0 && tiers.has(band.tier));
+
+        // Promotion / demotion flags along the top edge; skip a label that would
+        // collide with the previous one but keep its marker line.
+        let lastLabelRight = -Infinity;
         const transitions = points.slice(1).flatMap((point, index) => {
             const previous = points[index];
             if (point.snapshot.tierAfter === previous.snapshot.tierAfter) return [];
+            const up = point.snapshot.tierAfter > previous.snapshot.tierAfter;
+            const label = `${up ? "▲" : "▼"} ${rankTierLabel(tiers, point.snapshot.tierAfter)}`;
+            const labelWidth = label.length * 6.1 + 16;
+            const labelX = Math.min(plotRight - labelWidth / 2, Math.max(PAD_LEFT + labelWidth / 2, point.x));
+            const showLabel = labelX - labelWidth / 2 > lastLabelRight + 6;
+            if (showLabel) lastLabelRight = labelX + labelWidth / 2;
             return [{
                 pointIndex: index + 1,
                 x: point.x,
-                y: point.y,
                 color: point.color,
-                label: rankTierLabel(point.snapshot.tierAfter),
-                direction: point.snapshot.tierAfter > previous.snapshot.tierAfter ? "Promotion" : "Demotion",
+                up,
+                label,
+                labelWidth,
+                labelX,
+                showLabel,
+                direction: up ? "Promotion" : "Demotion",
+                tierLabel: rankTierLabel(tiers, point.snapshot.tierAfter),
             }];
         });
-        const dateTickCount = Math.min(4, sorted.length);
+
+        const stripTop = plotBottom + BAR_GAP;
+        const stripMid = stripTop + BAR_STRIP / 2;
+        const maxSwing = Math.max(1, ...sorted.map((snapshot) => Math.abs(snapshot.rrEarned)));
+        const barWidth = Math.max(2, Math.min(14, step * 0.5));
+        const bars = showBars
+            ? points.map((point) => {
+                const size = (Math.abs(point.snapshot.rrEarned) / maxSwing) * (BAR_STRIP / 2 - 1);
+                return {
+                    x: point.x - barWidth / 2,
+                    width: barWidth,
+                    y: point.snapshot.rrEarned >= 0 ? stripMid - size : stripMid,
+                    height: Math.max(point.snapshot.rrEarned === 0 ? 0 : 1.5, size),
+                    result: point.result,
+                };
+            })
+            : [];
+
+        const dateTickCount = Math.min(width < 520 ? 3 : 5, sorted.length);
         const dateIndexes = Array.from(new Set(Array.from({ length: dateTickCount }, (_, index) => (
             Math.round((index / Math.max(1, dateTickCount - 1)) * (sorted.length - 1))
         ))));
-        const dateTicks = dateIndexes.map((pointIndex) => ({
-            timestamp: sorted[pointIndex].matchStartTime,
-            x: xOf(pointIndex),
-        }));
         const sameDay = new Date(sorted[0].matchStartTime).toDateString()
             === new Date(sorted[sorted.length - 1].matchStartTime).toDateString();
-        return { values, points, line, segments, area, ticks, rankBands, transitions, dateTicks, sameDay };
-    }, [exactRR, gradientId, height, sorted]);
+        const seenDates = new Set<string>();
+        const dateTicks = dateIndexes.flatMap((pointIndex) => {
+            const timestamp = sorted[pointIndex].matchStartTime;
+            const label = compactTimestamp(timestamp, sameDay);
+            if (seenDates.has(label)) return [];
+            seenDates.add(label);
+            return [{ timestamp, label, x: xOf(pointIndex) }];
+        });
+        const dotRadius = step < 16 ? 2.6 : 4;
+        return {
+            values, points, line, segments, area, bands, transitions, bars, dateTicks,
+            plotBottom, plotRight, stripTop, stripMid, showBars, dotRadius,
+        };
+    }, [exactRR, gradientId, height, sorted, tiers, width]);
 
     if (!model) {
         return (
@@ -189,21 +226,31 @@ export default function RRHistoryChart({ snapshots, height = 220, source = "rr",
 
     const firstValue = model.values[0];
     const lastValue = model.values[model.values.length - 1];
-    const peakValue = Math.max(...model.values);
     const netChange = exactRR
         ? sorted.reduce((total, snapshot) => total + snapshot.rrEarned, 0)
         : lastValue - firstValue;
+    const latestIndex = model.points.length - 1;
+    const latestPoint = model.points[latestIndex];
+    const peakIndex = model.points.reduce((best, point, index) => point.value > model.points[best].value ? index : best, 0);
+    const peakPoint = model.points[peakIndex];
     const activePoint = activeIndex === null ? null : model.points[activeIndex];
     const activeTransition = activeIndex === null
         ? null
         : model.transitions.find((transition) => transition.pointIndex === activeIndex);
-    const currentColor = model.points[model.points.length - 1].color;
-    const peakPoint = model.points.reduce((best, point) => point.value > best.value ? point : best, model.points[0]);
-    const recentForm = sorted.slice(-5);
+
+    const form = sorted.slice(-FORM_COUNT);
+    const formWins = form.filter((snapshot) => snapshot.rrEarned > 0).length;
+    const formLosses = form.filter((snapshot) => snapshot.rrEarned < 0).length;
+    const latestResult = resultOf(sorted[sorted.length - 1]);
+    let streak = 0;
+    for (let index = sorted.length - 1; index >= 0 && resultOf(sorted[index]) === latestResult; index -= 1) streak += 1;
+    const streakLabel = latestResult === "neutral" || streak < 2
+        ? ""
+        : `${streak} ${latestResult === "win" ? "win" : "loss"} streak`;
 
     const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
         const bounds = event.currentTarget.getBoundingClientRect();
-        const x = ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * WIDTH;
+        const x = ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * width;
         let nearest = 0;
         let nearestDistance = Infinity;
         for (let index = 0; index < model.points.length; index += 1) {
@@ -218,137 +265,172 @@ export default function RRHistoryChart({ snapshots, height = 220, source = "rr",
 
     return (
         <div className="rr-chart">
-            <div className="rr-chart-summary">
-                <span data-tone="current"><small>Current</small><strong style={{ color: currentColor }}>{fullRankPositionLabel(lastValue)}</strong></span>
-                <span data-tone={netChange >= 0 ? "positive" : "negative"}><small>Net change</small><strong>{netChange > 0 ? "+" : ""}{netChange}{exactRR ? " RR" : ""}</strong></span>
-                <span data-tone="peak"><small>Peak</small><strong style={{ color: peakPoint.color }}>{fullRankPositionLabel(peakValue)}</strong></span>
-                <span data-tone="form"><small>Recent form</small><strong className="rr-chart-form" aria-label={`Last ${recentForm.length} results`}>
-                    {recentForm.map((snapshot, index) => (
-                        <i key={`${snapshot.matchId}-form-${index}`} data-result={snapshot.rrEarned > 0 ? "win" : snapshot.rrEarned < 0 ? "loss" : "neutral"}>
-                            {snapshot.rrEarned > 0 ? "W" : snapshot.rrEarned < 0 ? "L" : "—"}
-                        </i>
-                    ))}
-                </strong></span>
-                <span><small>Sample</small><strong>{sorted.length} games</strong></span>
+            <div className="rr-chart-head">
+                <span>
+                    <small>Now</small>
+                    <strong style={{ color: latestPoint.color }}>{rankPositionLabel(tiers, lastValue, exactRR)}</strong>
+                </span>
+                <span>
+                    <small>Peak</small>
+                    <strong style={{ color: peakPoint.color }}>{rankPositionLabel(tiers, peakPoint.value, exactRR)}</strong>
+                </span>
+                <span className="rr-chart-net" data-tone={netChange > 0 ? "positive" : netChange < 0 ? "negative" : "flat"}>
+                    <strong>{signed(netChange)}{exactRR ? " RR" : ""}</strong>
+                    <small>net over {sorted.length} {sorted.length === 1 ? "game" : "games"}</small>
+                </span>
             </div>
-            <div className="rr-chart-legend" aria-label="Chart legend">
-                <span><i data-tone="rank" style={{ background: currentColor, color: currentColor }} />Line follows rank color</span>
-                <span><i data-tone="gain" />Win</span>
-                <span><i data-tone="loss" />Loss</span>
-                <em>Equal spacing · one point per ranked game</em>
-            </div>
-            {model.transitions.length ? (
-                <div className="rr-chart-milestones" aria-label="Rank changes">
-                    <small>Rank changes</small>
-                    {model.transitions.map((transition) => (
-                        <span key={`${transition.pointIndex}-${transition.label}`} style={{ borderColor: `${transition.color}66`, color: transition.color }}>
-                            <i>{transition.direction === "Promotion" ? "↑" : "↓"}</i>
-                            {transition.direction} · {transition.label}
-                        </span>
-                    ))}
-                </div>
-            ) : null}
-            <div className="rr-chart-stage">
+
+            <div className="rr-chart-stage" ref={setStage}>
                 <svg
                     width="100%"
                     height={height}
-                    viewBox={`0 0 ${WIDTH} ${height}`}
-                    preserveAspectRatio="none"
+                    viewBox={`0 0 ${width} ${height}`}
                     onPointerMove={handlePointerMove}
                     onPointerLeave={() => setActiveIndex(null)}
                     role="img"
-                    aria-label={`Rank history with ${sorted.length} recorded games. Current ${rankPositionLabel(lastValue)}, peak ${rankPositionLabel(peakValue)}.`}
+                    aria-label={`Rank history over ${sorted.length} ranked games. Now ${rankPositionLabel(tiers, lastValue, exactRR)}, peak ${rankPositionLabel(tiers, peakPoint.value, exactRR)}, net ${signed(netChange)}${exactRR ? " RR" : ""}.`}
                 >
                     <defs>
                         <linearGradient id={`${gradientId}-area`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={peakPoint.color} stopOpacity="0.28" />
-                            <stop offset="55%" stopColor={currentColor} stopOpacity="0.09" />
-                            <stop offset="100%" stopColor={currentColor} stopOpacity="0" />
+                            <stop offset="0%" stopColor={latestPoint.color} stopOpacity="0.2" />
+                            <stop offset="100%" stopColor={latestPoint.color} stopOpacity="0" />
                         </linearGradient>
-                        <linearGradient id={`${gradientId}-line`} x1="0" y1="0" x2="1" y2="0">
-                            <stop offset="0%" stopColor="#38bdf8" />
-                            <stop offset="55%" stopColor="#818cf8" />
-                            <stop offset="100%" stopColor="#a78bfa" />
-                        </linearGradient>
-                        <filter id={`${gradientId}-glow`} x="-20%" y="-40%" width="140%" height="180%">
-                            <feGaussianBlur stdDeviation="3" result="blur" />
-                            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-                        </filter>
                         {model.segments.map((segment) => (
-                            <linearGradient key={segment.gradientId} id={segment.gradientId} gradientUnits="userSpaceOnUse" x1={segment.fromX} x2={segment.toX}>
+                            <linearGradient key={segment.gradientId} id={segment.gradientId} gradientUnits="userSpaceOnUse" x1={segment.fromX} x2={segment.toX} y1="0" y2="0">
                                 <stop offset="0%" stopColor={segment.fromColor} />
                                 <stop offset="100%" stopColor={segment.toColor} />
                             </linearGradient>
                         ))}
                     </defs>
 
-                    {model.rankBands.map((band) => (
-                        <g key={`rank-band-${band.tier}`} className="rr-chart-rank-band">
-                            <rect x={PAD_LEFT} y={band.y} width={WIDTH - PAD_LEFT - PAD_RIGHT} height={band.height} fill={band.color} />
-                            {band.height >= 26 ? <text x={WIDTH - PAD_RIGHT - 6} y={band.y + 13} textAnchor="end" fill={band.color}>{band.label}</text> : null}
-                        </g>
-                    ))}
-                    {model.ticks.map((tick) => (
-                        <g key={`tick-${tick.value}`}>
-                            <line x1={PAD_LEFT} x2={WIDTH - PAD_RIGHT} y1={tick.y} y2={tick.y} className="rr-chart-grid" />
-                            <text x={PAD_LEFT - 9} y={tick.y + 4} textAnchor="end" className="rr-chart-axis-label" style={{ fill: tick.color }}>
-                                {rankPositionLabel(exactRR ? tick.value : Math.round(tick.value / 100) * 100)}
-                            </text>
-                        </g>
-                    ))}
-                    {model.dateTicks.map((tick, index) => (
-                        <g key={tick.timestamp}>
-                            {index > 0 && index < model.dateTicks.length - 1 ? <line x1={tick.x} x2={tick.x} y1={PAD_TOP} y2={height - PAD_BOTTOM} className="rr-chart-grid rr-chart-grid-vertical" /> : null}
-                            <text x={tick.x} y={height - 9} textAnchor={index === 0 ? "start" : index === model.dateTicks.length - 1 ? "end" : "middle"} className="rr-chart-axis-label">
-                                {compactTimestamp(tick.timestamp, model.sameDay)}
-                            </text>
+                    {model.bands.map((band, index) => (
+                        <g key={`band-${band.tier}`} className="rr-chart-band">
+                            <rect
+                                x={PAD_LEFT}
+                                y={band.top}
+                                width={model.plotRight - PAD_LEFT}
+                                height={band.height}
+                                fill={band.color}
+                                opacity={index % 2 ? 0.07 : 0.035}
+                            />
+                            {band.boundary !== null ? (
+                                <line x1={PAD_LEFT} x2={model.plotRight} y1={band.boundary} y2={band.boundary} stroke={band.color} className="rr-chart-boundary" />
+                            ) : null}
+                            {band.height >= 14 ? (
+                                <text x={PAD_LEFT - 12} y={band.top + band.height / 2 + 3.5} textAnchor="end" className="rr-chart-band-label" fill={band.color}>
+                                    {band.label}
+                                </text>
+                            ) : null}
                         </g>
                     ))}
 
-                    {model.area ? <path d={model.area} fill={`url(#${gradientId}-area)`} className="rr-chart-area-fill" /> : null}
-                    {model.line ? <path d={model.line} className="rr-chart-line-glow" filter={`url(#${gradientId}-glow)`} /> : null}
-                    {model.line ? <path d={model.line} className="rr-chart-line" stroke={`url(#${gradientId}-line)`} /> : null}
+                    {model.transitions.map((transition) => (
+                        <g key={`transition-${transition.pointIndex}`} className="rr-chart-transition">
+                            <line x1={transition.x} x2={transition.x} y1={PAD_TOP - 6} y2={model.plotBottom} stroke={transition.color} />
+                            {transition.showLabel ? (
+                                <g transform={`translate(${transition.labelX - transition.labelWidth / 2} 4)`}>
+                                    <rect width={transition.labelWidth} height={19} rx={9.5} stroke={transition.color} />
+                                    <text x={transition.labelWidth / 2} y={13} textAnchor="middle" fill={transition.color}>{transition.label}</text>
+                                </g>
+                            ) : null}
+                        </g>
+                    ))}
+
+                    {model.area ? <path d={model.area} fill={`url(#${gradientId}-area)`} /> : null}
                     {model.segments.map((segment) => (
                         <path key={segment.key} d={segment.path} className="rr-chart-segment" stroke={`url(#${segment.gradientId})`} />
                     ))}
 
+                    {peakIndex !== latestIndex && model.points.length > 2 ? (
+                        <text x={peakPoint.x} y={Math.max(PAD_TOP + 2, peakPoint.y - 11)} textAnchor="middle" className="rr-chart-peak-label">PEAK</text>
+                    ) : null}
+
                     {model.points.map((point, index) => (
-                        <g key={`${point.snapshot.matchId}-${index}`}>
-                            <circle cx={point.x} cy={point.y} r={activeIndex === index ? 6.3 : 4.6} className="rr-chart-rank-dot" style={{ stroke: point.color }} />
-                            <circle
-                                cx={point.x}
-                                cy={point.y}
-                                r={activeIndex === index ? 3.4 : 2.35}
-                                className={`rr-chart-dot ${point.snapshot.rrEarned > 0 ? "win" : point.snapshot.rrEarned < 0 ? "loss" : "neutral"}${index === model.points.length - 1 ? " latest" : ""}`}
-                            />
-                        </g>
+                        <circle
+                            key={`${point.snapshot.matchId}-${index}`}
+                            cx={point.x}
+                            cy={point.y}
+                            r={activeIndex === index ? model.dotRadius + 2 : model.dotRadius}
+                            className={`rr-chart-dot ${point.result}`}
+                        />
                     ))}
-                    {model.transitions.map((transition) => (
-                        <g key={`transition-${transition.pointIndex}`} className="rr-chart-rank-change">
-                            <line x1={transition.x} x2={transition.x} y1={PAD_TOP} y2={height - PAD_BOTTOM} style={{ stroke: transition.color }} />
-                            <path d={`M ${transition.x} ${Math.max(PAD_TOP + 8, transition.y - 10)} l 4 4 l -4 4 l -4 -4 Z`} style={{ fill: transition.color }} />
+                    <circle cx={latestPoint.x} cy={latestPoint.y} r={model.dotRadius + 6} className="rr-chart-latest-halo" stroke={latestPoint.color} />
+
+                    {model.showBars ? (
+                        <g className="rr-chart-bars">
+                            <line x1={PAD_LEFT} x2={model.plotRight} y1={model.stripMid} y2={model.stripMid} className="rr-chart-bars-axis" />
+                            <text x={PAD_LEFT - 12} y={model.stripMid + 3.5} textAnchor="end" className="rr-chart-axis-label">RR ±</text>
+                            {model.bars.map((bar, index) => (
+                                <rect
+                                    key={`bar-${index}`}
+                                    x={bar.x}
+                                    y={bar.y}
+                                    width={bar.width}
+                                    height={bar.height}
+                                    rx={1.5}
+                                    className={`rr-chart-bar ${bar.result}${activeIndex === index ? " active" : ""}`}
+                                />
+                            ))}
                         </g>
+                    ) : null}
+
+                    {model.dateTicks.map((tick, index) => (
+                        <text
+                            key={tick.timestamp}
+                            x={tick.x}
+                            y={height - 6}
+                            textAnchor={index === 0 ? "start" : index === model.dateTicks.length - 1 ? "end" : "middle"}
+                            className="rr-chart-axis-label"
+                        >
+                            {tick.label}
+                        </text>
                     ))}
+
                     {activePoint ? (
-                        <g className="rr-chart-focus" aria-hidden="true">
-                            <line x1={activePoint.x} x2={activePoint.x} y1={PAD_TOP} y2={height - PAD_BOTTOM} />
-                            <circle cx={activePoint.x} cy={activePoint.y} r={8} />
-                        </g>
+                        <line
+                            x1={activePoint.x}
+                            x2={activePoint.x}
+                            y1={PAD_TOP}
+                            y2={model.showBars ? model.stripTop + BAR_STRIP : model.plotBottom}
+                            className="rr-chart-focus"
+                            aria-hidden="true"
+                        />
                     ) : null}
                 </svg>
                 {activePoint ? (
                     <div
-                        className={`rr-chart-tooltip${activePoint.x > WIDTH * 0.68 ? " align-right" : ""}`}
-                        style={{ left: `${(activePoint.x / WIDTH) * 100}%`, top: `${(activePoint.y / height) * 100}%` }}
+                        className={`rr-chart-tooltip${activePoint.x > width * 0.68 ? " align-right" : ""}`}
+                        style={{ left: `${(activePoint.x / width) * 100}%`, top: `${(activePoint.y / height) * 100}%` }}
                     >
                         <small>{new Date(activePoint.snapshot.matchStartTime).toLocaleString()}</small>
-                        <strong>{fullRankPositionLabel(activePoint.value)}</strong>
-                        <span data-tone={activePoint.snapshot.rrEarned >= 0 ? "positive" : "negative"}>
-                            {exactRR ? `${activePoint.snapshot.rrEarned > 0 ? "+" : ""}${activePoint.snapshot.rrEarned} RR` : "Tier checkpoint"}
+                        <strong style={{ color: activePoint.color }}>{rankPositionLabel(tiers, activePoint.value, exactRR)}</strong>
+                        <span data-tone={activePoint.result === "win" ? "positive" : activePoint.result === "loss" ? "negative" : "flat"}>
+                            {exactRR ? `${signed(activePoint.snapshot.rrEarned)} RR` : "Tier checkpoint"}
                         </span>
-                        {activeTransition ? <em style={{ color: activeTransition.color }}>{activeTransition.direction} · {activeTransition.label}</em> : null}
+                        {activeTransition ? <em style={{ color: activeTransition.color }}>{activeTransition.direction} · {activeTransition.tierLabel}</em> : null}
                     </div>
                 ) : null}
+            </div>
+
+            <div className="rr-chart-form-row">
+                <div className="rr-chart-form-title">
+                    <small>Recent form</small>
+                    <span>
+                        <b data-tone="positive">{formWins}W</b> · <b data-tone="negative">{formLosses}L</b>
+                        {streakLabel ? <em data-tone={latestResult === "win" ? "positive" : "negative"}>{streakLabel}</em> : null}
+                    </span>
+                </div>
+                <ol className="rr-chart-form-list" aria-label={`Last ${form.length} ranked games, oldest to newest`}>
+                    {form.map((snapshot, index) => {
+                        const result = resultOf(snapshot);
+                        return (
+                            <li key={`${snapshot.matchId}-form-${index}`} data-result={result} data-latest={index === form.length - 1 ? "true" : undefined}>
+                                <b>{result === "win" ? "W" : result === "loss" ? "L" : "D"}</b>
+                                {exactRR ? <span>{signed(snapshot.rrEarned)}</span> : null}
+                            </li>
+                        );
+                    })}
+                </ol>
             </div>
         </div>
     );

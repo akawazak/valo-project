@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
     getPartyStatus,
+    postPartyAction,
     fetchCachedPublicJson,
     getSocialStatus,
+    getGameIcons,
     actOnSocialRequest,
     sendSocialFriendRequest,
     PartyMember,
@@ -20,7 +22,9 @@ import {
 import { useData } from "@/context/DataContext";
 import ProfilePanel from "@/features/profile/ProfilePanel";
 import ChatModal from "./ChatModal";
-import { isGamePresence, presenceActivity, presenceSection, presenceSectionRank, presenceState, productName, queueName } from "./presence";
+import PartyControls from "./PartyControls";
+import { friendMatchActivity, gameMark, isGamePresence, lastActiveAt, presenceActivity, presenceSection, presenceSectionRank, presenceState, productName, queueName } from "./presence";
+import { useQueues } from "@/lib/gameMeta";
 import { useFloatingWidgetDrag } from "@/hooks/useFloatingWidgetDrag";
 import { playUiSound } from "@/lib/uiSounds";
 import { publishAppNotification } from "@/lib/appNotifications";
@@ -58,6 +62,7 @@ type PartyOverlay =
     | { kind: "chat"; peer: string | null }
     | null;
 type ChatNotice = { peer: string; name: string; body: string; timestamp: number };
+type FriendInvite = { state: "idle" | "sending" | "sent" | "error"; message?: string; onInvite: () => void };
 
 function SafePartyImage({ sources, className, fallback, fallbackClassName, eager = false }: { sources: string[]; className?: string; fallback: string; fallbackClassName?: string; eager?: boolean }) {
     const [sourceIndex, setSourceIndex] = useState(0);
@@ -105,12 +110,16 @@ function profileFromIdentity(puuid: string, displayName: string): PartyProfileTa
 }
 
 export default function LivePartyStatus({ showOfflineByDefault = false }: { showOfflineByDefault?: boolean }) {
+    useQueues(); // queue names for presence labels
     const { activeAccount, isBackendOnline, isLocalClientActive, playerCards: knownPlayerCards } = useData();
     const [party, setParty] = useState<PartyStatusResponse | null>(null);
+    const [inviteStatus, setInviteStatus] = useState<Record<string, { state: FriendInvite["state"]; message?: string }>>({});
     const [social, setSocial] = useState<SocialStatusResponse | null>(null);
     const [stale, setStale] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
     const [expanded, setExpanded] = useState(false);
+    // Where the open panel sits: under the topbar button that opened it.
+    const [panelAnchor, setPanelAnchor] = useState<CSSProperties | undefined>(undefined);
 	const [overlay, setOverlay] = useState<PartyOverlay>(null);
 	const [chatUnread, setChatUnread] = useState(0);
 	const [chatUnreadByPeer, setChatUnreadByPeer] = useState<Record<string, number>>({});
@@ -218,6 +227,26 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
         };
         window.addEventListener("pointerdown", close);
         return () => window.removeEventListener("pointerdown", close);
+    }, [expanded]);
+
+    useLayoutEffect(() => {
+        if (!expanded) return;
+        const place = () => {
+            const trigger = document.querySelector<HTMLElement>('[data-slot="social-status-trigger"]');
+            // Phones keep the CSS bottom sheet.
+            if (!trigger || window.innerWidth <= 640) {
+                setPanelAnchor(undefined);
+                return;
+            }
+            const rect = trigger.getBoundingClientRect();
+            const width = Math.min(390, window.innerWidth - 32);
+            const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+            const top = rect.bottom + 8;
+            setPanelAnchor({ top, left, right: "auto", bottom: "auto", height: `min(680px, calc(100dvh - ${Math.round(top) + 12}px))`, maxHeight: `calc(100dvh - ${Math.round(top) + 12}px)` });
+        };
+        place();
+        window.addEventListener("resize", place);
+        return () => window.removeEventListener("resize", place);
     }, [expanded]);
 
     const togglePartyPanel = () => {
@@ -493,6 +522,30 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
     const hasParty = !!party && party.phase !== "none" && party.phase !== "error" && !!party.members?.length;
     const members = party?.members ?? [];
     const local = members.find((m) => m.isLocal) || members[0];
+	// One-click invites from the friend list: only friends in VALORANT, outside a match, not already here, while the party has room.
+	const canInvite = hasParty && party!.phase === "party" && !party!.customGame && members.length < 5;
+	const inviteFor = (presence: SocialPresence): FriendInvite | undefined => {
+		const puuid = (presence.puuid || "").toLowerCase();
+		const [name, tag] = (presence.name || "").split("#");
+		if (!canInvite || !puuid || !name || !tag || gameMark(presence)?.key !== "valorant") return undefined;
+		if (["offline", "game", "mobile"].includes(presenceState(presence))) return undefined;
+		if (members.some((member) => member.puuid.toLowerCase() === puuid)) return undefined;
+		const status = inviteStatus[puuid];
+		return {
+			state: status?.state || "idle",
+			message: status?.message,
+			onInvite: () => {
+				setInviteStatus((current) => ({ ...current, [puuid]: { state: "sending" } }));
+				void postPartyAction({ action: "invite", name: name.trim(), tag: tag.trim() })
+					.then((next) => {
+						if (next.phase !== "error") { latestPartyRef.current = next.phase === "none" ? null : next; setParty(next); }
+						setInviteStatus((current) => ({ ...current, [puuid]: { state: "sent" } }));
+						window.setTimeout(() => setInviteStatus((current) => { const rest = { ...current }; delete rest[puuid]; return rest; }), 8000);
+					})
+					.catch((err) => setInviteStatus((current) => ({ ...current, [puuid]: { state: "error", message: err instanceof Error ? err.message : "The invite did not go through." } })));
+			},
+		};
+	};
 	const floatingSocialPortal = isLocalClientActive && hasParty && typeof document !== "undefined" ? createPortal(
 		<div
 			ref={floatingSocial.setElement}
@@ -542,6 +595,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 <FriendsPill
                     social={social}
                     presences={presences}
+                    cardCache={cardCache}
                     onOpen={togglePartyPanel}
 				/>
 				{floatingSocialPortal}
@@ -576,13 +630,14 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                 onOpen={togglePartyPanel}
             />
         ) : (
-            <FriendsPill social={social} presences={presences} onOpen={togglePartyPanel} />
+            <FriendsPill social={social} presences={presences} cardCache={cardCache} onOpen={togglePartyPanel} />
         )}
 		{floatingSocialPortal}
         {typeof document !== "undefined" ? createPortal(
         <aside
             ref={partyWidgetRef}
             className={`live-party-widget${stale ? " is-stale" : ""}`}
+            style={panelAnchor}
             aria-live="polite"
         >
             <div key={refreshKey} className="live-party-refresh" />
@@ -641,10 +696,30 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                             />
                         ))}
                     </div>
+					<PartyControls
+						party={party!}
+						friends={presences.flatMap((presence) => {
+							const invite = inviteFor(presence);
+							if (!invite) return [];
+							const images = presence.cardId ? cardCache[presence.cardId.toLowerCase()]?.images || [] : [];
+							return [{
+								puuid: presence.puuid || "",
+								name: presence.name || "",
+								detail: presenceActivity(presence).detail || presenceActivity(presence).label,
+								avatar: images.find((src) => /smallart/i.test(src)) || images[0],
+								...invite,
+							}];
+						})}
+						onParty={(next) => {
+							if (next.phase === "error") return;
+							latestPartyRef.current = next.phase === "none" ? null : next;
+							setParty(next);
+							setStale(false);
+						}}
+					/>
 					{partyConversation && <button type="button" className="live-party-open-chat" onClick={() => openChat(partyConversation.key)}>Open Party Chat{partyConversation.unreadCount ? ` (${partyConversation.unreadCount})` : ""}</button>}
                 </>
             )}
-            {!hasParty && <PartyEmptyState party={party} />}
             <FriendPresenceList
                 social={social}
                 presences={presences}
@@ -656,6 +731,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 				unreadCount={chatUnread}
 				unreadByPeer={chatUnreadByPeer}
                 onContextMenu={openContextMenu}
+				inviteFor={inviteFor}
             />
             </div>
             {contextMenu && typeof document !== "undefined" && createPortal(
@@ -673,7 +749,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
                                 key={profileTarget.puuid}
                                 requestedProfile={profileTarget}
                                 onRequestedProfileChange={(profile) => setOverlay(profile ? { kind: "profile", profile } : null)}
-                                autoSyncMatches={false}
+                                autoSyncMatches={true}
                             />
                         </div>
                     </section>
@@ -740,16 +816,25 @@ function PartyPill({
 function FriendsPill({
     social,
     presences,
+    cardCache,
     onOpen,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
+    cardCache: Record<string, CardMeta>;
     onOpen: () => void;
 }) {
     const onlineCount = presences.filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence))).length;
     const inGameCount = presences.filter((presence) => presenceState(presence) === "game").length;
     const chatCount = presences.filter((presence) => presenceState(presence) === "chat").length;
     const totalCount = social?.friendCount || presences.length;
+    // Up to three online friends' cards, players in a match first.
+    const faces = presences
+        .filter((presence) => ["game", "online", "away", "dnd"].includes(presenceState(presence)) && presence.cardId)
+        .sort((a, b) => Number(presenceState(b) === "game") - Number(presenceState(a) === "game"))
+        .map((presence) => cardCache[presence.cardId!.toLowerCase()]?.images[0])
+        .filter((src): src is string => Boolean(src))
+        .slice(0, 3);
     return (
         <button
             type="button"
@@ -759,8 +844,8 @@ function FriendsPill({
             aria-label="Open friend presence panel"
             title={`${onlineCount} online · ${totalCount} friends`}
         >
-            <span className="live-party-pill-avatar live-party-pill-avatar--friends" aria-hidden="true">
-                <FriendsGlyph />
+            <span className={`live-party-pill-avatar live-party-pill-avatar--friends${faces.length ? " has-faces" : ""}`} aria-hidden="true">
+                {faces.length ? <span className="live-party-pill-faces">{faces.map((src) => <img key={src} src={src} alt="" />)}</span> : <FriendsGlyph />}
                 <strong className="live-party-friends-count">{onlineCount}</strong>
             </span>
             <span className="live-party-pill-body">
@@ -786,6 +871,7 @@ function FriendPresenceList({
 	unreadCount,
 	unreadByPeer,
     onContextMenu,
+	inviteFor,
 }: {
     social: SocialStatusResponse | null;
     presences: SocialPresence[];
@@ -797,6 +883,7 @@ function FriendPresenceList({
 	unreadCount: number;
 	unreadByPeer: Record<string, number>;
     onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
+	inviteFor?: (presence: SocialPresence) => FriendInvite | undefined;
 }) {
     const [showOffline, setShowOffline] = useState(() => showOfflineByDefault || (typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:offline-open") === "true"));
     const [friendSearch, setFriendSearch] = useState("");
@@ -806,6 +893,22 @@ function FriendPresenceList({
 		const saved = window.localStorage.getItem("vantavault:social:view");
 		return saved === "requests" || saved === "activity" ? saved : "friends";
 	});
+    const [gameIcons, setGameIcons] = useState<Record<string, string>>({});
+    const [mapNames, setMapNames] = useState<Record<string, string>>({});
+    useEffect(() => {
+        let cancelled = false;
+        void fetchCachedPublicJson<{ data?: Array<{ uuid: string; mapUrl: string; displayName: string }> }>("https://valorant-api.com/v1/maps")
+            .then((response) => {
+                if (!cancelled) setMapNames(Object.fromEntries((response.data || []).flatMap(map =>
+                    [map.uuid, map.mapUrl].filter(Boolean).map(id => [id.toLowerCase(), map.displayName]))));
+            }).catch(() => { /* Presence remains useful without map metadata. */ });
+        return () => { cancelled = true; };
+    }, []);
+    useEffect(() => {
+        let cancelled = false;
+        void getGameIcons().then((icons) => { if (!cancelled) setGameIcons(icons); });
+        return () => { cancelled = true; };
+    }, []);
     const [compactRows, setCompactRows] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("vantavault:friends:compact") === "true");
     useEffect(() => { if (showOfflineByDefault) setShowOffline(true); }, [showOfflineByDefault]);
     useEffect(() => { window.localStorage.setItem("vantavault:friends:offline-open", String(showOffline)); }, [showOffline]);
@@ -824,7 +927,9 @@ function FriendPresenceList({
     const byPresence = (a: SocialPresence, b: SocialPresence) =>
         presenceRank(a) - presenceRank(b) || (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
     const visibleActivePresences = activePresences.filter(matchesFilters).sort(byPresence);
-    const visibleOfflinePresences = offlinePresences.filter(matchesFilters);
+    // Most recently online first; friends with no known time keep name order at the end.
+    const visibleOfflinePresences = offlinePresences.filter(matchesFilters).sort((a, b) =>
+        lastActiveAt(b) - lastActiveAt(a) || (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
     const activeSections = Array.from(visibleActivePresences.reduce((sections, presence) => {
         const label = presenceSection(presence);
         const items = sections.get(label) || [];
@@ -857,17 +962,24 @@ function FriendPresenceList({
             <div className={`live-party-friend-scroll${compactRows ? " is-compact" : ""}`}>
                 <div className="live-party-presence-sections">
                     {activeSections.map((section) => <section className="live-party-presence-section" key={section.label}>
-                        <header><strong>{section.label}</strong><span>{section.items.length}</span></header>
+                        <header>{(() => {
+                            const sectionMark = section.items[0] ? gameMark(section.items[0]) : null;
+                            const icon = sectionMark ? gameIcons[sectionMark.key] : undefined;
+                            return <strong>{icon ? <img className="live-party-section-logo" src={icon} alt="" aria-hidden="true" /> : null}{section.label}</strong>;
+                        })()}<span>{section.items.length}</span></header>
                         <div className="live-party-friend-list">
                             {section.items.map((presence) => (
                                 <FriendPresenceRow
                                     key={presence.puuid}
+                                    gameIcons={gameIcons}
                                     presence={presence}
+                                    mapNames={mapNames}
                                     cardCache={cardCache}
                                     onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
                                     onOpenChat={() => onOpenChat(presence)}
                                     unreadCount={unreadByPeer[(presence.puuid || "").toLowerCase()] || 0}
                                     onContextMenu={onContextMenu}
+                                    invite={inviteFor?.(presence)}
                                 />
                             ))}
                         </div>
@@ -895,7 +1007,9 @@ function FriendPresenceList({
                                 {visibleOfflinePresences.map((presence) => (
                                     <FriendPresenceRow
                                         key={presence.puuid}
+                                        gameIcons={gameIcons}
                                         presence={presence}
+                                        mapNames={mapNames}
                                         cardCache={cardCache}
                                         onOpenProfile={() => onOpenProfile(profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
 								onOpenChat={() => onOpenChat(presence)}
@@ -1073,59 +1187,90 @@ function formatSocialTime(timestamp: number) {
 	return date.toLocaleDateString([], { day: "2-digit", month: "short", year: date.getFullYear() === today.getFullYear() ? undefined : "numeric" });
 }
 
-function FriendPresenceRow({
+/** The plain VALORANT card everyone starts with; its art adds nothing behind a row. */
+const DEFAULT_CARD_ID = "9fb348bc-41a0-91ad-8a3e-818035c4e561";
+
+export function FriendPresenceRow({
     presence,
+    mapNames = {},
+    gameIcons,
     cardCache,
     onOpenProfile,
 	onOpenChat,
 	unreadCount,
     onContextMenu,
+	invite,
 }: {
     presence: SocialPresence;
+    mapNames?: Record<string, string>;
+    gameIcons: Record<string, string>;
     cardCache: Record<string, CardMeta>;
     onOpenProfile: () => void;
 	onOpenChat: () => void;
 	unreadCount: number;
     onContextMenu: (event: React.MouseEvent, profile: PartyProfileTarget) => void;
+	/** Shown only when this friend can be invited to your party right now. */
+	invite?: FriendInvite;
 }) {
     const state = presenceState(presence);
+    const activity = presenceActivity(presence);
+    const match = friendMatchActivity(presence, mapNames);
+    const detail = match?.detail || activity.detail || activity.label;
     const card = presence.cardId ? cardCache[presence.cardId.toLowerCase()] : undefined;
     const avatarSources = card?.images || [];
+    const wideArt = state !== "offline" ? avatarSources.find((src) => /wideart/i.test(src) && !src.includes(DEFAULT_CARD_ID)) : undefined;
+    const mark = gameMark(presence);
+    const gameIcon = mark ? gameIcons[mark.key] : undefined;
     return (
         <div
-            className={`live-party-friend-row is-${state}`}
+            className={`live-party-friend-row is-${state}${wideArt ? " has-art" : ""}`}
+            style={wideArt ? { "--row-art": `url("${wideArt}")` } as CSSProperties : undefined}
             role="button"
             tabIndex={0}
 			onClick={onOpenChat}
-			onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpenChat(); }}
+			onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpenChat(); } }}
             onContextMenu={(event) => onContextMenu(event, profileFromIdentity(presence.puuid || "", presence.name || "Player"))}
         >
             <span className="live-party-friend-avatar" aria-hidden="true">
-                <SafePartyImage key={avatarSources.join("|") || presence.name} sources={avatarSources} fallback={(presence.name || "?").slice(0, 1).toUpperCase()} eager={state !== "offline"} />
+                {!avatarSources.length && mark ? (
+                    <span className="live-party-game-mark" data-game={mark.key} style={{ "--mark": mark.color } as CSSProperties} title={mark.label}>
+                        {gameIcon ? <img src={gameIcon} alt="" /> : mark.key === "mobile" ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.5" /><path d="M11 18h2" /></svg> : mark.code}
+                    </span>
+                ) : (
+                    <SafePartyImage key={avatarSources.join("|") || presence.name} sources={avatarSources} fallback={(presence.name || "?").slice(0, 1).toUpperCase()} eager={state !== "offline"} />
+                )}
                 <i className="live-party-friend-dot" />
             </span>
             <span className="live-party-friend-main">
                 <span className="live-party-friend-name">{presence.name || "Unknown friend"}</span>
-				<span className="live-party-friend-sub">{presenceActivity(presence).detail || presenceActivity(presence).label}</span>
+				<span className="live-party-friend-sub" title={detail}>
+					{mark && avatarSources.length && mark.key !== "valorant" && mark.key !== "mobile"
+						? gameIcon
+							? <img className="live-party-game-logo" src={gameIcon} alt="" aria-hidden="true" />
+							: <i className="live-party-game-chip" style={{ "--mark": mark.color } as CSSProperties} aria-hidden="true">{mark.code}</i>
+						: null}
+					{detail}
+				</span>
             </span>
-			<span className="live-party-friend-state">
-				{presenceActivity(presence).label}
-			</span>
+			{match?.score ? <span className="live-party-friend-match" aria-label={`In match. Friend's team ${presence.allyScore}, opponents ${presence.enemyScore}`} title="Friend’s team – opponents">
+                <span className="live-party-friend-match-label">In match</span>
+                <strong>{match.score}</strong>
+            </span> : <span className="live-party-friend-state">{activity.label}</span>}
 			{unreadCount > 0 && <span className="live-party-friend-unread" aria-label={`${unreadCount} unread messages`}>{unreadCount}</span>}
+			{invite && <button
+				type="button"
+				className={`live-party-invite-button is-${invite.state}`}
+				disabled={invite.state === "sending" || invite.state === "sent"}
+				onClick={(event) => { event.preventDefault(); event.stopPropagation(); invite.onInvite(); }}
+				aria-label={invite.state === "sent" ? `Invite sent to ${presence.name || "friend"}` : `Invite ${presence.name || "friend"} to your party`}
+				title={invite.state === "error" ? invite.message : invite.state === "sent" ? "Invite sent" : "Invite to party"}
+			>
+				<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+					{invite.state === "sent" ? <path d="m5 12.5 4.5 4.5L19 7.5" /> : <><circle cx="10" cy="8" r="3.5" /><path d="M3.5 19a6.5 6.5 0 0 1 13 0M18 8v6M15 11h6" /></>}
+				</svg>
+				<span>{invite.state === "sending" ? "Sending" : invite.state === "sent" ? "Sent" : invite.state === "error" ? "Retry" : "Invite"}</span>
+			</button>}
 			<button type="button" className="live-party-profile-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenProfile(); }} aria-label={`Open ${presence.name || "friend"} profile`} title="Profile">i</button>
-        </div>
-    );
-}
-
-function PartyEmptyState({ party }: { party: PartyStatusResponse | null }) {
-    const unavailable = party?.phase === "error";
-    return (
-        <div className={`live-party-empty${unavailable ? " is-unavailable" : ""}`}>
-            <span className="live-party-empty-icon" aria-hidden="true">{unavailable ? "!" : "+"}</span>
-            <span>
-                <strong>{unavailable ? "Live party unavailable" : "No active party"}</strong>
-                <small>{unavailable ? "This Riot session cannot read party status right now." : "Join or create a party in VALORANT and it will appear here automatically."}</small>
-            </span>
         </div>
     );
 }

@@ -1496,6 +1496,16 @@
   background: var(--green);
 }
 
+.live-match-retry-notice {
+  margin: 0.8rem 0 0;
+  padding: 0.65rem 0.9rem;
+  border-radius: 8px;
+  background: rgba(245, 188, 80, 0.1);
+  color: #f5cf88;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .live-match-status-pill.is-error {
   border-color: var(--border-accent);
 }
@@ -1519,4 +1529,22 @@
   0% { opacity: 0.6; }
   50% { opacity: 1; }
   100% { opacity: 0.6; }
+}
+
+/* Cached shared-match history with this player ("MET 4×"). */
+.player-encounter-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 2px 7px;
+  color: #f0d79a;
+  background: rgba(224, 184, 98, 0.1);
+  border: 1px solid rgba(224, 184, 98, 0.3);
+  border-radius: 999px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.54rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+  cursor: help;
 }

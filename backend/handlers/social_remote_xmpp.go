@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -48,6 +49,8 @@ type xmppSocialSession struct {
 	lastError          string
 	lastAttempt        time.Time
 	reconnectDelay     time.Duration
+	reconnectTimer     *time.Timer
+	cancel             context.CancelFunc
 	roster             map[string]xmppRosterItem
 	requests           map[string]SocialFriendRequest
 	requestJIDs        map[string]string
@@ -213,12 +216,22 @@ func (h *xmppSocialHub) forgetAccount(account string) {
 
 	for _, session := range forgotten {
 		session.mu.Lock()
+		if session.reconnectTimer != nil {
+			session.reconnectTimer.Stop()
+			session.reconnectTimer = nil
+		}
+		if session.cancel != nil {
+			session.cancel()
+			session.cancel = nil
+		}
 		conn := session.conn
 		session.conn = nil
 		session.auth = remoteAuthHeaders{}
 		session.roster = map[string]xmppRosterItem{}
 		session.requests = map[string]SocialFriendRequest{}
 		session.requestJIDs = map[string]string{}
+		session.optimisticRequests = map[string]time.Time{}
+		session.suppressedRequests = map[string]time.Time{}
 		session.presences = map[string]chatPresenceEntry{}
 		session.selfPresences = map[string]chatPresenceEntry{}
 		session.messages = map[string][]ChatMessage{}
@@ -238,6 +251,10 @@ func (h *xmppSocialHub) forgetAccount(account string) {
 
 func (s *xmppSocialSession) ensureRunning(auth remoteAuthHeaders) {
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	s.auth = auth
 	if s.running {
 		s.mu.Unlock()
@@ -247,48 +264,67 @@ func (s *xmppSocialSession) ensureRunning(auth remoteAuthHeaders) {
 		s.mu.Unlock()
 		return
 	}
+	if s.reconnectTimer != nil {
+		s.reconnectTimer.Stop()
+		s.reconnectTimer = nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
 	s.running = true
 	s.state = "connecting"
 	s.lastError = ""
 	s.lastAttempt = time.Now()
 	s.mu.Unlock()
-	go s.run(auth)
+	go s.run(ctx, auth)
 }
 
-func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
+func (s *xmppSocialSession) run(ctx context.Context, auth remoteAuthHeaders) {
 	defer func() {
 		s.mu.Lock()
+		if s.cancel != nil {
+			s.cancel()
+			s.cancel = nil
+		}
 		s.running = false
 		s.mu.Unlock()
 	}()
 
-	pasToken, affinity, err := fetchChatPASToken(auth.AccessToken)
+	pasToken, affinity, err := fetchChatPASToken(ctx, auth.AccessToken)
 	if err != nil {
 		s.fail(err)
 		return
 	}
-	host, domain, port, err := fetchRemoteChatConfig(auth, affinity)
+	host, domain, port, err := fetchRemoteChatConfig(ctx, auth, affinity)
 	if err != nil {
 		s.fail(err)
 		return
 	}
 
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	s.host = host
 	s.domain = domain
 	s.port = port
 	s.mu.Unlock()
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 6 * time.Second}, "tcp", fmt.Sprintf("%s:%d", host, port), &tls.Config{
-		ServerName: host,
-		MinVersion: tls.VersionTLS12,
-	})
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 6 * time.Second}, Config: &tls.Config{
+		ServerName: host, MinVersion: tls.VersionTLS12,
+	}}
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		s.fail(fmt.Errorf("xmpp dial failed: %w", err))
 		return
 	}
 
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
@@ -303,12 +339,17 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 	}
 
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
 	s.state = "live"
 	s.lastError = ""
 	s.reconnectDelay = 0
 	s.mu.Unlock()
 
-	go s.keepAlive(conn)
+	go s.keepAlive(ctx, conn)
 
 	s.writeMu.Lock()
 	_, _ = io.WriteString(conn, `<iq type="get" id="1"><query xmlns="jabber:iq:riotgames:roster" last_state="true"/></iq><presence/>`)
@@ -317,8 +358,13 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 	// roster a chance to provide the exact peer JID, then send queued archive
 	// requests without requiring a second UI interaction.
 	go func() {
-		time.Sleep(time.Second)
-		s.flushArchiveRequests()
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			s.flushArchiveRequests()
+		case <-ctx.Done():
+		}
 	}()
 
 	decoder := xml.NewDecoder(reader)
@@ -361,10 +407,15 @@ func (s *xmppSocialSession) run(auth remoteAuthHeaders) {
 	}
 }
 
-func (s *xmppSocialSession) keepAlive(conn net.Conn) {
+func (s *xmppSocialSession) keepAlive(ctx context.Context, conn net.Conn) {
 	ticker := time.NewTicker(150 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		s.mu.RLock()
 		sameConn := s.conn == conn
 		s.mu.RUnlock()
@@ -547,6 +598,10 @@ func (s *xmppSocialSession) requestArchive(peer string) error {
 
 func (s *xmppSocialSession) applyArchive(iq xmppIQ) {
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	peer := s.archiveRequests[iq.ID]
 	if peer != "" {
 		delete(s.archiveRequests, iq.ID)
@@ -557,6 +612,10 @@ func (s *xmppSocialSession) applyArchive(iq xmppIQ) {
 	}
 	diagnostic := xmppArchiveResponseDiagnostic(iq)
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	if s.archiveDiagnostics == nil {
 		s.archiveDiagnostics = map[string]xmppArchiveDiagnostic{}
 	}
@@ -635,13 +694,17 @@ func (s *xmppSocialSession) flushArchiveRequests() {
 
 func (s *xmppSocialSession) setMessageSink(sink func(peer string, message ChatMessage)) {
 	s.mu.Lock()
-	s.messageSink = sink
+	if s.state != "closed" {
+		s.messageSink = sink
+	}
 	s.mu.Unlock()
 }
 
 func (s *xmppSocialSession) setArchiveSink(sink func(peer string, diagnostic xmppArchiveDiagnostic)) {
 	s.mu.Lock()
-	s.archiveSink = sink
+	if s.state != "closed" {
+		s.archiveSink = sink
+	}
 	s.mu.Unlock()
 }
 
@@ -714,6 +777,10 @@ func sanitizeArchiveDiagnosticText(value string) string {
 func (s *xmppSocialSession) appendMessage(peer string, message ChatMessage) {
 	peer = strings.ToLower(strings.TrimSpace(peer))
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	if s.messages == nil {
 		s.messages = map[string][]ChatMessage{}
 	}
@@ -830,6 +897,10 @@ func (s *xmppSocialSession) sendMessage(peer, body string) (ChatMessage, error) 
 
 func (s *xmppSocialSession) fail(err error) {
 	s.mu.Lock()
+	if s.state == "closed" {
+		s.mu.Unlock()
+		return
+	}
 	s.state = "error"
 	s.lastError = err.Error()
 	if s.reconnectDelay < 15*time.Second {
@@ -841,14 +912,23 @@ func (s *xmppSocialSession) fail(err error) {
 		}
 	}
 	delay := s.reconnectDelay
-	auth := s.auth
 	if s.conn != nil {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+	if s.reconnectTimer != nil {
+		s.reconnectTimer.Stop()
+	}
+	s.reconnectTimer = time.AfterFunc(delay, s.retry)
 	s.mu.Unlock()
 	remoteSocialHub.broadcast()
-	time.AfterFunc(delay, func() { s.ensureRunning(auth) })
+}
+
+func (s *xmppSocialSession) retry() {
+	s.mu.RLock()
+	auth := s.auth
+	s.mu.RUnlock()
+	s.ensureRunning(auth)
 }
 
 func (s *xmppSocialSession) applyRoster(iq xmppIQ) {
@@ -860,6 +940,9 @@ func (s *xmppSocialSession) applyRoster(iq xmppIQ) {
 		s.mu.Unlock()
 		remoteSocialHub.broadcast()
 	}()
+	if s.state == "closed" {
+		return
+	}
 	s.rosterLoaded = true
 	// A roster result is a complete snapshot. A roster push (type=set) is an
 	// incremental update. Replacing only complete results prevents requests
@@ -953,6 +1036,10 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 	}
 	if strings.EqualFold(p.Type, "subscribe") {
 		s.mu.Lock()
+		if s.state == "closed" {
+			s.mu.Unlock()
+			return
+		}
 		if s.requests == nil {
 			s.requests = map[string]SocialFriendRequest{}
 		}
@@ -991,6 +1078,9 @@ func (s *xmppSocialSession) applyPresence(p xmppPresence) {
 		s.mu.Unlock()
 		remoteSocialHub.broadcast()
 	}()
+	if s.state == "closed" {
+		return
+	}
 	if current, exists := s.presences[resourceKey]; exists &&
 		entry.Product != "" &&
 		strings.EqualFold(entry.Product, current.Product) &&
@@ -1400,8 +1490,8 @@ func cloneSocialRequests(source map[string]SocialFriendRequest) []SocialFriendRe
 	return out
 }
 
-func fetchChatPASToken(accessToken string) (string, string, error) {
-	req, err := http.NewRequest(http.MethodGet, "https://riot-geo.pas.si.riotgames.com/pas/v1/service/chat", nil)
+func fetchChatPASToken(ctx context.Context, accessToken string) (string, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://riot-geo.pas.si.riotgames.com/pas/v1/service/chat", nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -1443,8 +1533,11 @@ func decodePASAffinity(token string) (string, error) {
 	return strings.ToLower(affinity), nil
 }
 
-func fetchRemoteChatConfig(auth remoteAuthHeaders, affinity string) (string, string, int, error) {
-	req, err := http.NewRequest(http.MethodGet, "https://clientconfig.rpg.riotgames.com/api/v1/config/player?app=Riot%20Client", nil)
+func fetchRemoteChatConfig(ctx context.Context, auth remoteAuthHeaders, affinity string) (string, string, int, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://clientconfig.rpg.riotgames.com/api/v1/config/player?app=Riot%20Client", nil)
 	if err != nil {
 		return "", "", 0, err
 	}

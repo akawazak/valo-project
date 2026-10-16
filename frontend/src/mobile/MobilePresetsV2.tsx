@@ -2,10 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useData } from "@/context/DataContext";
-import { applyLoadout, getPlayerLoadoutData, getPresets, savePresets } from "@/services/api";
+import { applyLoadout, captureAccountRequest, getPlayerLoadoutData, getPresets, savePresets, type AccountRequest } from "@/services/api";
 import { exportPreset, importPreset } from "@/lib/presetShare";
 import { buildPresetApplyRequest } from "@/lib/effectivePreset";
-import { SPRAY_WHEEL_SLOTS as SPRAY_SLOTS } from "@/lib/spraySlots";
+import { SPRAY_WHEEL_SLOTS as SPRAY_SLOTS, EMPTY_SPRAY_ID, SPRAY_TYPE_ID, FLEX_TYPE_ID, expressionMetadata, replaceExpressionSlot, resolveExpressions } from "@/lib/spraySlots";
 import type { Preset, Weapon } from "@/lib/types";
 import {
   MobileBackHeader,
@@ -27,8 +27,7 @@ type SheetMode = "create" | "rename" | "import" | "export" | "";
 const CURRENT_PRESET_ID = "__current_loadout__";
 
 function mergedPresetLoadout(preset: Preset, presets: Preset[]) {
-  const parent = preset.parentUuid ? presets.find((item) => item.uuid === preset.parentUuid) : undefined;
-  return { ...(parent?.loadout || {}), ...preset.loadout };
+  return buildPresetApplyRequest(preset, presets).loadout;
 }
 
 function LoadoutPreview({
@@ -78,6 +77,7 @@ export default function MobilePresetsV2({
   onInitialEditorConsumed?: () => void;
 }) {
   const {
+    activeAccount,
     agents,
     ownedAgentIDs,
     ownedCardIDs,
@@ -85,6 +85,7 @@ export default function MobilePresetsV2({
     ownedTitleIDs,
     playerCards,
     playerTitles,
+    flexes = [],
     sprays,
     weapons,
   } = useData();
@@ -108,21 +109,47 @@ export default function MobilePresetsV2({
   const [busy, setBusy] = useState("refresh");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const ownerPuuid = activeAccount?.puuid;
+  const ownerRegion = activeAccount?.region ?? '';
 
   const refresh = useCallback(async () => {
+    const request = captureAccountRequest(ownerPuuid ? { puuid: ownerPuuid, region: ownerRegion } : null);
+    if (!request?.isCurrent()) return;
     setBusy("refresh");
     setError("");
-    const [presetResult, loadoutResult] = await Promise.allSettled([getPresets(), getPlayerLoadoutData()]);
+    const [presetResult, loadoutResult] = await Promise.allSettled([getPresets(request.owner), getPlayerLoadoutData(request.owner)]);
+    if (!request.isCurrent()) return;
     if (presetResult.status === "fulfilled") setPresets(presetResult.value);
     if (loadoutResult.status === "fulfilled") setCurrent(loadoutResult.value);
+    else setCurrent(null);
     const rejected = [presetResult, loadoutResult].find((result) => result.status === "rejected");
     if (rejected?.status === "rejected") setError(rejected.reason instanceof Error ? rejected.reason.message : "Presets could not be loaded.");
     setBusy("");
-  }, []);
+  }, [ownerPuuid, ownerRegion]);
 
   useEffect(() => {
+    setPresets([]);
+    setCurrent(null);
+    setSelectedId('');
+    setDraft(null);
+    setWeaponEditorId('');
+    setSheet('');
+    setSheetValue('');
+    setSpraySlotId('');
+    setSprayQuery('');
+    setSpraySearchOpen(false);
+    setCardPickerOpen(false);
+    setCardQuery('');
+    setCardSearchOpen(false);
+    setTitlePickerOpen(false);
+    setTitleQuery('');
+    setTitleSearchOpen(false);
+    setMenuOpen(false);
+    setNotice('');
+    setError('');
+    setBusy(ownerPuuid ? 'refresh' : '');
     void refresh();
-  }, [refresh]);
+  }, [refresh, ownerPuuid]);
 
   const currentPreset = useMemo<Preset | null>(() => current ? {
     uuid: CURRENT_PRESET_ID,
@@ -139,13 +166,14 @@ export default function MobilePresetsV2({
     : presets.find((preset) => preset.uuid === selectedId) || null;
   const draftDirty = useMemo(() => {
     if (!draft || !selected) return false;
+    const request = buildPresetApplyRequest(selected, presets);
     const baseline = {
-      loadout: mergedPresetLoadout(selected, presets),
+      loadout: request.loadout,
       agents: selected.agents || [],
-      identity: selected.identity,
-      sprays: selected.sprays || [],
-      flexes: selected.flexes || [],
-      expressions: selected.expressions || [],
+      identity: request.identity,
+      sprays: request.sprays || [],
+      flexes: request.flexes || [],
+      expressions: request.expressions || [],
       disabled: Boolean(selected.disabled),
     };
     const changed = {
@@ -170,7 +198,7 @@ export default function MobilePresetsV2({
       setDraft(null);
       return;
     }
-    setDraft({ ...selected, loadout: mergedPresetLoadout(selected, presets), agents: [...(selected.agents || [])] });
+    setDraft({ ...selected, ...buildPresetApplyRequest(selected, presets), agents: [...(selected.agents || [])] });
   }, [presets, selected, selectedId]);
 
   useEffect(() => {
@@ -192,49 +220,60 @@ export default function MobilePresetsV2({
     onInitialEditorConsumed?.();
   }, [draft?.uuid, initialEditor, onInitialEditorConsumed]);
 
-  const persist = async (next: Preset[]) => {
-    await savePresets(next);
+  const persist = async (next: Preset[], request: AccountRequest) => {
+    if (!request.isCurrent()) return false;
+    await savePresets(next, request.owner);
+    if (!request.isCurrent()) return false;
     setPresets(next);
+    return true;
   };
 
   const flash = (value: string) => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setNotice(value);
-    window.setTimeout(() => setNotice(""), 2400);
+    window.setTimeout(() => { if (request.isCurrent()) setNotice(""); }, 2400);
   };
 
   const applyPreset = async (preset: Preset) => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusy(`apply:${preset.uuid}`);
     setError("");
     try {
-      await applyLoadout(buildPresetApplyRequest(preset, presets));
-      const fresh = await getPlayerLoadoutData();
+      await applyLoadout(buildPresetApplyRequest(preset, presets), request.owner);
+      if (!request.isCurrent()) return;
+      const fresh = await getPlayerLoadoutData(request.owner);
+      if (!request.isCurrent()) return;
       setCurrent(fresh);
       flash(`${preset.name} applied.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Preset could not be applied.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Preset could not be applied.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const saveDraft = async () => {
-    if (!draft) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!draft || !request?.isCurrent()) return;
     setBusy("save");
     try {
       const next = presets.map((preset) => preset.uuid === draft.uuid ? { ...draft, loadout: { ...draft.loadout } } : preset);
-      await persist(next);
+      if (!await persist(next, request)) return;
       flash("Preset changes saved.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Preset could not be saved.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Preset could not be saved.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
     const name = sheetValue.trim();
-    if (!name || !current) return;
+    if (!name || !current || !request?.isCurrent()) return;
     const nextPreset: Preset = {
       uuid: crypto.randomUUID(),
       name,
@@ -247,55 +286,59 @@ export default function MobilePresetsV2({
     };
     setBusy("sheet");
     try {
-      await persist([...presets, nextPreset]);
+      if (!await persist([...presets, nextPreset], request)) return;
       setSheet("");
       setSheetValue("");
       setSelectedId(nextPreset.uuid);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Preset could not be created.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Preset could not be created.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const rename = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
     const name = sheetValue.trim();
-    if (!draft || !name) return;
+    if (!draft || !name || !request?.isCurrent()) return;
     setBusy("sheet");
     try {
       const changed = { ...draft, name };
-      await persist(presets.map((item) => item.uuid === draft.uuid ? changed : item));
+      if (!await persist(presets.map((item) => item.uuid === draft.uuid ? changed : item), request)) return;
       setDraft(changed);
       setSheet("");
       setSheetValue("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Preset could not be renamed.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Preset could not be renamed.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const importCode = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusy("sheet");
     try {
       const imported = importPreset(sheetValue.trim());
       const next: Preset = { ...imported, uuid: crypto.randomUUID() };
-      await persist([...presets, next]);
+      if (!await persist([...presets, next], request)) return;
       setSheet("");
       setSheetValue("");
       setSelectedId(next.uuid);
       flash("Preset imported.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Invalid preset code.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Invalid preset code.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const duplicate = async (variant: boolean) => {
-    if (!draft) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!draft || !request?.isCurrent()) return;
     const copy: Preset = {
       ...draft,
       uuid: crypto.randomUUID(),
@@ -304,36 +347,51 @@ export default function MobilePresetsV2({
       loadout: { ...draft.loadout },
       agents: [...(draft.agents || [])],
     };
-    await persist([...presets, copy]);
-    setMenuOpen(false);
-    setSelectedId(copy.uuid);
-    flash(variant ? "Variant created." : "Preset duplicated.");
+    setBusy('duplicate');
+    try {
+      if (!await persist([...presets, copy], request)) return;
+      setMenuOpen(false);
+      setSelectedId(copy.uuid);
+      flash(variant ? "Variant created." : "Preset duplicated.");
+    } catch (reason) {
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : 'Preset could not be duplicated.');
+    } finally {
+      if (request.isCurrent()) setBusy('');
+    }
   };
 
   const remove = async () => {
-    if (!draft) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!draft || !request?.isCurrent()) return;
     if (!window.confirm(`Delete "${draft.name}"?`)) return;
     setBusy("delete");
     try {
-      await persist(presets.filter((item) => item.uuid !== draft.uuid && item.parentUuid !== draft.uuid));
+      if (!await persist(presets.filter((item) => item.uuid !== draft.uuid && item.parentUuid !== draft.uuid), request)) return;
       setSelectedId("");
       setMenuOpen(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Preset could not be deleted.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Preset could not be deleted.");
     } finally {
-      setBusy("");
+      if (request.isCurrent()) setBusy("");
     }
   };
 
   const openExport = async () => {
-    if (!draft) return;
-    const code = exportPreset(draft);
+    const request = captureAccountRequest(activeAccount);
+    if (!draft || !request?.isCurrent()) return;
+    let code;
+    try {
+      code = exportPreset(draft, presets);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Preset could not be exported.');
+      return;
+    }
     setSheetValue(code);
     setSheet("export");
     setMenuOpen(false);
     try {
       await navigator.clipboard.writeText(code);
-      flash("Share code copied.");
+      if (request.isCurrent()) flash("Share code copied.");
     } catch {
       // The sheet still exposes the code for manual copy.
     }
@@ -358,28 +416,32 @@ export default function MobilePresetsV2({
 
   if (draft) {
     const editingCurrent = draft.uuid === CURRENT_PRESET_ID;
-    const card = playerCards.find((item) => item.uuid.toLowerCase() === draft.identity?.playerCardId?.toLowerCase());
-    const title = playerTitles.find((item) => item.uuid.toLowerCase() === draft.identity?.playerTitleId?.toLowerCase());
+    const effectiveDraft = buildPresetApplyRequest(draft, presets);
+    const card = playerCards.find((item) => item.uuid.toLowerCase() === effectiveDraft.identity?.playerCardId?.toLowerCase());
+    const title = playerTitles.find((item) => item.uuid.toLowerCase() === effectiveDraft.identity?.playerTitleId?.toLowerCase());
     const ownedCardSet = new Set(ownedCardIDs.map((id) => id.toLowerCase()));
     const ownedTitleSet = new Set(ownedTitleIDs.map((id) => id.toLowerCase()));
     const ownedAgentSet = new Set(ownedAgentIDs.map((id) => id.toLowerCase()));
     const availableCards = playerCards
-      .filter((item) => ownedCardSet.has(item.uuid.toLowerCase()) || item.uuid.toLowerCase() === draft.identity?.playerCardId?.toLowerCase())
+      .filter((item) => ownedCardSet.has(item.uuid.toLowerCase()) || item.uuid.toLowerCase() === effectiveDraft.identity?.playerCardId?.toLowerCase())
       .filter((item) => !cardQuery || item.displayName.toLowerCase().includes(cardQuery.toLowerCase()))
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     const availableTitles = playerTitles
-      .filter((item) => ownedTitleSet.has(item.uuid.toLowerCase()) || item.uuid.toLowerCase() === draft.identity?.playerTitleId?.toLowerCase())
+      .filter((item) => ownedTitleSet.has(item.uuid.toLowerCase()) || item.uuid.toLowerCase() === effectiveDraft.identity?.playerTitleId?.toLowerCase())
       .filter((item) => {
         const query = titleQuery.toLowerCase();
         return !query || item.displayName.toLowerCase().includes(query) || item.titleText.toLowerCase().includes(query);
       })
       .sort((left, right) => (left.titleText || left.displayName).localeCompare(right.titleText || right.displayName));
     const sprayCatalog = new Map(sprays.map((item) => [item.uuid.toLowerCase(), item]));
-    const equippedSprayIds = new Set((draft.sprays || []).map((slot) => slot.sprayId.toLowerCase()));
+    const equippedSprayIds = new Set((effectiveDraft.sprays || []).map((slot) => slot.sprayId.toLowerCase()));
     const ownedSpraySet = new Set(ownedSprayIDs.map((id) => id.toLowerCase()));
-    const spraySlots = SPRAY_SLOTS.map((slot) => {
-      const equipped = (draft.sprays || []).find((item) => item.equipSlotId.toLowerCase() === slot.id.toLowerCase());
-      return { ...slot, equipped, spray: equipped ? sprayCatalog.get(equipped.sprayId.toLowerCase()) : undefined };
+    const expressionWheel = resolveExpressions(effectiveDraft.expressions || [], effectiveDraft.sprays || [], effectiveDraft.flexes || []);
+    const spraySlots = SPRAY_SLOTS.map((slot, index) => {
+      const equipped = (effectiveDraft.sprays || []).find((item) => item.equipSlotId.toLowerCase() === slot.id.toLowerCase());
+      const expression = expressionWheel.find(item => item.slotIndex === index);
+      return { ...slot, equipped, expression, spray: equipped ? sprayCatalog.get(equipped.sprayId.toLowerCase()) : undefined,
+        flex: expression?.typeId.toLowerCase() === FLEX_TYPE_ID ? flexes.find(flex => flex.uuid.toLowerCase() === expression.assetId.toLowerCase()) : undefined };
     });
     const activeSpraySlot = spraySlots.find((slot) => slot.id === spraySlotId);
     const availableSprays = sprays
@@ -387,9 +449,11 @@ export default function MobilePresetsV2({
       .filter((spray) => !sprayQuery || spray.displayName.toLowerCase().includes(sprayQuery.toLowerCase()))
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
     const chooseSpray = (sprayId?: string) => {
-      const next = (draft.sprays || []).filter((slot) => slot.equipSlotId.toLowerCase() !== spraySlotId.toLowerCase());
-      if (sprayId) next.push({ equipSlotId: spraySlotId, sprayId });
-      setDraft({ ...draft, sprays: next });
+      const slotIndex = SPRAY_SLOTS.findIndex(slot => slot.id.toLowerCase() === spraySlotId.toLowerCase());
+      if (slotIndex < 0) return;
+      const wheel = resolveExpressions(effectiveDraft.expressions || [], effectiveDraft.sprays || [], effectiveDraft.flexes || []);
+      const next = replaceExpressionSlot(wheel, slotIndex, SPRAY_TYPE_ID, sprayId || EMPTY_SPRAY_ID);
+      setDraft({ ...draft, ...expressionMetadata(next) });
       setSpraySlotId("");
       setSprayQuery("");
       setSpraySearchOpen(false);
@@ -483,7 +547,7 @@ export default function MobilePresetsV2({
           })}>Use current identity</button>
         </div>
 
-        <MobileSectionHeader title="Sprays" detail={`${spraySlots.filter((slot) => slot.spray).length} / ${SPRAY_SLOTS.length} slots`} />
+        <MobileSectionHeader title="Expressions" detail={`${spraySlots.filter((slot) => slot.expression && slot.expression.assetId.toLowerCase() !== EMPTY_SPRAY_ID).length} / ${SPRAY_SLOTS.length} slots`} />
         <div className="mv2-preset-spray-wheel-wrap">
           <MobileSprayWheel
             slots={spraySlots}
@@ -518,13 +582,13 @@ export default function MobilePresetsV2({
               {cardSearchOpen ? <input autoFocus value={cardQuery} onChange={(event) => setCardQuery(event.target.value)} placeholder="Search cards" /> : null}
               <div className="mv2-card-picker-grid">
                 {availableCards.map((item) => {
-                  const selectedCard = item.uuid.toLowerCase() === draft.identity?.playerCardId?.toLowerCase();
+                  const selectedCard = item.uuid.toLowerCase() === effectiveDraft.identity?.playerCardId?.toLowerCase();
                   return (
                     <button type="button" className={selectedCard ? "selected" : ""} key={item.uuid} onClick={() => {
                       setDraft({
                         ...draft,
                         identity: {
-                          ...(draft.identity || { playerCardId: "", playerTitleId: "" }),
+                          ...(effectiveDraft.identity || { playerCardId: "", playerTitleId: "" }),
                           playerCardId: item.uuid,
                         },
                       });
@@ -554,13 +618,13 @@ export default function MobilePresetsV2({
               {titleSearchOpen ? <input autoFocus value={titleQuery} onChange={(event) => setTitleQuery(event.target.value)} placeholder="Search titles" /> : null}
               <div className="mv2-title-picker-list">
                 {availableTitles.map((item) => {
-                  const selectedTitle = item.uuid.toLowerCase() === draft.identity?.playerTitleId?.toLowerCase();
+                  const selectedTitle = item.uuid.toLowerCase() === effectiveDraft.identity?.playerTitleId?.toLowerCase();
                   return (
                     <button type="button" className={selectedTitle ? "selected" : ""} key={item.uuid} onClick={() => {
                       setDraft({
                         ...draft,
                         identity: {
-                          ...(draft.identity || { playerCardId: "", playerTitleId: "" }),
+                          ...(effectiveDraft.identity || { playerCardId: "", playerTitleId: "" }),
                           playerTitleId: item.uuid,
                         },
                       });
@@ -589,7 +653,7 @@ export default function MobilePresetsV2({
               <p>Choose one of the sprays owned by this account.</p>
               {spraySearchOpen ? <input autoFocus value={sprayQuery} onChange={(event) => setSprayQuery(event.target.value)} placeholder="Search sprays" /> : null}
               <div className="mv2-spray-picker-grid">
-                <button type="button" className={!activeSpraySlot.spray ? "selected" : ""} onClick={() => chooseSpray()}>
+                <button type="button" className={!activeSpraySlot.expression || activeSpraySlot.expression.assetId.toLowerCase() === EMPTY_SPRAY_ID ? "selected" : ""} onClick={() => chooseSpray()}>
                   <span><MobileIcon name="close" /></span>
                   <small>Empty slot</small>
                 </button>
@@ -629,7 +693,7 @@ export default function MobilePresetsV2({
       <MobilePageHeader
         title="Presets"
         subtitle={`${presets.length} saved loadout${presets.length === 1 ? "" : "s"}`}
-        action={<span className="mv2-preset-header-actions"><button type="button" onClick={() => { setSheetValue(""); setSheet("import"); }} aria-label="Import preset"><MobileIcon name="download" /></button><button type="button" onClick={() => { setSheetValue(""); setSheet("create"); }} aria-label="Create preset"><MobileIcon name="plus" /></button></span>}
+        action={<span className="mv2-preset-header-actions"><button type="button" onClick={() => { setSheetValue(""); setSheet("import"); }} aria-label="Import preset"><MobileIcon name="download" /></button><button type="button" onClick={() => { setSheetValue(""); setSheet("create"); }} aria-label="Create preset" disabled={!current}><MobileIcon name="plus" /></button></span>}
       />
       {error ? <div className="mv2-inline-error">{error}</div> : null}
       {current ? (
@@ -676,8 +740,8 @@ export default function MobilePresetsV2({
           <div className="mv2-empty mv2-preset-empty-compact">
             <MobileIcon name="presets" size={34} />
             <h2>No saved presets yet</h2>
-            <p>Your current loadout stays above as the baseline. Save it when you want a reusable copy.</p>
-            <button type="button" className="mv2-primary" onClick={() => { setSheetValue(""); setSheet("create"); }}>Create preset</button>
+            <p>{current ? "Your current loadout stays above as the baseline. Save it when you want a reusable copy." : "Renew your Riot session to save the current loadout, or import a shared preset."}</p>
+            <button type="button" className="mv2-primary" disabled={!current} onClick={() => { setSheetValue(""); setSheet("create"); }}>Create preset</button>
           </div>
         ) : null}
       </div>
@@ -698,7 +762,18 @@ export default function MobilePresetsV2({
               <label>Preset name<input autoFocus value={sheetValue} onChange={(event) => setSheetValue(event.target.value)} maxLength={48} /></label>
             )}
             {sheet === "export" ? (
-              <button type="button" className="mv2-primary" onClick={async () => { await navigator.clipboard.writeText(sheetValue); flash("Share code copied."); setSheet(""); }}>Copy share code</button>
+              <button type="button" className="mv2-primary" onClick={async () => {
+                const request = captureAccountRequest(activeAccount);
+                if (!request) return;
+                try {
+                  await navigator.clipboard.writeText(sheetValue);
+                  if (!request.isCurrent()) return;
+                  flash("Share code copied.");
+                  setSheet("");
+                } catch {
+                  if (request.isCurrent()) setError("Could not copy the share code. Select and copy it manually.");
+                }
+              }}>Copy share code</button>
             ) : (
               <button type="submit" className="mv2-primary" disabled={!sheetValue.trim() || busy === "sheet"}>{busy === "sheet" ? "Saving…" : sheet === "import" ? "Import preset" : "Save"}</button>
             )}

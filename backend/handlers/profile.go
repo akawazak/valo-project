@@ -671,6 +671,145 @@ func (h *Handler) GetMapStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetPlayedQueues — `GET /v1/profile/queues`: queues present in the
+// player's cached matches, used to build the queue filter.
+func (h *Handler) GetPlayedQueues(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	queues, err := tracking.ListPlayedQueues(db, puuid)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	type queuesResponse struct {
+		Puuid  string               `json:"puuid"`
+		Region string               `json:"region"`
+		Queues []tracking.QueueStat `json:"queues"`
+	}
+	h.returnAny(w, &queuesResponse{Puuid: puuid, Region: region, Queues: queues})
+}
+
+// GetFrequentTeammates — `GET /v1/profile/teammates`: the players who most
+// often queued in the same party as the profile owner, from cached matches.
+func (h *Handler) GetFrequentTeammates(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	limit := 3
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+			limit = min(parsed, 20)
+		}
+	}
+	teammates, err := tracking.ListFrequentTeammates(db, puuid, limit)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	type teammatesResponse struct {
+		Puuid     string                  `json:"puuid"`
+		Region    string                  `json:"region"`
+		Teammates []tracking.TeammateStat `json:"teammates"`
+	}
+	h.returnAny(w, &teammatesResponse{Puuid: puuid, Region: region, Teammates: teammates})
+}
+
+// GetDuoPartners — `GET /v1/profile/duo-partners`: everyone who shared a party and team
+// with the profile owner in standard 5v5 games, across all saved matches.
+func (h *Handler) GetDuoPartners(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	partners, err := tracking.ListDuoPartners(db, puuid, 30)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	type partnersResponse struct {
+		Puuid    string                  `json:"puuid"`
+		Region   string                  `json:"region"`
+		Partners []tracking.TeammateStat `json:"partners"`
+	}
+	h.returnAny(w, &partnersResponse{Puuid: puuid, Region: region, Partners: partners})
+}
+
+// GetDuoChemistry — `GET /v1/profile/duo?partner=`: how the profile owner and one
+// party partner trade for and assist each other, from cached matches they queued together.
+func (h *Handler) GetDuoChemistry(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	partner := strings.TrimSpace(r.URL.Query().Get("partner"))
+	if partner == "" {
+		http.Error(w, "partner is required", http.StatusBadRequest)
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	duo, err := tracking.ComputeDuoChemistry(db, puuid, partner, strings.TrimSpace(r.URL.Query().Get("queue")))
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	type duoResponse struct {
+		Puuid  string `json:"puuid"`
+		Region string `json:"region"`
+		*tracking.DuoChemistry
+	}
+	h.returnAny(w, &duoResponse{Puuid: puuid, Region: region, DuoChemistry: duo})
+}
+
+// GetCareerInsights returns cross-match stats (clutches, weapons, buy types,
+// session form) computed from the local match cache.
+func (h *Handler) GetCareerInsights(w http.ResponseWriter, r *http.Request) {
+	puuid, region, ok := h.requireProfileAuth(w, r)
+	if !ok {
+		return
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		h.returnError(w, fmt.Errorf("open tracking DB: %w", err))
+		return
+	}
+	queue := strings.TrimSpace(r.URL.Query().Get("queue"))
+	seasonID := strings.TrimSpace(r.URL.Query().Get("seasonId"))
+	insights, err := tracking.ComputeCareerInsights(db, puuid, queue, seasonID)
+	if err != nil {
+		h.returnError(w, err)
+		return
+	}
+	type insightsResponse struct {
+		Puuid  string `json:"puuid"`
+		Region string `json:"region"`
+		Queue  string `json:"queue"`
+		*tracking.CareerInsights
+	}
+	h.returnAny(w, &insightsResponse{Puuid: puuid, Region: region, Queue: queue, CareerInsights: insights})
+}
+
 // countCachedMatches returns the total row count in `match_players` for the
 // given puuid. Used to populate the `total` field of the
 // match-history response. Matches db.go's `subject` index.
@@ -783,12 +922,21 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 			BlueRoundsWon:    cache.Match.BlueRoundsWon,
 			RedRoundsWon:     cache.Match.RedRoundsWon,
 			BlueWins:         cache.Match.BlueWins == 1,
+			EarlyCompletion:  cache.Match.EarlyCompletion == 1,
 		},
 		Players:    make([]tracking.PlayerStats, 0, len(cache.Players)),
 		Kills:      cache.Kills,
 		Rounds:     cache.Rounds,
 		ServedFrom: "cache",
 	}
+	teamRounds := tracking.HasTeamRounds(cache.Match.BlueRoundsWon, cache.Match.RedRoundsWon)
+	teamMVPs := map[string]bool{}
+	for _, team := range cache.Teams {
+		if team.MVP != "" {
+			teamMVPs[strings.ToLower(team.MVP)] = true
+		}
+	}
+	hasBehavior := cache.Match.AnalyticsVersion >= 6
 	for _, p := range cache.Players {
 		ps := tracking.PlayerStats{
 			Subject:         p.Subject,
@@ -812,15 +960,25 @@ func buildMatchDetails(cache *tracking.MatchCache) *tracking.MatchDetails {
 			RoundsPlayed:    p.RoundsPlayed,
 			IsLocal:         p.IsLocal,
 			CompetitiveTier: p.CompetitiveTier,
+			TeamMVP:         teamMVPs[strings.ToLower(p.Subject)],
+			PartyRRPenalty:  p.PartyRRPenalty,
 		}
-		if ps.RoundsPlayed < 1 {
-			ps.RoundsPlayed = 1
+		if hasBehavior {
+			behavior := p.Behavior
+			ps.Behavior = &behavior
+		}
+		if ps.RoundsPlayed < 0 {
+			ps.RoundsPlayed = 0
 		}
 		if ps.Kills < 0 {
 			ps.Kills = 0
 		}
-		ps.ADR = round1(float64(ps.DamageDealt) / float64(ps.RoundsPlayed))
-		ps.ACS = round1(float64(ps.Score) / float64(ps.RoundsPlayed))
+		// Free-for-all modes report a single round; ADR/ACS stay zero rather
+		// than dividing the match total by it. Gauntlet plays real rounds.
+		if (teamRounds && ps.RoundsPlayed > 0) || ps.RoundsPlayed > 1 {
+			ps.ADR = round1(float64(ps.DamageDealt) / float64(ps.RoundsPlayed))
+			ps.ACS = round1(float64(ps.Score) / float64(ps.RoundsPlayed))
+		}
 		// HS% = headshots / (headshots + bodyshots + legshots).
 		// Riot's "Headshots" field counts ALL head-hit damage events,
 		// not just headshot kills, so dividing by kills was wrong.
@@ -958,7 +1116,24 @@ func (h *Handler) GetProfileMatchDetails(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	if (analyticsRequested && (cache == nil || cache.Match.AnalyticsVersion < 3)) || missingPlayerNames {
+	// Rows cached by an older parser lack team results, Riot MVPs and behavior
+	// data. Refresh them once when opened, but keep serving the cache if Riot
+	// is unreachable; only the explicit refetch reasons below surface errors.
+	staleCache := cache != nil && cache.Match.AnalyticsVersion < tracking.CurrentAnalyticsVersion
+	mustRefetch := (analyticsRequested && (cache == nil || cache.Match.AnalyticsVersion < 3)) || missingPlayerNames
+	if staleCache && !mustRefetch {
+		if client, clientErr := h.getClient(r); clientErr == nil {
+			apiURL := fmt.Sprintf("https://pd.%s.a.pvp.net/match-details/v1/matches/%s", client.Shard, url.PathEscape(matchID))
+			if raw, fetchErr := runRiotRaw(http.MethodGet, apiURL, client.Header, nil); fetchErr == nil {
+				if insertErr := tracking.InsertMatchDetails(db, h.trackingAppDir, matchID, puuid, raw, resolveMatchPlayerNames(cache, client, raw)); insertErr == nil {
+					if refreshed, readErr := tracking.GetMatchFromCache(db, matchID, puuid); readErr == nil && refreshed != nil {
+						cache = refreshed
+					}
+				}
+			}
+		}
+	}
+	if mustRefetch {
 		client, clientErr := h.getClient(r)
 		if clientErr != nil {
 			h.returnError(w, clientErr)
@@ -992,7 +1167,72 @@ func (h *Handler) GetProfileMatchDetails(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	h.returnAny(w, buildMatchDetails(cache))
+	details := buildMatchDetails(cache)
+	if strings.EqualFold(r.URL.Query().Get("ranks"), "true") {
+		client, clientErr := h.getClient(r)
+		if clientErr != nil {
+			h.returnError(w, clientErr)
+			return
+		}
+		h.loadMissingMatchRanks(client, details)
+	}
+	h.returnAny(w, details)
+}
+
+const profileRankCacheTTL = 10 * time.Minute
+
+type profileRankCacheEntry struct {
+	tier      int
+	expiresAt time.Time
+}
+
+// Current ranks supplement missing match ranks without changing the cached history.
+// Cache them briefly because the same players often appear in several opened matches.
+func (h *Handler) loadMissingMatchRanks(client *valclient.ValClient, details *tracking.MatchDetails) {
+	lookup := LiveMatchResponse{}
+	now := time.Now()
+	h.profileRankMu.Lock()
+	if h.profileRankCache == nil {
+		h.profileRankCache = make(map[string]profileRankCacheEntry)
+	}
+	for i := range details.Players {
+		player := &details.Players[i]
+		if player.CompetitiveTier > 0 || player.Subject == "" {
+			continue
+		}
+		key := strings.ToLower(string(client.Shard) + ":" + player.Subject)
+		if cached, ok := h.profileRankCache[key]; ok && now.Before(cached.expiresAt) {
+			player.CurrentCompetitiveTier = cached.tier
+			continue
+		}
+		delete(h.profileRankCache, key)
+		lookup.AllyTeam = append(lookup.AllyTeam, &LivePlayer{Puuid: player.Subject})
+	}
+	h.profileRankMu.Unlock()
+	if len(lookup.AllyTeam) == 0 {
+		return
+	}
+	refreshLivePlayerRanks(client, &lookup)
+	ranks := make(map[string]int, len(lookup.AllyTeam))
+	h.profileRankMu.Lock()
+	for _, player := range lookup.AllyTeam {
+		key := strings.ToLower(player.Puuid)
+		ranks[key] = player.CompetitiveTier
+		if player.CompetitiveTier > 0 || lookup.Error == "" {
+			h.profileRankCache[strings.ToLower(string(client.Shard)+":"+player.Puuid)] = profileRankCacheEntry{
+				tier: player.CompetitiveTier, expiresAt: now.Add(profileRankCacheTTL),
+			}
+		}
+	}
+	h.profileRankMu.Unlock()
+	for i := range details.Players {
+		if details.Players[i].CompetitiveTier <= 0 {
+			if tier, ok := ranks[strings.ToLower(details.Players[i].Subject)]; ok {
+				details.Players[i].CurrentCompetitiveTier = tier
+			}
+		}
+	}
+	details.RankError, details.RankRetryAt = lookup.Error, lookup.RetryAt
 }
 
 // PostProfileSync — `POST /v1/profile/sync` (design doc §2.7).

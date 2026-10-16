@@ -1,0 +1,86 @@
+/* Party controls: part of the live party card, same density as the member rows.
+   One main action (Start queue), quieter controls around it, outline icons like the panel's chat icon. */
+.party-controls { display: grid; gap: 7px; margin: -2px 1rem .85rem; }
+.party-controls-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+.party-controls button, .party-controls select, .party-controls input {
+  height: 30px; border: 1px solid rgba(131, 185, 211, .18); border-radius: 7px;
+  background: rgba(14, 30, 42, .82); color: var(--text-primary);
+  font-family: inherit; font-size: .66rem; font-weight: 700; line-height: 1;
+}
+.party-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; cursor: pointer; white-space: nowrap; transition: border-color .15s ease, background .15s ease, color .15s ease, transform .1s ease; }
+.party-controls button:hover:not(:disabled) { border-color: rgba(131, 185, 211, .42); background: rgba(20, 42, 58, .9); }
+.party-controls button:active:not(:disabled) { transform: translateY(1px); }
+.party-controls :disabled { cursor: not-allowed; opacity: .45; }
+.party-controls :focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+.party-controls-icon { flex: none; width: 14px; height: 14px; }
+
+/* Queue picker: icon, the queue name, a chevron. */
+.party-controls-queue { position: relative; display: flex; flex: 1 1 auto; align-items: center; min-width: 0; }
+.party-controls-queue select { flex: 1 1 auto; width: 100%; min-width: 0; padding: 0 28px 0 30px; appearance: none; font-size: .72rem; cursor: pointer; }
+.party-controls-queue select:disabled { opacity: 1; color: var(--text-secondary); cursor: default; }
+.party-controls-queue .party-controls-icon { position: absolute; z-index: 1; pointer-events: none; color: var(--text-secondary); }
+.party-controls-queue .is-queue { left: 10px; }
+.party-controls-queue .is-chevron { right: 9px; }
+.party-controls-queue select option { background: #0c1822; color: var(--text-primary); }
+
+/* Ready: a status chip with a dot. */
+.party-controls-ready { min-width: 92px; color: var(--text-secondary) !important; }
+.party-controls-ready i { width: 7px; height: 7px; border-radius: 50%; background: #5d6874; }
+.party-controls-ready.is-on { border-color: rgba(52, 227, 184, .38) !important; background: rgba(52, 227, 184, .1) !important; color: #8ff0d4 !important; }
+.party-controls-ready.is-on i { background: #34e3b8; box-shadow: 0 0 0 3px rgba(52, 227, 184, .18); }
+
+/* The one main action. */
+.party-controls-go { width: 100%; height: 34px !important; border: 0 !important; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #fff), var(--accent)) !important; box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent), inset 0 1px 0 rgba(255, 255, 255, .22); color: #fff !important; font-size: .72rem !important; font-weight: 800 !important; letter-spacing: .02em; }
+.party-controls-go:hover:not(:disabled) { filter: brightness(1.06); }
+.party-controls-go .is-play { width: 12px; height: 12px; fill: currentColor; }
+.party-controls-go:disabled { opacity: 1 !important; background: rgba(14, 30, 42, .82) !important; box-shadow: inset 0 0 0 1px rgba(131, 185, 211, .18); color: var(--text-secondary) !important; }
+.party-controls-go.is-cancel { background: rgba(14, 30, 42, .9) !important; box-shadow: inset 0 0 0 1px rgba(131, 185, 211, .28); color: var(--text-primary) !important; }
+.party-controls-go .is-stop { width: 12px; height: 12px; fill: currentColor; }
+
+/* Invite only / Open toggle and the invite field with its button inside. */
+.party-controls-toggle { flex: none; color: var(--text-secondary) !important; }
+.party-controls-toggle.is-on { border-color: rgba(52, 227, 184, .38) !important; color: #8ff0d4 !important; }
+/* Invite friends: a button that opens a short list of friends who can be invited right now. */
+.party-controls-picker { position: relative; flex: 1 1 auto; min-width: 0; }
+.party-controls-invite-open { width: 100%; justify-content: flex-start !important; color: var(--text-primary); }
+.party-controls-invite-open b { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 22%, transparent); color: color-mix(in srgb, var(--accent) 50%, #fff); font-size: .58rem; display: grid; place-items: center; }
+.party-controls-invite-open.is-open { border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important; }
+.party-controls-picker-list {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 6px); display: grid; gap: 2px;
+  max-height: 248px; padding: 5px; overflow-y: auto; overscroll-behavior: contain;
+  border: 1px solid rgba(131, 185, 211, .26); border-radius: 9px; background: #0b1822;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .55); animation: partyPickerIn .14s ease both;
+}
+.party-controls-friend { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 5px 6px; border-radius: 7px; }
+.party-controls-friend:hover { background: rgba(255, 255, 255, .04); }
+.party-controls-friend-avatar { width: 28px; height: 28px; border-radius: 8px; background: #1b2a36 center / cover; color: var(--text-secondary); font-size: .7rem; font-weight: 800; display: grid; place-items: center; }
+.party-controls-friend-copy { display: grid; min-width: 0; }
+.party-controls-friend-copy b { overflow: hidden; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.party-controls-friend-copy b small { margin-left: 2px; color: var(--text-secondary); font-weight: 600; }
+.party-controls-friend-copy > small { overflow: hidden; color: var(--text-secondary); font-size: .6rem; text-overflow: ellipsis; white-space: nowrap; }
+.party-controls .party-controls-friend-invite { height: 24px; padding: 0 10px; border-color: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: color-mix(in srgb, var(--accent) 45%, #fff); font-size: .6rem; }
+.party-controls .party-controls-friend-invite.is-sent { opacity: 1; border-color: rgba(52, 227, 184, .45); background: rgba(52, 227, 184, .12); color: #8ff0d4; }
+.party-controls .party-controls-friend-invite.is-sending { opacity: .7; }
+.party-controls .party-controls-friend-invite.is-error { border-color: rgba(255, 138, 150, .5); background: rgba(255, 64, 85, .1); color: #ff8a96; }
+.party-controls-picker-empty { margin: 0; padding: 10px 8px; color: var(--text-secondary); font-size: .62rem; line-height: 1.45; }
+@keyframes partyPickerIn { from { opacity: 0; transform: translateY(-4px); } }
+
+/* Standing: a quiet status line at the bottom. */
+.party-controls-standing { display: grid; gap: 3px; margin-top: 1px; color: var(--text-secondary); font-size: .62rem; }
+.party-controls-standing span { display: inline-flex; align-items: center; gap: 6px; }
+.party-controls-standing .party-controls-icon { width: 13px; height: 13px; }
+.party-controls-standing .is-ok { color: #8ff0d4; }
+.party-controls-standing .is-warn { color: #f5c542; font-weight: 700; }
+.party-controls-standing small { padding-left: 19px; font-size: .6rem; }
+.party-controls-note { margin: 0; color: var(--text-secondary); font-size: .62rem; }
+.party-controls-message { margin: 0; font-size: .62rem; font-weight: 700; }
+.party-controls-message.is-ok { color: #8ff0d4; }
+.party-controls-message.is-error { color: #ff8a96; }
+
+[data-theme="light"] .party-controls button:not(.party-controls-go), [data-theme="light"] .party-controls select, [data-theme="light"] .party-controls input { border-color: var(--border); background: var(--bg-surface); color: var(--text-primary); }
+[data-theme="light"] .party-controls-standing .is-ok, [data-theme="light"] .party-controls-message.is-ok, [data-theme="light"] .party-controls-ready.is-on, [data-theme="light"] .party-controls-toggle.is-on { color: #0f8a6c !important; }
+[data-theme="light"] .party-controls-standing .is-warn { color: #9a6a00; }
+
+[data-theme="light"] .party-controls-picker-list { border-color: var(--border); background: var(--bg-elevated); }
+@media (prefers-reduced-motion: reduce) { .party-controls button { transition: none; } .party-controls-picker-list { animation: none; } }

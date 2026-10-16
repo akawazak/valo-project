@@ -2055,3 +2055,654 @@
 [data-theme="light"] .live-party-chat-compose {
   background: #fff;
 }
+
+/* ── Polish pass: same panel layout, refined surfaces ──
+   Dark theme only; the light theme keeps its own rules above. */
+:root:not([data-theme="light"]) .live-party-widget {
+  --glass-edge: rgba(255, 255, 255, 0.12);
+  --glass-fill: rgba(255, 255, 255, 0.045);
+  --glass-fill-hover: rgba(255, 255, 255, 0.08);
+  --glass-line: rgba(255, 255, 255, 0.07);
+  isolation: isolate;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  background:
+    linear-gradient(165deg, #172430 0%, #0e161e 40%, #0a1016 100%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 30px 90px rgba(0, 0, 0, 0.55);
+}
+/* Soft light along the top edge for depth. */
+:root:not([data-theme="light"]) .live-party-widget::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 140px;
+  border-radius: inherit;
+  background:
+    radial-gradient(120% 90% at 18% -20%, rgba(255, 255, 255, 0.07), transparent 55%),
+    radial-gradient(80% 70% at 100% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%);
+  pointer-events: none;
+}
+:root:not([data-theme="light"]) .live-party-widget.is-stale { border-color: rgba(245, 197, 66, 0.4); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-refresh { opacity: 0.5; }
+
+:root:not([data-theme="light"]) .live-party-widget .live-party-header {
+  background: transparent;
+  border-bottom: 1px solid var(--glass-line);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-minimize {
+  border: 1px solid var(--glass-edge);
+  border-radius: 7px;
+  background: var(--glass-fill);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-minimize:hover { background: var(--glass-fill-hover); }
+
+/* Stat tiles and party/friend rows share one refined card style. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat,
+:root:not([data-theme="light"]) .live-party-widget .live-party-member,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-empty,
+:root:not([data-theme="light"]) .live-party-widget .live-party-offline-toggle,
+:root:not([data-theme="light"]) .live-party-widget .live-party-request-row,
+:root:not([data-theme="light"]) .live-party-widget .live-party-activity-row {
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:hover,
+:root:not([data-theme="light"]) .live-party-widget .live-party-member:hover,
+:root:not([data-theme="light"]) .live-party-widget .live-party-offline-toggle:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 8px 22px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat strong { letter-spacing: -0.01em; }
+
+/* Avatars: rounder, with a faint glass rim. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-avatar,
+:root:not([data-theme="light"]) .live-party-widget .live-party-avatar {
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-avatar img,
+:root:not([data-theme="light"]) .live-party-widget .live-party-avatar img { border-radius: 7px; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-dot { box-shadow: 0 0 0 2.5px rgba(10, 16, 22, 0.9), 0 0 8px currentColor; }
+
+/* Status labels: soft tinted pills instead of bare mono text. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-state {
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 22%, transparent);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-state,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-chat .live-party-friend-state {
+  background: transparent;
+  box-shadow: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-profile-button {
+  border: 1px solid var(--glass-edge);
+  background: var(--glass-fill);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-profile-button:hover { background: var(--glass-fill-hover); }
+
+/* Search, filter chips and tabs share one control style. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools input,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools button,
+:root:not([data-theme="light"]) .live-party-widget .live-party-inbox,
+:root:not([data-theme="light"]) .live-party-widget .live-party-open-chat,
+:root:not([data-theme="light"]) .live-party-widget .live-party-add-friend-toggle {
+  border: 1px solid var(--glass-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools input:focus {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: rgba(255, 255, 255, 0.07);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools button:hover,
+:root:not([data-theme="light"]) .live-party-widget .live-party-inbox:hover,
+:root:not([data-theme="light"]) .live-party-widget .live-party-open-chat:hover { background: var(--glass-fill-hover); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-social-tabs {
+  padding: 3px;
+  border: 1px solid var(--glass-line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-social-tabs button { border-radius: 6px; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-social-tabs button[aria-selected="true"],
+:root:not([data-theme="light"]) .live-party-widget .live-party-social-tabs button.is-active {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Topbar trigger matches the panel it opens. */
+:root:not([data-theme="light"]) .live-party-pill.is-friends,
+:root:not([data-theme="light"]) .topbar-social-slot .live-party-pill {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* ── Polish pass 2: game marks, readable type, even spacing ── */
+.live-party-game-mark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  color: var(--mark);
+  background:
+    radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--mark) 30%, transparent), transparent 70%),
+    color-mix(in srgb, var(--mark) 12%, #0d151c);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 38%, transparent);
+  font: 800 0.66rem/1 var(--font-sans);
+  letter-spacing: 0.01em;
+}
+.live-party-game-mark[data-game="2xko"] { font-size: 0.56rem; }
+.live-party-game-mark svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.live-party-game-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 15px;
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--mark);
+  background: color-mix(in srgb, var(--mark) 14%, transparent);
+  font: 800 0.55rem/1 var(--font-sans);
+  font-style: normal;
+  vertical-align: 1px;
+}
+
+/* Type: the app's sans everywhere, sentence case, readable sizes. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-state,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools input,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools button,
+:root:not([data-theme="light"]) .live-party-widget .live-party-social-tabs button,
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat,
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header,
+:root:not([data-theme="light"]) .live-party-widget .live-party-offline-toggle {
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-state {
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: none;
+  white-space: nowrap;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools input { font-size: 0.78rem; font-weight: 500; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools button {
+  padding: 0 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 0.25rem;
+  margin: 0 0 0.5rem;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header strong {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header span {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-align: center;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-name { font-size: 0.86rem; font-weight: 650; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-sub { margin-top: 2px; font-size: 0.74rem; }
+
+/* Spacing: one rhythm for sections, rows and controls. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.45rem;
+  margin: 0.2rem 0 0.9rem;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools input,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-tools button { min-height: 34px; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-sections { display: grid; gap: 1.1rem; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-list { gap: 0.4rem; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row {
+  gap: 0.75rem;
+  min-height: 58px;
+  padding: 0.6rem 0.7rem;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-scroll.is-compact .live-party-friend-row { min-height: 44px; padding: 0.4rem 0.6rem; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview { gap: 0.5rem; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-offline-group { margin-top: 1.1rem; }
+
+.live-party-game-mark img { width: 72%; height: 72%; object-fit: contain; }
+.live-party-game-mark:has(img) { background: color-mix(in srgb, var(--mark) 10%, #0d151c); }
+.live-party-game-logo { width: 14px; height: 14px; margin-right: 6px; object-fit: contain; vertical-align: -2px; }
+.live-party-friend-sub { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header strong { display: inline-flex; align-items: center; gap: 7px; }
+.live-party-section-logo { width: 16px; height: 16px; object-fit: contain; }
+
+/* ── Polish pass: Messages window and topbar friends button ── */
+:root:not([data-theme="light"]) .live-party-chat-modal {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #131b21, #0f151a);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 32px 90px rgba(0, 0, 0, 0.6);
+}
+:root:not([data-theme="light"]) .live-party-chat-list { background: rgba(255, 255, 255, 0.015); border-right: 1px solid rgba(255, 255, 255, 0.06); }
+:root:not([data-theme="light"]) .live-party-chat-list header { padding: 18px 16px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+:root:not([data-theme="light"]) .live-party-chat-list header h2,
+:root:not([data-theme="light"]) .live-party-chat-list header strong { font-size: 1.12rem; font-weight: 700; letter-spacing: -0.01em; }
+:root:not([data-theme="light"]) .live-party-chat-list header small { color: var(--text-secondary); font-size: 0.72rem; }
+:root:not([data-theme="light"]) .live-party-chat-header-actions button {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+:root:not([data-theme="light"]) .live-party-chat-header-actions button:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+:root:not([data-theme="light"]) .live-party-chat-group-label {
+  padding: 10px 16px 6px;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 700 0.66rem/1 var(--font-sans);
+  letter-spacing: 0.08em;
+}
+
+/* Conversation list rows */
+:root:not([data-theme="light"]) .live-party-chat-conversations { padding: 2px 8px 8px; }
+:root:not([data-theme="light"]) .live-party-chat-conversations > button {
+  gap: 12px;
+  min-height: 60px;
+  margin-bottom: 2px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+:root:not([data-theme="light"]) .live-party-chat-conversations > button:hover { background: rgba(255, 255, 255, 0.045); }
+:root:not([data-theme="light"]) .live-party-chat-conversations > button.is-active {
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 2px 0 0 #ff4655;
+}
+:root:not([data-theme="light"]) .live-party-chat-avatar,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar { border-radius: 8px; }
+:root:not([data-theme="light"]) .live-party-chat-avatar img,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar img { border-radius: 8px; }
+:root:not([data-theme="light"]) .live-party-chat-conversations strong { font-size: 0.84rem; font-weight: 650; }
+:root:not([data-theme="light"]) .live-party-chat-conversations span,
+:root:not([data-theme="light"]) .live-party-chat-conversations small { font-size: 0.74rem; }
+:root:not([data-theme="light"]) .live-party-chat-row-meta time { color: var(--text-dim); font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+
+/* Thread */
+:root:not([data-theme="light"]) .live-party-chat-view { background: transparent; }
+:root:not([data-theme="light"]) .live-party-chat-view > header { padding: 14px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+:root:not([data-theme="light"]) .live-party-chat-view > header strong { font-size: 0.98rem; font-weight: 700; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small { font-size: 0.74rem; }
+:root:not([data-theme="light"]) .live-party-chat-messages { gap: 0; padding: 14px 22px 18px; }
+:root:not([data-theme="light"]) .live-party-chat-archive-status { margin-bottom: 6px; color: var(--text-dim); font-size: 0.7rem; }
+:root:not([data-theme="light"]) .live-party-chat-date { margin: 14px 0 10px; }
+:root:not([data-theme="light"]) .live-party-chat-date span { color: var(--text-dim); font: 650 0.68rem/1 var(--font-sans); }
+:root:not([data-theme="light"]) .live-party-chat-message { max-width: min(68%, 520px); margin-top: 2px; }
+:root:not([data-theme="light"]) .live-party-chat-message.is-group-start { margin-top: 12px; }
+:root:not([data-theme="light"]) .live-party-chat-message > div {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #1d262d;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+:root:not([data-theme="light"]) .live-party-chat-message.is-incoming:not(.is-group-start) > div { border-top-left-radius: 4px; }
+:root:not([data-theme="light"]) .live-party-chat-message.is-incoming:not(.is-group-end) > div { border-bottom-left-radius: 4px; }
+:root:not([data-theme="light"]) .live-party-chat-message.is-outgoing > div { background: color-mix(in srgb, #ff4655 20%, #1d262d); }
+:root:not([data-theme="light"]) .live-party-chat-message.is-outgoing:not(.is-group-start) > div { border-top-right-radius: 4px; }
+:root:not([data-theme="light"]) .live-party-chat-message.is-outgoing:not(.is-group-end) > div { border-bottom-right-radius: 4px; }
+:root:not([data-theme="light"]) .live-party-chat-message small { margin-top: 4px; color: var(--text-dim); font-size: 0.66rem; font-variant-numeric: tabular-nums; }
+
+/* Composer */
+:root:not([data-theme="light"]) .live-party-chat-compose { gap: 10px; padding: 12px 16px 14px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+:root:not([data-theme="light"]) .live-party-chat-compose textarea {
+  min-height: 44px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  font: 0.86rem/1.4 var(--font-sans);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+:root:not([data-theme="light"]) .live-party-chat-compose textarea:focus { border-color: rgba(255, 70, 85, 0.45); background: rgba(255, 255, 255, 0.05); outline: none; }
+:root:not([data-theme="light"]) .live-party-chat-compose button {
+  min-width: 72px;
+  border-radius: 8px;
+  background: #ff4655;
+  color: #fff;
+  font: 650 0.84rem/1 var(--font-sans);
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+:root:not([data-theme="light"]) .live-party-chat-compose button:hover:not(:disabled) { filter: brightness(1.08); }
+:root:not([data-theme="light"]) .live-party-chat-compose button:disabled { background: rgba(255, 255, 255, 0.06); color: var(--text-dim); }
+
+/* Quieter scrollbars in chat */
+.live-party-chat-modal ::-webkit-scrollbar { width: 6px; }
+.live-party-chat-modal ::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(255, 255, 255, 0.12); }
+.live-party-chat-modal ::-webkit-scrollbar-track { background: transparent; }
+.live-party-chat-modal * { scrollbar-color: rgba(255, 255, 255, 0.14) transparent; scrollbar-width: thin; }
+
+/* Topbar friends button: online friends' faces */
+.live-party-pill-faces { display: flex; align-items: center; }
+.live-party-pill-faces img {
+  width: 22px;
+  height: 22px;
+  margin-left: -8px;
+  border: 2px solid #121a21;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.live-party-pill-faces img:first-child { margin-left: 0; }
+.live-party-pill-avatar--friends.has-faces { width: auto; padding: 0 4px; background: transparent; box-shadow: none; }
+:root:not([data-theme="light"]) .live-party-pill.is-friends .live-party-pill-title { font-size: 0.86rem; font-weight: 700; }
+:root:not([data-theme="light"]) .live-party-pill.is-friends .live-party-pill-sub { font-size: 0.7rem; color: var(--text-secondary); }
+
+/* ── Polish pass: crisp presence colours ──
+   Rows no longer fade as a whole (that washed out avatars and logos); only
+   offline rows dim their avatar and text. Status labels are plain coloured
+   text — the avatar dot already carries the colour. */
+:root:not([data-theme="light"]) .live-party-widget {
+  --presence-game: #2fd6a3;
+  --presence-online: #4fb3ff;
+  --presence-away: #f2b84b;
+  --presence-dnd: #ff5a67;
+  --presence-mobile: #8fc3e3;
+  --presence-chat: #b39cff;
+  --presence-offline: #6b7680;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row { --presence: var(--presence-online); opacity: 1; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-game { --presence: var(--presence-game); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-away { --presence: var(--presence-away); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-dnd { --presence: var(--presence-dnd); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-mobile { --presence: var(--presence-mobile); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-chat { --presence: var(--presence-chat); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline { --presence: var(--presence-offline); }
+
+/* Same card for every state; in-match rows get a faint lift of their colour. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-online,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-away,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-mobile,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-chat {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: #151d24;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-game {
+  border-color: color-mix(in srgb, var(--presence-game) 22%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--presence-game) 9%, #151d24), #151d24 70%);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline {
+  border-color: rgba(255, 255, 255, 0.045);
+  background: #11181e;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:hover {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: #1a232b;
+}
+
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-name { color: #f1f4f6; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-sub { color: #93a0ab; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-game .live-party-friend-sub { color: #b9c4cc; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-name { color: #aab4bc; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-sub { color: #6f7b85; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-avatar > :not(.live-party-friend-dot) {
+  opacity: 0.55;
+  filter: grayscale(0.7);
+}
+
+/* Status label: coloured text, no box. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row .live-party-friend-state,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-state,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-chat .live-party-friend-state {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--presence);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-state { color: #6f7b85; font-weight: 550; }
+
+/* Avatar dot: solid colour with a ring cut from the row, readable at a glance. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-avatar .live-party-friend-dot {
+  right: -3px;
+  bottom: -3px;
+  width: 11px;
+  height: 11px;
+  border: 2.5px solid #151d24;
+  border-radius: 50%;
+  background: var(--presence);
+  box-shadow: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-game .live-party-friend-dot { box-shadow: 0 0 8px color-mix(in srgb, var(--presence-game) 60%, transparent); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-offline .live-party-friend-dot { border-color: #11181e; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:hover .live-party-friend-dot { border-color: #1a232b; }
+
+/* Messages list uses the same presence colours. */
+:root:not([data-theme="light"]) .live-party-chat-avatar > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar > i { background: #6b7680; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-game > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-game > i { background: #2fd6a3; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-online > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-online > i { background: #4fb3ff; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-away > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-away > i { background: #f2b84b; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-dnd > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-dnd > i { background: #ff5a67; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-mobile > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-mobile > i { background: #8fc3e3; }
+:root:not([data-theme="light"]) .live-party-chat-avatar.is-chat > i,
+:root:not([data-theme="light"]) .live-party-chat-header-avatar.is-chat > i { background: #b39cff; }
+
+/* Messages: readable secondary text and cleaner bubble colours. */
+:root:not([data-theme="light"]) .live-party-chat-conversations button small { color: #8b97a1; }
+:root:not([data-theme="light"]) .live-party-chat-conversations > button.is-active small { color: #a7b2ba; }
+:root:not([data-theme="light"]) .live-party-chat-row-meta time,
+:root:not([data-theme="light"]) .live-party-chat-group-label,
+:root:not([data-theme="light"]) .live-party-chat-list header small,
+:root:not([data-theme="light"]) .live-party-chat-archive-status,
+:root:not([data-theme="light"]) .live-party-chat-date span,
+:root:not([data-theme="light"]) .live-party-chat-message small { color: #7d8993; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small { color: #8b97a1; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small b { color: #6b7680; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-game b { color: #2fd6a3; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-online b { color: #4fb3ff; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-away b { color: #f2b84b; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-dnd b { color: #ff5a67; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-mobile b { color: #8fc3e3; }
+:root:not([data-theme="light"]) .live-party-chat-view > header small.is-chat b { color: #b39cff; }
+:root:not([data-theme="light"]) .live-party-chat-message > div { background: #222c34; color: #eef1f3; }
+:root:not([data-theme="light"]) .live-party-chat-message.is-outgoing > div { background: #d63c4b; color: #fff; }
+
+/* Group labels scroll with the list instead of floating over the rows. */
+.live-party-chat-group-label { position: static; }
+
+/* ── Polish pass 3: character, hierarchy, less chrome ──
+   Each online friend's wide card art fades in behind the right of their row,
+   so the list carries their colours instead of identical grey boxes. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.has-art::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 30%;
+  z-index: 0;
+  background: var(--row-art) right center / cover no-repeat;
+  opacity: 0.34;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 75%);
+  mask-image: linear-gradient(90deg, transparent, #000 75%);
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.has-art:hover::after { opacity: 0.5; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-mobile.has-art::after { opacity: 0.18; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row > * { position: relative; z-index: 1; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.has-art .live-party-friend-state { text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9); }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-game {
+  box-shadow: inset 2px 0 0 var(--presence-game);
+}
+
+/* Profile button only when it is wanted. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row .live-party-profile-button {
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  background: rgba(8, 12, 16, 0.6);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:hover .live-party-profile-button,
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row:focus-within .live-party-profile-button { opacity: 1; }
+
+/* Header: readable sans labels, a stronger title. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-kicker {
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-title { margin-top: 0.3rem; font-size: 1.12rem; font-weight: 750; letter-spacing: -0.01em; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-meta span {
+  border: 0;
+  background: none;
+  color: #6f7b85;
+  font: 600 0.66rem/1 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Stats: one quiet strip, numbers first, colour only where it means something. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview {
+  gap: 0;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: #151d24;
+  overflow: hidden;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat {
+  flex-direction: column-reverse;
+  gap: 0.2rem;
+  padding: 0.65rem 0.8rem;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat:last-child { border-right: 0; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat span {
+  color: #7d8993;
+  font: 600 0.7rem/1 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat strong {
+  color: #f1f4f6;
+  font-size: 1.3rem;
+  font-weight: 750;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview-stat.is-accent strong { color: var(--presence-game); }
+
+/* Section titles read as titles, counts stay quiet. */
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header strong {
+  color: #c9d1d7;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-presence-section > header span {
+  padding: 0;
+  background: none;
+  color: #6f7b85;
+  font-size: 0.72rem;
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.has-art::after {
+  inset: 0 0 0 38%;
+  opacity: 0.26;
+  -webkit-mask-image: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.55) 45%, #000);
+  mask-image: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.55) 45%, #000);
+}
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.has-art:hover::after { opacity: 0.4; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-friend-row.is-mobile.has-art::after { opacity: 0.14; }
+:root:not([data-theme="light"]) .live-party-widget .live-party-overview .live-party-overview-stat { padding: 0.7rem 0.9rem; }
+
+/* A score is the row's second focal point; reserve its width between rounds. */
+.live-party-friend-match {
+  flex: 0 0 auto;
+  min-width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  color: var(--text-primary);
+}
+.live-party-friend-match-label {
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  line-height: 1.2;
+}
+.live-party-friend-match strong {
+  font-family: "Bahnschrift", "DIN Alternate", var(--font-mono, monospace);
+  font-size: 1.12rem;
+  font-weight: 650;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.live-party-friend-scroll.is-compact .live-party-friend-match { gap: 0; }
+.live-party-friend-scroll.is-compact .live-party-friend-match-label { font-size: 0.6rem; }
+.live-party-friend-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* One-click party invite on friend rows: same height as the profile button, tinted with the accent. */
+.live-party-invite-button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 16%, rgba(16, 35, 48, .86)); color: color-mix(in srgb, var(--accent) 45%, #fff);
+  font: inherit; font-size: .6rem; font-weight: 800; cursor: pointer; transition: background .15s ease, border-color .15s ease;
+}
+.live-party-invite-button svg { width: 13px; height: 13px; }
+.live-party-invite-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 30%, rgba(16, 35, 48, .86)); border-color: var(--accent); }
+.live-party-invite-button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+.live-party-invite-button.is-sending { opacity: .7; cursor: progress; }
+.live-party-invite-button.is-sent { border-color: rgba(52, 227, 184, .45); background: rgba(52, 227, 184, .12); color: #8ff0d4; cursor: default; }
+.live-party-invite-button.is-error { border-color: rgba(255, 138, 150, .5); background: rgba(255, 64, 85, .1); color: #ff8a96; }
+.live-party-friend-scroll.is-compact .live-party-invite-button span { display: none; }
+.live-party-friend-scroll.is-compact .live-party-invite-button { width: 24px; padding: 0; justify-content: center; }
+[data-theme="light"] .live-party-invite-button { background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface)); color: color-mix(in srgb, var(--accent) 80%, #000); }
+[data-theme="light"] .live-party-invite-button.is-sent { color: #0f8a6c; }
+@media (prefers-reduced-motion: reduce) { .live-party-invite-button { transition: none; } }

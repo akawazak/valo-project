@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"backend/riothttp"
 	"backend/tracking"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/truearken/valclient/valclient"
@@ -26,6 +29,8 @@ type LiveMatchResponse struct {
 	EnemyTeam      []*LivePlayer `json:"enemyTeam"`
 	Source         string        `json:"source,omitempty"` // "local" or "remote"
 	Error          string        `json:"error,omitempty"`
+	RetryAt        int64         `json:"retryAt,omitempty"`
+	Stale          bool          `json:"stale,omitempty"`
 }
 
 type LivePlayer struct {
@@ -44,7 +49,15 @@ type LivePlayer struct {
 	HistoryPartyMatches    int                          `json:"historyPartyMatches,omitempty"`
 	HistoryPartyLastSeenAt int64                        `json:"historyPartyLastSeenAt,omitempty"`
 	CachedEvidence         *tracking.LivePlayerEvidence `json:"cachedEvidence,omitempty"`
-	TeamID                 string                       `json:"teamId,omitempty"`
+	// Encounters is the viewer's cached history with this player.
+	Encounters *tracking.Encounter `json:"encounters,omitempty"`
+	TeamID     string              `json:"teamId,omitempty"`
+}
+
+type liveMatchCacheEntry struct {
+	Response      LiveMatchResponse
+	ExpiresAt     time.Time
+	LastSuccessAt time.Time
 }
 
 type CoreGamePlayerResponse struct {
@@ -81,9 +94,27 @@ func getCoreGamePlayer(c *valclient.ValClient) (*CoreGamePlayerResponse, error) 
 	return resp, nil
 }
 
+func getLivePregamePlayer(c *valclient.ValClient) (*valclient.GetPreGamePlayerResponse, error) {
+	apiURL := c.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/pregame/v1/players/{puuid}")
+	response := new(valclient.GetPreGamePlayerResponse)
+	if err := runRiotJSON(http.MethodGet, apiURL, c.Header, nil, response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func getCoreGameMatch(c *valclient.ValClient, matchID string) (*CoreGameMatchResponse, error) {
 	url := c.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/core-game/v1/matches/{matchId}", "{matchId}", matchID)
 	resp := new(CoreGameMatchResponse)
+	if err := runRiotJSON(http.MethodGet, url, c.Header, nil, resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func getPreGameMatchByID(c *valclient.ValClient, matchID string) (*valclient.GetPreGameMatchResponse, error) {
+	url := c.BuildUrl("https://glz-{region}-1.{shard}.a.pvp.net/pregame/v1/matches/{matchId}", "{matchId}", matchID)
+	resp := new(valclient.GetPreGameMatchResponse)
 	if err := runRiotJSON(http.MethodGet, url, c.Header, nil, resp); err != nil {
 		return nil, err
 	}
@@ -96,10 +127,10 @@ func (h *Handler) GetLiveMatch(w http.ResponseWriter, r *http.Request) {
 		h.returnAny(w, LiveMatchResponse{Phase: "none", Error: errString(err)})
 		return
 	}
-	response := h.fetchLiveMatch(val, source)
-	if response.Phase == "none" && source == "remote" && val.Player != nil {
+	response := h.fetchLiveMatchCached(val, source)
+	if response.Phase == "none" && response.RetryAt == 0 && source == "remote" && val.Player != nil {
 		if local := h.localClientForPuuid(val.Player.Uuid); local != nil {
-			if fallback := h.fetchLiveMatch(local, "local"); fallback.Phase != "none" || response.Error != "" {
+			if fallback := h.fetchLiveMatchCached(local, "local"); fallback.Phase != "none" || response.Error != "" {
 				response = fallback
 			}
 		}
@@ -115,22 +146,360 @@ func (h *Handler) RefreshLiveMatchRanks(w http.ResponseWriter, r *http.Request) 
 		h.returnAny(w, LiveMatchResponse{Phase: "none", Error: errString(err)})
 		return
 	}
-	response := h.fetchLiveMatch(val, source)
-	if response.Phase != "none" {
+	response := h.fetchLiveMatchCached(val, source)
+	if response.Phase != "none" && response.RetryAt <= time.Now().UnixMilli() {
 		refreshLivePlayerRanks(val, &response)
+		h.storeLiveMatchCache(val, source, response)
 	}
 	h.returnAny(w, response)
 }
 
-// ScanLiveMatchLikelyStacks preserves the explicit rescan action while using
-// only the durable completed-match cache. It never spends Riot requests.
+// ScanLiveMatchLikelyStacks is deliberately manual. It checks one small recent
+// history page per visible player, persists a bounded number of shared matches,
+// then lets the normal cache evidence confirm actual Riot party IDs.
 func (h *Handler) ScanLiveMatchLikelyStacks(w http.ResponseWriter, r *http.Request) {
 	val, source, err := h.getLiveMatchClient(r)
 	if err != nil || val == nil {
 		h.returnAny(w, LiveMatchResponse{Phase: "none", Error: errString(err)})
 		return
 	}
-	h.returnAny(w, h.fetchLiveMatch(val, source))
+	response := h.fetchLiveMatchCached(val, source)
+	if response.Phase != "none" && response.RetryAt <= time.Now().UnixMilli() {
+		response.Error = ""
+		if scanErr := h.scanLiveMatchLikelyStacks(val, &response); scanErr != nil {
+			response.Error = scanErr.Error()
+			var apiErr *riothttp.APIError
+			if errors.As(scanErr, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+				delay := apiErr.RetryAfter
+				if delay <= 0 {
+					delay = 30 * time.Second
+				}
+				response.RetryAt = time.Now().Add(delay).UnixMilli()
+			}
+		}
+		h.enrichLiveFromCache(&response)
+		h.storeLiveMatchCache(val, source, response)
+	}
+	h.returnAny(w, response)
+}
+
+type liveHistoryItem struct {
+	MatchID string `json:"MatchID"`
+}
+
+type liveHistoryResponse struct {
+	History []liveHistoryItem `json:"History"`
+}
+
+type sharedHistoryCandidate struct {
+	MatchID     string
+	PlayerCount int
+	BestIndex   int
+}
+
+func rankSharedHistoryCandidates(team []*LivePlayer, histories map[string][]string) []sharedHistoryCandidate {
+	type candidateCount struct {
+		players   int
+		bestIndex int
+	}
+	counts := make(map[string]candidateCount)
+	for _, player := range team {
+		if player == nil || player.Puuid == "" || player.PartyGroup == "your-party" {
+			continue
+		}
+		seen := make(map[string]struct{})
+		for index, matchID := range histories[strings.ToLower(player.Puuid)] {
+			if matchID == "" {
+				continue
+			}
+			if _, duplicate := seen[matchID]; duplicate {
+				continue
+			}
+			seen[matchID] = struct{}{}
+			count := counts[matchID]
+			count.players++
+			if count.players == 1 || index < count.bestIndex {
+				count.bestIndex = index
+			}
+			counts[matchID] = count
+		}
+	}
+	candidates := make([]sharedHistoryCandidate, 0, len(counts))
+	for matchID, count := range counts {
+		if count.players >= 2 {
+			candidates = append(candidates, sharedHistoryCandidate{
+				MatchID:     matchID,
+				PlayerCount: count.players,
+				BestIndex:   count.bestIndex,
+			})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].PlayerCount != candidates[j].PlayerCount {
+			return candidates[i].PlayerCount > candidates[j].PlayerCount
+		}
+		if candidates[i].BestIndex != candidates[j].BestIndex {
+			return candidates[i].BestIndex < candidates[j].BestIndex
+		}
+		return candidates[i].MatchID < candidates[j].MatchID
+	})
+	return candidates
+}
+
+func interleaveSharedCandidates(teams ...[]sharedHistoryCandidate) []sharedHistoryCandidate {
+	const maxDetails = 4
+	selected := make([]sharedHistoryCandidate, 0, maxDetails)
+	seen := make(map[string]struct{}, maxDetails)
+	for index := 0; len(selected) < maxDetails; index++ {
+		added := false
+		for _, candidates := range teams {
+			if index >= len(candidates) {
+				continue
+			}
+			added = true
+			candidate := candidates[index]
+			if _, duplicate := seen[candidate.MatchID]; duplicate {
+				continue
+			}
+			seen[candidate.MatchID] = struct{}{}
+			selected = append(selected, candidate)
+			if len(selected) == maxDetails {
+				break
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return selected
+}
+
+func fetchRecentLiveHistory(val *valclient.ValClient, puuid string) ([]string, error) {
+	apiURL := fmt.Sprintf(
+		"https://pd.%s.a.pvp.net/match-history/v1/history/%s?startIndex=0&endIndex=10",
+		val.Shard,
+		url.PathEscape(puuid),
+	)
+	var response liveHistoryResponse
+	if err := runRiotJSON(http.MethodGet, apiURL, val.Header, nil, &response); err != nil {
+		return nil, err
+	}
+	matchIDs := make([]string, 0, len(response.History))
+	for _, item := range response.History {
+		if item.MatchID != "" {
+			matchIDs = append(matchIDs, item.MatchID)
+		}
+	}
+	return matchIDs, nil
+}
+
+func (h *Handler) scanLiveMatchLikelyStacks(val *valclient.ValClient, response *LiveMatchResponse) error {
+	if val == nil || val.Player == nil || response == nil {
+		return nil
+	}
+	db, err := h.trackingDB()
+	if err != nil {
+		return fmt.Errorf("open match cache: %w", err)
+	}
+
+	histories := make(map[string][]string)
+	var firstErr error
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player == nil || player.Puuid == "" || player.PartyGroup == "your-party" {
+				continue
+			}
+			key := strings.ToLower(player.Puuid)
+			if _, fetched := histories[key]; fetched {
+				continue
+			}
+			matchIDs, fetchErr := fetchRecentLiveHistory(val, player.Puuid)
+			if fetchErr != nil {
+				if strings.Contains(fetchErr.Error(), "status 429") {
+					return fmt.Errorf("Riot rate limit reached; saved party evidence is still shown: %w", fetchErr)
+				}
+				if firstErr == nil {
+					firstErr = fetchErr
+				}
+				continue
+			}
+			histories[key] = matchIDs
+		}
+	}
+
+	candidates := interleaveSharedCandidates(
+		rankSharedHistoryCandidates(response.AllyTeam, histories),
+		rankSharedHistoryCandidates(response.EnemyTeam, histories),
+	)
+	for _, candidate := range candidates {
+		cached, cacheErr := tracking.GetMatchFromCache(db, candidate.MatchID, "")
+		if cacheErr != nil {
+			return cacheErr
+		}
+		if cached != nil {
+			continue
+		}
+		apiURL := fmt.Sprintf(
+			"https://pd.%s.a.pvp.net/match-details/v1/matches/%s",
+			val.Shard,
+			url.PathEscape(candidate.MatchID),
+		)
+		raw, fetchErr := runRiotRaw(http.MethodGet, apiURL, val.Header, nil)
+		if fetchErr != nil {
+			if strings.Contains(fetchErr.Error(), "status 429") {
+				return fmt.Errorf("Riot rate limit reached; matches saved before the limit are still shown: %w", fetchErr)
+			}
+			if firstErr == nil {
+				firstErr = fetchErr
+			}
+			continue
+		}
+		if insertErr := tracking.InsertMatchDetails(db, h.trackingAppDir, candidate.MatchID, val.Player.Uuid, raw, nil); insertErr != nil && firstErr == nil {
+			firstErr = insertErr
+		}
+	}
+
+	seenPlayers := make(map[string]struct{})
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player == nil || player.Puuid == "" {
+				continue
+			}
+			puuid := strings.ToLower(player.Puuid)
+			if _, seen := seenPlayers[puuid]; seen {
+				continue
+			}
+			seenPlayers[puuid] = struct{}{}
+			if aggregateErr := tracking.RecomputeAggregates(db, puuid); aggregateErr != nil && firstErr == nil {
+				firstErr = aggregateErr
+			}
+		}
+	}
+	if firstErr != nil {
+		return fmt.Errorf("likely-stack scan incomplete: %w", firstErr)
+	}
+	return nil
+}
+
+func liveMatchCacheTTL(phase string) time.Duration {
+	switch phase {
+	case "pregame":
+		return 8 * time.Second
+	case "coregame":
+		return 20 * time.Second
+	default:
+		return 15 * time.Second
+	}
+}
+
+func liveMatchCacheKey(val *valclient.ValClient, source string) string {
+	if val == nil || val.Player == nil {
+		return source
+	}
+	return source + ":" + strings.ToLower(val.Player.Uuid)
+}
+
+// fetchLiveMatchCached serializes cache misses. One global lock is enough for
+// the app's single active account; split it per account only if concurrent
+// multi-account live polling is ever added.
+func (h *Handler) fetchLiveMatchCached(val *valclient.ValClient, source string) LiveMatchResponse {
+	key := liveMatchCacheKey(val, source)
+	h.liveMatchMu.Lock()
+	defer h.liveMatchMu.Unlock()
+	if h.liveMatchCache == nil {
+		h.liveMatchCache = make(map[string]liveMatchCacheEntry)
+	}
+	if cached, ok := h.liveMatchCache[key]; ok && time.Now().Before(cached.ExpiresAt) {
+		response := cloneLiveMatchResponse(&cached.Response)
+		if response.RetryAt > time.Now().UnixMilli() {
+			if response.Stale && time.Since(cached.LastSuccessAt) >= 2*time.Minute {
+				return LiveMatchResponse{Phase: "none", Source: source, Error: response.Error, RetryAt: response.RetryAt}
+			}
+			return response
+		}
+		clearCachedLiveEvidence(&response)
+		h.enrichLiveFromCache(&response)
+		if response.Phase == "coregame" {
+			h.enrichLiveScore(val, source, &response)
+		}
+		return response
+	}
+	response := h.fetchLiveMatch(val, source)
+	entry := nextLiveMatchCacheEntry(h.liveMatchCache[key], response, time.Now())
+	h.liveMatchCache[key] = entry
+	return cloneLiveMatchResponse(&entry.Response)
+}
+
+// Failed reads are not evidence that a match ended. Keep a recent roster while
+// backing off, but expire it after two minutes so an old game cannot linger.
+func nextLiveMatchCacheEntry(previous liveMatchCacheEntry, response LiveMatchResponse, now time.Time) liveMatchCacheEntry {
+	lastSuccess := previous.LastSuccessAt
+	if response.Phase == "none" && response.Error != "" && response.RetryAt > 0 && previous.Response.Phase != "none" && previous.Response.MatchID != "" && now.Sub(lastSuccess) < 2*time.Minute {
+		failure := response
+		response = cloneLiveMatchResponse(&previous.Response)
+		response.Error, response.RetryAt, response.Stale = failure.Error, failure.RetryAt, true
+		response.TimeLeft = 0
+		response.ScoreAvailable = false
+	} else if response.Phase != "none" && !response.Stale {
+		lastSuccess = now
+	}
+	expiresAt := now.Add(liveMatchCacheTTL(response.Phase))
+	if response.RetryAt > 0 {
+		expiresAt = time.UnixMilli(response.RetryAt)
+	}
+	return liveMatchCacheEntry{Response: cloneLiveMatchResponse(&response), ExpiresAt: expiresAt, LastSuccessAt: lastSuccess}
+}
+
+func (h *Handler) storeLiveMatchCache(val *valclient.ValClient, source string, response LiveMatchResponse) {
+	h.liveMatchMu.Lock()
+	defer h.liveMatchMu.Unlock()
+	if h.liveMatchCache == nil {
+		h.liveMatchCache = make(map[string]liveMatchCacheEntry)
+	}
+	key := liveMatchCacheKey(val, source)
+	h.liveMatchCache[key] = nextLiveMatchCacheEntry(h.liveMatchCache[key], response, time.Now())
+}
+
+func cloneLiveMatchResponse(response *LiveMatchResponse) LiveMatchResponse {
+	if response == nil {
+		return LiveMatchResponse{}
+	}
+	clone := *response
+	cloneTeam := func(team []*LivePlayer) []*LivePlayer {
+		out := make([]*LivePlayer, len(team))
+		for index, player := range team {
+			if player != nil {
+				copy := *player
+				if player.CachedEvidence != nil {
+					evidence := *player.CachedEvidence
+					copy.CachedEvidence = &evidence
+				}
+				if player.Encounters != nil {
+					encounters := *player.Encounters
+					copy.Encounters = &encounters
+				}
+				out[index] = &copy
+			}
+		}
+		return out
+	}
+	clone.AllyTeam = cloneTeam(response.AllyTeam)
+	clone.EnemyTeam = cloneTeam(response.EnemyTeam)
+	return clone
+}
+
+func clearCachedLiveEvidence(response *LiveMatchResponse) {
+	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
+		for _, player := range team {
+			if player != nil {
+				player.CachedEvidence = nil
+				player.Encounters = nil
+				player.HistoryPartyGroup = ""
+				player.HistoryPartyMatches = 0
+				player.HistoryPartyLastSeenAt = 0
+			}
+		}
+	}
 }
 
 func refreshLivePlayerRanks(val *valclient.ValClient, response *LiveMatchResponse) {
@@ -138,25 +507,26 @@ func refreshLivePlayerRanks(val *valclient.ValClient, response *LiveMatchRespons
 		return
 	}
 	seasonID := ""
-	if content, err := val.GetContent(); err == nil && content != nil {
+	var content valclient.GetContentResponse
+	contentURL := val.BuildUrl("https://shared.{shard}.a.pvp.net/content-service/v3/content")
+	if err := runRiotJSON(http.MethodGet, contentURL, val.Header, nil, &content); err == nil {
 		for _, season := range content.Seasons {
 			if season.IsActive && strings.EqualFold(string(season.Type), "act") {
 				seasonID = season.ID
 				break
 			}
 		}
+	} else {
+		var apiErr *riothttp.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests {
+			failure := liveMatchFailure(response.Source, err)
+			response.Error, response.RetryAt = failure.Error, failure.RetryAt
+			return
+		}
 	}
 
-	type result struct {
-		player   *LivePlayer
-		tier     int
-		rr       int
-		peakTier int
-	}
-	results := make(chan result, 10)
-	workers := make(chan struct{}, 2)
 	seen := make(map[string]struct{})
-	var group sync.WaitGroup
+	response.Error = ""
 	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
 		for _, player := range team {
 			if player == nil || player.Puuid == "" {
@@ -167,32 +537,24 @@ func refreshLivePlayerRanks(val *valclient.ValClient, response *LiveMatchRespons
 				continue
 			}
 			seen[key] = struct{}{}
-			group.Add(1)
-			go func(player *LivePlayer) {
-				defer group.Done()
-				workers <- struct{}{}
-				defer func() { <-workers }()
-				url := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, player.Puuid)
-				var mmr playerMMRResponse
-				if runRiotJSON(http.MethodGet, url, val.Header, nil, &mmr) != nil {
+			url := fmt.Sprintf("https://pd.%s.a.pvp.net/mmr/v1/players/%s", val.Shard, player.Puuid)
+			var mmr playerMMRResponse
+			if err := runRiotJSON(http.MethodGet, url, val.Header, nil, &mmr); err != nil {
+				failure := liveMatchFailure(response.Source, err)
+				response.Error = "Some ranks could not be refreshed."
+				if failure.RetryAt > 0 {
+					response.Error, response.RetryAt = failure.Error, failure.RetryAt
 					return
 				}
-				tier, rr, peakTier := livePlayerRankFromMMR(mmr, seasonID)
-				results <- result{player: player, tier: tier, rr: rr, peakTier: peakTier}
-			}(player)
-		}
-	}
-	go func() {
-		group.Wait()
-		close(results)
-	}()
-	for item := range results {
-		if item.tier > 0 {
-			item.player.CompetitiveTier = item.tier
-			item.player.RankedRating = item.rr
-		}
-		if item.peakTier > 0 {
-			item.player.PeakTier = item.peakTier
+				continue
+			}
+			tier, rr, peakTier := livePlayerRankFromMMR(mmr, seasonID)
+			if tier > 0 {
+				player.CompetitiveTier, player.RankedRating = tier, rr
+			}
+			if peakTier > 0 {
+				player.PeakTier = peakTier
+			}
 		}
 	}
 }
@@ -225,42 +587,68 @@ func livePlayerRankFromMMR(mmr playerMMRResponse, seasonID string) (tier, rr, pe
 
 func (h *Handler) fetchLiveMatch(val *valclient.ValClient, source string) LiveMatchResponse {
 	// 1. Try Pregame first
-	prePlayer, err := val.GetPreGamePlayer()
-	if err == nil && prePlayer != nil {
-		preMatch, err := val.GetPreGameMatch()
-		if err == nil && preMatch != nil {
+	prePlayer, pregameErr := getLivePregamePlayer(val)
+	if pregameErr == nil && prePlayer != nil {
+		preMatch, matchErr := getPreGameMatchByID(val, prePlayer.MatchID)
+		pregameErr = matchErr
+		if matchErr == nil && preMatch != nil {
 			response := h.buildPregameResponse(val, preMatch)
-			h.markCurrentParty(val, &response)
-			h.fillLiveQueueID(val, &response)
+			h.enrichLiveParty(val, &response)
 			h.enrichLiveFromCache(&response)
 			response.Source = source
 			return response
 		}
 	}
-	pregameErr := err
+	var pregameAPIError *riothttp.APIError
+	if errors.As(pregameErr, &pregameAPIError) && pregameAPIError.StatusCode == http.StatusTooManyRequests {
+		return liveMatchFailure(source, pregameErr)
+	}
 
 	// 2. Try Coregame next
-	corePlayer, err := getCoreGamePlayer(val)
-	if err == nil && corePlayer != nil {
-		coreMatch, err := getCoreGameMatch(val, corePlayer.MatchID)
-		if err == nil && coreMatch != nil {
+	corePlayer, coregameErr := getCoreGamePlayer(val)
+	if coregameErr == nil && corePlayer != nil {
+		coreMatch, matchErr := getCoreGameMatch(val, corePlayer.MatchID)
+		coregameErr = matchErr
+		if matchErr == nil && coreMatch != nil {
 			response := h.buildCoregameResponse(val, coreMatch)
-			h.markCurrentParty(val, &response)
-			h.fillLiveQueueID(val, &response)
+			h.enrichLiveParty(val, &response)
 			h.enrichLiveScore(val, source, &response)
 			h.enrichLiveFromCache(&response)
 			response.Source = source
 			return response
 		}
 	}
-	coregameErr := err
 
 	// 3. None
-	return LiveMatchResponse{
-		Phase:  "none",
-		Source: source,
-		Error:  fmt.Sprintf("pregame: %s; coregame: %s", errString(pregameErr), errString(coregameErr)),
+	if failure := liveMatchFailure(source, coregameErr); failure.Error != "" {
+		return failure
 	}
+	return liveMatchFailure(source, pregameErr)
+}
+
+func liveMatchFailure(source string, err error) LiveMatchResponse {
+	response := LiveMatchResponse{Phase: "none", Source: source}
+	if err == nil {
+		return response
+	}
+	var apiErr *riothttp.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode == http.StatusNotFound {
+			return response
+		}
+		if apiErr.StatusCode == http.StatusTooManyRequests {
+			delay := apiErr.RetryAfter
+			if delay <= 0 {
+				delay = 30 * time.Second
+			}
+			response.Error = "Riot is limiting live requests. Retrying automatically."
+			response.RetryAt = time.Now().Add(delay).UnixMilli()
+			return response
+		}
+	}
+	response.Error = "Live match information is temporarily unavailable. Retrying automatically."
+	response.RetryAt = time.Now().Add(15 * time.Second).UnixMilli()
+	return response
 }
 
 // enrichLiveFromCache adds only persistent match-history evidence. It never
@@ -294,6 +682,21 @@ func (h *Handler) enrichLiveFromCache(response *LiveMatchResponse) {
 			}
 			if evidence.LatestTier > 0 || evidence.PeakTier > 0 || evidence.Matches > 0 {
 				player.CachedEvidence = &evidence
+			}
+		}
+	}
+
+	local := ""
+	for _, player := range players {
+		if player != nil && player.IsLocal {
+			local = strings.ToLower(player.Puuid)
+		}
+	}
+	if encounters, encounterErr := tracking.GetEncounters(db, local, puuids); encounterErr == nil {
+		for puuid, encounter := range encounters {
+			if player := byPuuid[puuid]; player != nil {
+				encounter := encounter
+				player.Encounters = &encounter
 			}
 		}
 	}
@@ -365,28 +768,44 @@ func applyPresenceScore(response *LiveMatchResponse, presence SocialPresence) {
 	response.ScoreAvailable = true
 }
 
-// markCurrentParty labels only the signed-in player's own party. Live match
-// payloads do not expose every premade, so unknown groups stay unlabelled.
-// Raw Riot party IDs never leave the backend.
-func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatchResponse) {
+// enrichLiveParty fills the queue and labels only the signed-in player's own
+// party from one party snapshot. Current MMR refreshes stay manual because a
+// POST per party member on every live poll is expensive and rate-limit prone.
+func (h *Handler) enrichLiveParty(val *valclient.ValClient, response *LiveMatchResponse) {
+	if response == nil {
+		return
+	}
+	if response.QueueID == "" && isTrainingMode(response.ModeID) {
+		response.QueueID = "training"
+		return
+	}
 	current, err := getCurrentParty(val)
 	if err != nil || current == nil || current.CurrentPartyID == "" {
 		return
 	}
 	details, err := getPartyDetails(val, current.CurrentPartyID)
-	if err != nil || details == nil || len(details.Members) < 2 {
+	if err != nil || details == nil {
 		return
 	}
-	details = h.refreshPartyCompetitiveTiers(val, current.CurrentPartyID, details)
+	if response.QueueID == "" {
+		response.QueueID = details.MatchmakingData.QueueID
+		if response.QueueID == "" {
+			response.QueueID = details.QueueID
+		}
+	}
+	if len(details.Members) < 2 {
+		return
+	}
 	members := make([]string, 0, len(details.Members))
-	names := make(map[string]string, len(details.Members))
 	tiers := make(map[string]int, len(details.Members))
 	for _, member := range details.Members {
 		members = append(members, member.Subject)
-		names[strings.ToLower(member.Subject)] = h.getPlayerNameCached(val, member.Subject)
 		tiers[strings.ToLower(member.Subject)] = member.CompetitiveTier
 	}
 	markPartyMembers(response, members, "your-party")
+	// Riot's incognito flag hides strangers. A confirmed member of the signed-in
+	// player's own party can still be resolved through the party-scoped session.
+	h.enrichLivePlayerNames(val, response)
 	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
 		for _, player := range team {
 			if player != nil && player.CompetitiveTier <= 0 {
@@ -394,7 +813,6 @@ func (h *Handler) markCurrentParty(val *valclient.ValClient, response *LiveMatch
 			}
 		}
 	}
-	enrichKnownPlayerNames(response, names)
 }
 
 func enrichKnownPlayerNames(response *LiveMatchResponse, names map[string]string) {
@@ -403,7 +821,7 @@ func enrichKnownPlayerNames(response *LiveMatchResponse, names map[string]string
 	}
 	for _, team := range [][]*LivePlayer{response.AllyTeam, response.EnemyTeam} {
 		for _, player := range team {
-			if player == nil || player.IsLocal || player.Name != "Player" {
+			if player == nil || player.IsLocal || (player.Name != "Player" && !(player.Name == "Agent" && player.PartyGroup == "your-party")) {
 				continue
 			}
 			if name := names[strings.ToLower(player.Puuid)]; name != "" && name != "Player" {
@@ -426,33 +844,6 @@ func markPartyMembers(response *LiveMatchResponse, memberPuuids []string, key st
 				}
 			}
 		}
-	}
-}
-
-func (h *Handler) fillLiveQueueID(val *valclient.ValClient, response *LiveMatchResponse) {
-	if response == nil || response.QueueID != "" {
-		return
-	}
-	// Core-game exposes ModeID rather than QueueID. The Range has no normal
-	// queue, so never overwrite it with the last party queue (often Swiftplay).
-	if isTrainingMode(response.ModeID) {
-		response.QueueID = "training"
-		return
-	}
-	current, err := getCurrentParty(val)
-	if err != nil || current == nil || current.CurrentPartyID == "" {
-		return
-	}
-	details, err := getPartyDetails(val, current.CurrentPartyID)
-	if err != nil || details == nil {
-		return
-	}
-	if details.MatchmakingData.QueueID != "" {
-		response.QueueID = details.MatchmakingData.QueueID
-		return
-	}
-	if details.QueueID != "" {
-		response.QueueID = details.QueueID
 	}
 }
 
@@ -505,8 +896,9 @@ func (h *Handler) getLiveMatchClient(r *http.Request) (*valclient.ValClient, str
 }
 
 func (h *Handler) getPlayerNameCached(val *valclient.ValClient, puuid string) string {
+	key := strings.ToLower(puuid)
 	h.namesMu.RLock()
-	name, ok := h.namesCache[puuid]
+	name, ok := h.namesCache[key]
 	h.namesMu.RUnlock()
 	if ok {
 		return name
@@ -516,11 +908,60 @@ func (h *Handler) getPlayerNameCached(val *valclient.ValClient, puuid string) st
 	if err == nil && len(names) > 0 {
 		resolved := fmt.Sprintf("%s#%s", names[0].GameName, names[0].TagLine)
 		h.namesMu.Lock()
-		h.namesCache[puuid] = resolved
+		if h.namesCache == nil {
+			h.namesCache = make(map[string]string)
+		}
+		h.namesCache[key] = resolved
 		h.namesMu.Unlock()
 		return resolved
 	}
 	return "Player"
+}
+
+func (h *Handler) enrichLivePlayerNames(val *valclient.ValClient, response *LiveMatchResponse) {
+	if val == nil || response == nil {
+		return
+	}
+	players := append(append([]*LivePlayer{}, response.AllyTeam...), response.EnemyTeam...)
+	missing := make([]string, 0, len(players))
+	seen := make(map[string]struct{}, len(players))
+	h.namesMu.RLock()
+	for _, player := range players {
+		if player == nil || player.Puuid == "" || (player.Name != "Player" && !(player.Name == "Agent" && player.PartyGroup == "your-party")) {
+			continue
+		}
+		key := strings.ToLower(player.Puuid)
+		if cached := h.namesCache[key]; cached != "" {
+			player.Name = cached
+			continue
+		}
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			missing = append(missing, player.Puuid)
+		}
+	}
+	h.namesMu.RUnlock()
+	if len(missing) == 0 {
+		return
+	}
+	names, err := val.GetNames(missing)
+	if err != nil {
+		return
+	}
+	resolved := make(map[string]string, len(names))
+	for _, identity := range names {
+		name := fmt.Sprintf("%s#%s", identity.GameName, identity.TagLine)
+		resolved[strings.ToLower(identity.Subject)] = name
+	}
+	h.namesMu.Lock()
+	if h.namesCache == nil {
+		h.namesCache = make(map[string]string)
+	}
+	for puuid, name := range resolved {
+		h.namesCache[puuid] = name
+	}
+	h.namesMu.Unlock()
+	enrichKnownPlayerNames(response, resolved)
 }
 
 func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclient.GetPreGameMatchResponse) LiveMatchResponse {
@@ -532,45 +973,34 @@ func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclien
 		TimeLeft: match.PhaseTimeRemainingNS / 1000000000,
 	}
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	// Resolve Ally Team in parallel
 	if match.AllyTeam != nil {
 		resp.AllyTeam = make([]*LivePlayer, len(match.AllyTeam.Players))
 		for i := range match.AllyTeam.Players {
-			wg.Add(1)
-			go func(index int) {
-				defer wg.Done()
-				pStruct := match.AllyTeam.Players[index]
+			pStruct := match.AllyTeam.Players[i]
 
-				selection := "none"
-				if pStruct.CharacterSelectionState == valclient.CharacterSelectionStateLocked {
-					selection = "locked"
-				} else if pStruct.CharacterSelectionState != "" {
-					selection = "selected"
-				}
+			selection := "none"
+			if pStruct.CharacterSelectionState == valclient.CharacterSelectionStateLocked {
+				selection = "locked"
+			} else if pStruct.CharacterSelectionState != "" {
+				selection = "selected"
+			}
 
-				lp := &LivePlayer{
-					Puuid:           pStruct.Subject,
-					AgentID:         pStruct.CharacterID,
-					SelectionState:  selection,
-					AccountLevel:    pStruct.PlayerIdentity.AccountLevel,
-					CardID:          pStruct.PlayerIdentity.PlayerCardID,
-					IsLocal:         pStruct.Subject == val.Player.Uuid,
-					CompetitiveTier: pStruct.CompetitiveTier,
-				}
+			lp := &LivePlayer{
+				Puuid:           pStruct.Subject,
+				AgentID:         pStruct.CharacterID,
+				SelectionState:  selection,
+				AccountLevel:    pStruct.PlayerIdentity.AccountLevel,
+				CardID:          pStruct.PlayerIdentity.PlayerCardID,
+				IsLocal:         pStruct.Subject == val.Player.Uuid,
+				CompetitiveTier: pStruct.CompetitiveTier,
+			}
 
-				if pStruct.PlayerIdentity.Incognito {
-					lp.Name = "Agent"
-				} else {
-					lp.Name = h.getPlayerNameCached(val, pStruct.Subject)
-				}
-
-				mu.Lock()
-				resp.AllyTeam[index] = lp
-				mu.Unlock()
-			}(i)
+			if pStruct.PlayerIdentity.Incognito && pStruct.Subject != val.Player.Uuid {
+				lp.Name = "Agent"
+			} else {
+				lp.Name = "Player"
+			}
+			resp.AllyTeam[i] = lp
 		}
 	}
 
@@ -578,31 +1008,25 @@ func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclien
 	if match.EnemyTeam != nil && len(match.EnemyTeam.Players) > 0 {
 		resp.EnemyTeam = make([]*LivePlayer, len(match.EnemyTeam.Players))
 		for i := range match.EnemyTeam.Players {
-			wg.Add(1)
-			go func(index int) {
-				defer wg.Done()
-				pStruct := match.EnemyTeam.Players[index]
+			pStruct := match.EnemyTeam.Players[i]
 
-				selection := "none"
-				if pStruct.CharacterSelectionState == valclient.CharacterSelectionStateLocked {
-					selection = "locked"
-				} else if pStruct.CharacterSelectionState != "" {
-					selection = "selected"
-				}
+			selection := "none"
+			if pStruct.CharacterSelectionState == valclient.CharacterSelectionStateLocked {
+				selection = "locked"
+			} else if pStruct.CharacterSelectionState != "" {
+				selection = "selected"
+			}
 
-				lp := &LivePlayer{
-					Puuid:          "", // Hide PUUID
-					Name:           "Enemy",
-					AgentID:        pStruct.CharacterID,
-					SelectionState: selection,
-					AccountLevel:   0,
-					CardID:         "",
-					IsLocal:        false,
-				}
-				mu.Lock()
-				resp.EnemyTeam[index] = lp
-				mu.Unlock()
-			}(i)
+			lp := &LivePlayer{
+				Puuid:          "", // Hide PUUID
+				Name:           "Enemy",
+				AgentID:        pStruct.CharacterID,
+				SelectionState: selection,
+				AccountLevel:   0,
+				CardID:         "",
+				IsLocal:        false,
+			}
+			resp.EnemyTeam[i] = lp
 		}
 	} else if match.EnemyTeamSize > 0 {
 		// Populate placeholders if individual enemy array isn't returned
@@ -624,7 +1048,7 @@ func (h *Handler) buildPregameResponse(val *valclient.ValClient, match *valclien
 		}
 	}
 
-	wg.Wait()
+	h.enrichLivePlayerNames(val, &resp)
 	return resp
 }
 
@@ -648,41 +1072,31 @@ func (h *Handler) buildCoregameResponse(val *valclient.ValClient, match *CoreGam
 		}
 	}
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
 	for i := range match.Players {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			playerInfo := match.Players[index]
+		playerInfo := match.Players[i]
 
-			lp := &LivePlayer{
-				Puuid:          playerInfo.Subject,
-				AgentID:        playerInfo.CharacterID,
-				SelectionState: "locked", // In game all are locked
-				AccountLevel:   playerInfo.PlayerIdentity.AccountLevel,
-				CardID:         playerInfo.PlayerIdentity.PlayerCardID,
-				IsLocal:        playerInfo.Subject == val.Player.Uuid,
-				TeamID:         playerInfo.TeamID,
-			}
+		lp := &LivePlayer{
+			Puuid:          playerInfo.Subject,
+			AgentID:        playerInfo.CharacterID,
+			SelectionState: "locked", // In game all are locked
+			AccountLevel:   playerInfo.PlayerIdentity.AccountLevel,
+			CardID:         playerInfo.PlayerIdentity.PlayerCardID,
+			IsLocal:        playerInfo.Subject == val.Player.Uuid,
+			TeamID:         playerInfo.TeamID,
+		}
 
-			if playerInfo.PlayerIdentity.Incognito && playerInfo.Subject != val.Player.Uuid {
-				lp.Name = "Agent"
-			} else {
-				lp.Name = h.getPlayerNameCached(val, playerInfo.Subject)
-			}
+		if playerInfo.PlayerIdentity.Incognito && playerInfo.Subject != val.Player.Uuid {
+			lp.Name = "Agent"
+		} else {
+			lp.Name = "Player"
+		}
 
-			mu.Lock()
-			if playerInfo.TeamID == localTeam {
-				resp.AllyTeam = append(resp.AllyTeam, lp)
-			} else {
-				resp.EnemyTeam = append(resp.EnemyTeam, lp)
-			}
-			mu.Unlock()
-		}(i)
+		if playerInfo.TeamID == localTeam {
+			resp.AllyTeam = append(resp.AllyTeam, lp)
+		} else {
+			resp.EnemyTeam = append(resp.EnemyTeam, lp)
+		}
 	}
-
-	wg.Wait()
+	h.enrichLivePlayerNames(val, &resp)
 	return resp
 }

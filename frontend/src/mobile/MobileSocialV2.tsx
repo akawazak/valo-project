@@ -24,7 +24,8 @@ import {
   type SocialPresence,
   type SocialStatusResponse,
 } from "@/services/api";
-import { presenceActivity, presenceState, productName, queueName } from "@/features/party/presence";
+import { lastActiveAt, presenceActivity, presenceState, productName, queueName } from "@/features/party/presence";
+import { useQueues } from "@/lib/gameMeta";
 import {
   MobileBackHeader,
   MobileDataLoading,
@@ -407,6 +408,7 @@ export default function MobileSocialV2({
   onInitialTargetConsumed?: () => void;
   onUnreadCountChange?: (count: number) => void;
 }) {
+  useQueues(); // queue names for presence labels
   const { activeAccount, playerCards } = useData();
   const [social, setSocial] = useState<SocialStatusResponse | null>(null);
   const [party, setParty] = useState<PartyStatusResponse | null>(null);
@@ -594,6 +596,10 @@ export default function MobileSocialV2({
       if (groupOrder) return groupOrder;
       const unreadOrder = right.conversation.unreadCount - left.conversation.unreadCount;
       if (unreadOrder) return unreadOrder;
+      if (left.group === "offline") {
+        const onlineOrder = lastActiveAt(right.presence) - lastActiveAt(left.presence);
+        if (onlineOrder) return onlineOrder;
+      }
       const messageOrder = (right.conversation.latestMessage?.timestamp || 0) - (left.conversation.latestMessage?.timestamp || 0);
       return messageOrder || left.name.localeCompare(right.name);
     });

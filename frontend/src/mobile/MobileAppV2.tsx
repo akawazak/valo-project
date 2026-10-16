@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useData } from "@/context/DataContext";
-import { getPlayerLoadoutData, type LiveMatchResponse } from "@/services/api";
+import { captureAccountRequest, getPlayerLoadoutData, type LiveMatchResponse } from "@/services/api";
 import type { RiotAccount } from "@/lib/types";
 import MobileArsenalV2 from "./MobileArsenalV2";
 import MobileHomeV2 from "./MobileHomeV2";
@@ -57,6 +57,7 @@ export default function MobileAppV2() {
   const [renewingPuuid, setRenewingPuuid] = useState("");
   const [renewError, setRenewError] = useState("");
   const [error, setError] = useState("");
+  const [pendingAccountDelete, setPendingAccountDelete] = useState<{ puuid: string; name: string; deadline: number; committing?: boolean } | null>(null);
   const [homeReadyAccount, setHomeReadyAccount] = useState("");
   const [preloadStage, setPreloadStage] = useState(0);
   const subpageOpen = liveMatch !== undefined || Boolean(profileTarget);
@@ -64,6 +65,15 @@ export default function MobileAppV2() {
   useEffect(() => {
     saveMobilePreferences(preferences);
   }, [preferences]);
+
+  useEffect(() => {
+    if (!pendingAccountDelete || pendingAccountDelete.committing) return;
+    const timer = window.setTimeout(() => {
+      setPendingAccountDelete((current) => current ? { ...current, committing: true } : null);
+      void handleDeleteAccount(pendingAccountDelete.puuid).catch(() => undefined).finally(() => setPendingAccountDelete(null));
+    }, Math.max(0, pendingAccountDelete.deadline - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [handleDeleteAccount, pendingAccountDelete]);
 
   const handleHomeInitialLoadSettled = useCallback((accountPuuid: string) => {
     setHomeReadyAccount(accountPuuid);
@@ -78,8 +88,14 @@ export default function MobileAppV2() {
   }, [tab]);
 
   useEffect(() => {
-    if (!activeAccount) return;
-    void getPlayerLoadoutData().then((value) => setCardId(value.identity?.playerCardId || "")).catch(() => undefined);
+    setCardId('');
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
+    let cancelled = false;
+    void getPlayerLoadoutData(request.owner).then((value) => {
+      if (!cancelled && request.isCurrent()) setCardId(value.identity?.playerCardId || "");
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, [activeAccount]);
 
   useEffect(() => {
@@ -232,6 +248,12 @@ export default function MobileAppV2() {
         </header>
       ) : null}
       {error ? <div className="mv2-global-error">{error}<button type="button" onClick={() => setError("")}><MobileIcon name="close" /></button></div> : null}
+      {pendingAccountDelete ? (
+        <div className="mv2-toast mv2-account-removal" role="status">
+          <span>{pendingAccountDelete.committing ? `Removing ${pendingAccountDelete.name}…` : `${pendingAccountDelete.name} removed`}</span>
+          {!pendingAccountDelete.committing ? <button type="button" onClick={() => setPendingAccountDelete(null)}>Undo</button> : null}
+        </div>
+      ) : null}
       <main className={`mv2-page${tab === "home" && !subpageOpen ? "" : " mv2-page-status-safe"}`}>{page}</main>
 
       {!subpageOpen ? (
@@ -314,13 +336,11 @@ export default function MobileAppV2() {
                 if (!/cancel/i.test(text)) setError(text);
               }
             }}><MobileIcon name="plus" />Add Riot account</button>
-            <button type="button" className="mv2-sheet-danger" onClick={async () => {
-              try {
-                await handleDeleteAccount(activeAccount.puuid);
-                setAccountOpen(false);
-              } catch {
-                // DataContext already surfaced the cleanup failure.
+            <button type="button" className="mv2-sheet-danger" onClick={() => {
+              if (!pendingAccountDelete) {
+                setPendingAccountDelete({ puuid: activeAccount.puuid, name: activeAccount.gameName, deadline: Date.now() + 5_000 });
               }
+              setAccountOpen(false);
             }}>Remove current account</button>
           </section>
         </MobileSheetLayer>

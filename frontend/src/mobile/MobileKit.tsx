@@ -3,6 +3,7 @@
 import { CSSProperties, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { fetchCachedPublicJson } from "@/services/api";
 import { toAppErrorInfo } from "@/lib/errors";
+import { queueLabel } from "@/lib/gameMeta";
 import type {
   Chroma,
   ContentTier,
@@ -10,6 +11,8 @@ import type {
   LoadoutItemV1,
   Skin,
   SprayAsset,
+  ExpressionSlot,
+  FlexAsset,
   StorefrontOffer,
   Weapon,
 } from "@/lib/types";
@@ -82,6 +85,8 @@ export type MobileSprayWheelSlot = {
   id: string;
   name: string;
   spray?: SprayAsset;
+  flex?: FlexAsset;
+  expression?: ExpressionSlot;
 };
 
 export function MobileSprayWheel({
@@ -99,17 +104,18 @@ export function MobileSprayWheel({
       {positions.map((position, index) => {
         const slot = slots[index];
         if (!slot) return <span className={`mv2-spray-wheel-slot ${position}`} key={position} />;
-        const icon = slot.spray?.fullTransparentIcon || slot.spray?.fullIcon || slot.spray?.displayIcon;
+        const icon = slot.spray?.fullTransparentIcon || slot.spray?.fullIcon || slot.spray?.displayIcon || slot.flex?.displayIcon;
+        const name = slot.spray?.displayName || slot.flex?.displayName || (slot.expression ? "Equipped expression (artwork unavailable)" : "Empty");
         const Component = onSelect ? "button" : "span";
         return (
           <Component
-            className={`mv2-spray-wheel-slot ${position}${slot.spray ? " equipped" : " empty"}`}
+            className={`mv2-spray-wheel-slot ${position}${slot.spray || slot.flex || slot.expression ? " equipped" : " empty"}`}
             key={slot.id}
             {...(onSelect ? { type: "button" as const, onClick: () => onSelect(slot) } : {})}
-            aria-label={`${slot.name}: ${slot.spray?.displayName || "empty"}`}
-            title={`${slot.name}: ${slot.spray?.displayName || "Empty"}`}
+            aria-label={`${slot.name}: ${name}`}
+            title={`${slot.name}: ${name}`}
           >
-            {icon ? <img src={icon} alt="" /> : <MobileIcon name="plus" size={compact ? 18 : 23} />}
+            {icon ? <img src={icon} alt="" /> : slot.expression ? <span>Equipped</span> : <MobileIcon name="plus" size={compact ? 18 : 23} />}
             <small>{slot.name}</small>
           </Component>
         );
@@ -569,19 +575,7 @@ export function formatRelative(timestamp: number) {
 }
 
 export function formatQueue(value?: string) {
-  const key = (value || "").toLowerCase();
-  const labels: Record<string, string> = {
-    competitive: "Competitive",
-    unrated: "Unrated",
-    swiftplay: "Swiftplay",
-    spikerush: "Spike Rush",
-    deathmatch: "Deathmatch",
-    teamdeathmatch: "Team Deathmatch",
-    hurm: "Team Deathmatch",
-    premier: "Premier",
-    custom: "Custom",
-  };
-  return labels[key] || (value ? value.charAt(0).toUpperCase() + value.slice(1) : "VALORANT");
+  return queueLabel(value) || "VALORANT";
 }
 
 type PublicMap = { uuid?: string; displayName?: string; splash?: string; displayIcon?: string; mapUrl?: string };

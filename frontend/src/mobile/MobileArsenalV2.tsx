@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useData } from "@/context/DataContext";
-import { applyLoadout, getPlayerLoadoutData } from "@/services/api";
+import { applyLoadout, captureAccountRequest, getPlayerLoadoutData } from "@/services/api";
 import type { Chroma, GunBuddy, LoadoutItemV1, Skin, Weapon } from "@/lib/types";
 import {
   MobileBackHeader,
@@ -48,7 +48,7 @@ export function MobileWeaponEditor({
   onBack: () => void;
   onCommit: (value: LoadoutItemV1) => Promise<void> | void;
 }) {
-  const { allBuddies, ownedBuddyIDs, ownedChromaIDs, ownedLevelIDs } = useData();
+  const { activeAccount, allBuddies, ownedBuddyIDs, ownedChromaIDs, ownedLevelIDs } = useData();
   const [draft, setDraft] = useState<LoadoutItemV1>(value);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -99,15 +99,17 @@ export function MobileWeaponEditor({
   };
 
   const commit = async () => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusy(true);
     setError("");
     try {
       await onCommit(draft);
-      setSaved(true);
+      if (request.isCurrent()) setSaved(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save this weapon.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not save this weapon.");
     } finally {
-      setBusy(false);
+      if (request.isCurrent()) setBusy(false);
     }
   };
 
@@ -189,28 +191,43 @@ export function MobileWeaponEditor({
 }
 
 export default function MobileArsenalV2() {
-  const { weapons } = useData();
+  const { activeAccount, weapons } = useData();
   const [loadout, setLoadout] = useState<Record<string, LoadoutItemV1>>({});
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadoutAvailable, setLoadoutAvailable] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const ownerPuuid = activeAccount?.puuid;
+  const ownerRegion = activeAccount?.region ?? '';
 
   const refresh = useCallback(async () => {
+    const request = captureAccountRequest(ownerPuuid ? { puuid: ownerPuuid, region: ownerRegion } : null);
+    if (!request?.isCurrent()) return;
     setLoading(true);
     setError(null);
     try {
-      const next = await getPlayerLoadoutData();
+      const next = await getPlayerLoadoutData(request.owner);
+      if (!request.isCurrent()) return;
       setLoadout(next.loadout);
+      setLoadoutAvailable(true);
     } catch (reason) {
-      setError(reason);
+      if (request.isCurrent()) {
+        setLoadoutAvailable(false);
+        setError(reason);
+      }
     } finally {
-      setLoading(false);
+      if (request.isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [ownerPuuid, ownerRegion]);
 
   useEffect(() => {
+    setLoadout({});
+    setLoadoutAvailable(false);
+    setSelectedId('');
+    setError(null);
+    setLoading(Boolean(ownerPuuid));
     void refresh();
-  }, [refresh]);
+  }, [refresh, ownerPuuid]);
 
   const selected = weapons.find((weapon) => weapon.uuid === selectedId);
 
@@ -233,7 +250,7 @@ export default function MobileArsenalV2() {
       .map(([key, items]) => ({ key, label: labels[key] || key, items }));
   }, [weapons]);
 
-  if (selected && loadout[selected.uuid]) {
+  if (loadoutAvailable && selected && loadout[selected.uuid]) {
     return (
       <MobileWeaponEditor
         weapon={selected}
@@ -241,7 +258,10 @@ export default function MobileArsenalV2() {
         commitLabel="Apply weapon"
         onBack={() => setSelectedId("")}
         onCommit={async (next) => {
-          await applyLoadout({ loadout: { [selected.uuid]: next } });
+          const request = captureAccountRequest(activeAccount);
+          if (!request?.isCurrent()) return;
+          await applyLoadout({ loadout: { [selected.uuid]: next } }, request.owner);
+          if (!request.isCurrent()) return;
           setLoadout((current) => ({ ...current, [selected.uuid]: next }));
         }}
       />
@@ -257,6 +277,16 @@ export default function MobileArsenalV2() {
           title="Equipping your Arsenal"
           detail="Matching every weapon with its skin, variant and buddy."
         />
+      </div>
+    );
+  }
+
+  if (!loadoutAvailable) {
+    return (
+      <div className="mv2-arsenal">
+        <MobilePageHeader title="Arsenal" subtitle="Current loadout unavailable" action={<MobileIcon name="refresh" />} actionLabel="Retry loading Arsenal" onAction={() => void refresh()} />
+        {error ? <MobileErrorNotice error={error} onRetry={() => void refresh()} onDismiss={() => setError(null)} /> : null}
+        <p className="mv2-inline-error" role="status">Select an account and renew its Riot session, then refresh to load your equipped weapons.</p>
       </div>
     );
   }

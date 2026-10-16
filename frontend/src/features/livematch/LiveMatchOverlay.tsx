@@ -6,10 +6,11 @@ import { useData } from '@/context/DataContext';
 import { useFloatingWidgetDrag } from '@/hooks/useFloatingWidgetDrag';
 import { GunBuddy, Weapon } from '@/lib/types';
 import { buildValorantLoadoutColumns } from '@/lib/weaponLayout';
+import { publishAppNotification } from '@/lib/appNotifications';
 import ProfilePanel from '@/features/profile/ProfilePanel';
 import './LiveMatchOverlay.css';
 
-// Sort players for stable rendering. The 5-second poll can reorder
+// Sort players for stable rendering. A live-status poll can reorder
 // the array between updates; sorting on a deterministic key keeps
 // each row glued to its slot. Order of precedence:
 //   1. Local user first
@@ -124,6 +125,8 @@ export default function LiveMatchOverlay() {
     useEffect(() => {
         setSelectedPlayer(null);
         setProfileTarget(null);
+        setMatch(null);
+        setTimerSnapshot(null);
     }, [activeAccount?.puuid]);
 
     useEffect(() => {
@@ -151,7 +154,7 @@ export default function LiveMatchOverlay() {
     }, [discordAgentImage, discordAgentName, discordMapImage, discordMapName, discordPartySize, match?.allyScore, match?.allyTeam?.length, match?.enemyScore, match?.enemyTeam?.length, match?.matchId, match?.phase, match?.queueId, match?.scoreAvailable, match?.timeLeft]);
 
     // ---- Local countdown timer ----
-    // The backend only emits timeLeft at each 5s poll. We capture the
+    // The backend only emits timeLeft at each status poll. We capture the
     // server's snapshot + the wall-clock at which we received it, then
     // tick down locally every second so the user sees a smooth
     // countdown. When a new poll arrives with a HIGHER timeLeft (Riot
@@ -161,10 +164,22 @@ export default function LiveMatchOverlay() {
     const lastPollPhaseRef = useRef<string>("");
 
     useEffect(() => {
-        if (!timerSnapshot) return;
+        if (!timerSnapshot && !match?.retryAt) return;
         const id = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(id);
-    }, [timerSnapshot]);
+    }, [timerSnapshot, match?.retryAt]);
+
+    useEffect(() => {
+        if (!activeAccount || !match?.retryAt || !match.error?.toLowerCase().includes("limit")) return;
+        const retryTime = new Date(match.retryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        publishAppNotification({
+            id: `live-rate-limit:${activeAccount.puuid}:${match.retryAt}`,
+            kind: "error",
+            title: "Riot rate limit reached",
+            body: `Live checks are paused until ${retryTime}. Cached match data stays visible.`,
+            accountPuuid: activeAccount.puuid,
+        });
+    }, [activeAccount, match?.error, match?.retryAt]);
 
     const displayedTimeLeft = useMemo(() => {
         if (!timerSnapshot) return 0;
@@ -182,9 +197,11 @@ export default function LiveMatchOverlay() {
         }
 
         let active = true;
-        const poll = async () => {
+        let retryAt = 0;
+        const poll = async (): Promise<LiveMatchResponse["phase"]> => {
             const data = await getLiveMatch();
-            if (!active) return;
+            if (!active) return "none";
+            retryAt = data.retryAt || 0;
 
             if (data.phase === "none" && data.error) {
                 console.debug("No live match detected:", data.error);
@@ -197,7 +214,9 @@ export default function LiveMatchOverlay() {
                 // 1. Phase changed -> reset the timer.
                 // 2. Polled value rose (server reset / dodge re-anchor).
                 // 3. First pregame poll -> start counting.
-                if (data.phase !== lastPollPhaseRef.current) {
+                if (data.stale) {
+                    setTimerSnapshot(null);
+                } else if (data.phase !== lastPollPhaseRef.current) {
                     lastPollPhaseRef.current = data.phase;
                     if (data.phase === "pregame" && data.timeLeft > 0) {
                         setTimerSnapshot({ seconds: data.timeLeft, receivedAt: Date.now() });
@@ -218,17 +237,29 @@ export default function LiveMatchOverlay() {
                     setDismissedMatchKey("");
                 }
             }
+            return data.phase;
         };
 
         let timer = 0;
-        const schedule = () => {
+        const schedule = (phase: LiveMatchResponse["phase"]) => {
             if (!active) return;
+            const delay = document.hidden
+                ? 60_000
+                : phase === "pregame"
+                    ? 5_000
+                    : phase === "coregame"
+                        ? 10_000
+                        : 15_000;
             timer = window.setTimeout(async () => {
-                await poll();
-                if (active) schedule();
-            }, document.hidden ? 20_000 : 5_000);
+                try {
+                    const nextPhase = await poll();
+                    if (active) schedule(nextPhase);
+                } catch {
+                    if (active) schedule("none");
+                }
+            }, Math.max(delay, retryAt - Date.now()));
         };
-        void poll().finally(schedule);
+        void poll().then(schedule).catch(() => schedule("none"));
         return () => {
             active = false;
             window.clearTimeout(timer);
@@ -298,7 +329,15 @@ export default function LiveMatchOverlay() {
     if (!activeAccount) return null;
 
     const matchKey = liveMatchKey(match);
-    if (!match || match.phase === "none") return null;
+    if (!match) return null;
+    const retrySeconds = Math.max(0, Math.ceil(((match.retryAt || 0) - now) / 1000));
+    if (match.phase === "none") {
+        if (!match.retryAt) return null;
+        return <div className="live-match-status-pill is-error" role="status">
+            <span className="live-match-status-dot" />
+            <span className="live-match-pill-body"><strong>Live match unavailable</strong><span>{match.error}</span><small>{retrySeconds ? `Retrying in ${retrySeconds}s` : "Checking again…"}</small></span>
+        </div>;
+    }
 
     const isDismissed = !!(matchKey && matchKey === dismissedMatchKey);
 
@@ -388,7 +427,7 @@ export default function LiveMatchOverlay() {
             return;
         }
         setMatch(refreshed);
-        setRankRefreshState("idle");
+        setRankRefreshState(refreshed.error ? "error" : "idle");
     };
     const rescanParties = async () => {
         setStackScanState("loading");
@@ -398,7 +437,7 @@ export default function LiveMatchOverlay() {
             return;
         }
         setMatch(rescanned);
-        setStackScanState("idle");
+        setStackScanState(rescanned.error ? "error" : "idle");
     };
     return (
         <div className="live-match-overlay" style={{ backgroundImage: currentMap.splash ? `url(${currentMap.splash})` : 'none' }}>
@@ -424,7 +463,7 @@ export default function LiveMatchOverlay() {
                             type="button"
                             className={rankRefreshState === "error" ? "is-error" : ""}
                             onClick={() => void refreshRanks()}
-                            disabled={rankRefreshState === "loading"}
+                            disabled={rankRefreshState === "loading" || stackScanState === "loading" || retrySeconds > 0}
                         >
                             {rankRefreshState === "loading" ? "Refreshing…" : rankRefreshState === "error" ? "Ranks unavailable" : "Refresh ranks"}
                         </button>
@@ -432,13 +471,14 @@ export default function LiveMatchOverlay() {
                             type="button"
                             className={stackScanState === "error" ? "is-error" : ""}
                             onClick={() => void rescanParties()}
-                            disabled={stackScanState === "loading"}
-                            title="Re-read prior-party evidence from saved completed matches"
+                            disabled={stackScanState === "loading" || rankRefreshState === "loading" || retrySeconds > 0}
+                            title="Check recent histories and save shared matches to confirm prior parties"
                         >
-                            {stackScanState === "loading" ? "Checking cache…" : stackScanState === "error" ? "Cache unavailable" : "Rescan likely stacks"}
+                            {stackScanState === "loading" ? "Scanning recent matches…" : stackScanState === "error" ? "Scan incomplete" : "Rescan likely stacks"}
                         </button>
                     </div>
                 </div>
+                {match.error && <p className="live-match-retry-notice" role="status">{match.stale ? "Showing the last received roster. " : ""}{match.error}{retrySeconds > 0 ? ` Next check in ${retrySeconds}s.` : ""}</p>}
                 <h1 className="map-display-name">{currentMap.name}</h1>
                 {match.phase === "pregame" && displayedTimeLeft > 0 && (
                     <div className="timer-display">
@@ -448,7 +488,7 @@ export default function LiveMatchOverlay() {
                 )}
                 {match.phase === "coregame" && (
                     <div className="live-match-context">
-                        <div className="live-badge">LIVE MATCH</div>
+                        <div className="live-badge">{match.stale ? "LAST RECEIVED MATCH" : "LIVE MATCH"}</div>
                         {match.scoreAvailable && (
                             <div className="live-match-score" aria-label={`Live score: your team ${match.allyScore}, enemy team ${match.enemyScore}`}>
                                 <span className="live-score-team is-ally">YOUR TEAM</span>
@@ -607,6 +647,10 @@ function PlayerCard({
     const priorPartyText = !partyPillText && historyPartySize && historyPartySize > 1
         ? `PRIOR ${historyPartySize === 2 ? "DUO" : `${historyPartySize}-STACK`} · ${player.historyPartyMatches || 1}`
         : null;
+    const met = player.isLocal ? undefined : player.encounters;
+    const metGames = met ? met.with + met.against : 0;
+    const encounterText = metGames ? `MET ${metGames}×` : null;
+    const encounterTitle = met ? encounterSummary(met) : undefined;
 
     return (
         <button
@@ -637,6 +681,9 @@ function PlayerCard({
                         <span className="player-display-name">{displayName}</span>
                         {player.isLocal && <span className="local-user-pill">YOU</span>}
                         {partyPillText ? <span className="player-party-pill">{partyPillText}</span> : null}
+                        {encounterText ? (
+                            <span className="player-encounter-pill" title={encounterTitle}>{encounterText}</span>
+                        ) : null}
                         {priorPartyText ? (
                             <span
                                 className="player-history-party-pill"
@@ -911,6 +958,11 @@ function LivePlayerModal({
                         value={evidence?.matches ? `${evidence.wins || 0}W-${losses}L` : "Unavailable"}
                         detail={evidence?.matches ? `${Math.round(evidence.winrate || 0)}% WR · ${(evidence.kd || 0).toFixed(2)} KD · ${evidence.matches} cached` : "No cached matches on this agent"}
                     />
+                    {!player.isLocal ? <InfoTile
+                        label="Played before"
+                        value={player.encounters ? [player.encounters.with ? `With ${player.encounters.with}` : "", player.encounters.against ? `Vs ${player.encounters.against}` : ""].filter(Boolean).join(" · ") : "First time"}
+                        detail={player.encounters ? encounterSummary(player.encounters) : "No shared matches in your cache"}
+                    /> : null}
                     <InfoTile
                         label="Prior party"
                         value={player.historyPartyGroup ? `${player.historyPartyMatches || 1} match${player.historyPartyMatches === 1 ? "" : "es"}` : "None cached"}
@@ -1038,7 +1090,7 @@ function LiveProfileModal({
                         key={profile.puuid}
                         requestedProfile={profile}
                         onRequestedProfileChange={onProfileChange}
-                        autoSyncMatches={false}
+                        autoSyncMatches={true}
                     />
                 </div>
             </section>
@@ -1051,6 +1103,16 @@ function privatePlayerLabel(player: LivePlayer, agentName?: string) {
         return agentName || (player.selectionState === "none" ? "Selecting..." : "Hidden player");
     }
     return player.name;
+}
+
+/** "With 2 (1W–1L) · against 3 (2W–1L) · last 3d ago" from cached shared matches. */
+function encounterSummary(met: NonNullable<LivePlayer["encounters"]>) {
+    const record = (games: number, wins: number) => `${games} (${wins}W–${games - wins}L)`;
+    return [
+        met.with ? `With ${record(met.with, met.withWins)}` : "",
+        met.against ? `against ${record(met.against, met.againstWins)}` : "",
+        met.lastPlayedAt ? `last ${relativeEvidenceTime(met.lastPlayedAt)}` : "",
+    ].filter(Boolean).join(" · ");
 }
 
 function relativeEvidenceTime(timestamp: number) {

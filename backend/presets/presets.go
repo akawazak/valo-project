@@ -13,7 +13,10 @@ import (
 type IdentityV1 struct {
 	PlayerCardID  string `json:"playerCardId"`
 	PlayerTitleID string `json:"playerTitleId"`
-	AccountLevel  int    `json:"accountLevel,omitempty"`
+	// Level metadata is for display; Apply only changes the card and title.
+	AccountLevel           int    `json:"accountLevel,omitempty"`
+	PreferredLevelBorderID string `json:"preferredLevelBorderId,omitempty"`
+	HideAccountLevel       bool   `json:"hideAccountLevel,omitempty"`
 }
 
 type SpraySlotV1 struct {
@@ -22,8 +25,9 @@ type SpraySlotV1 struct {
 }
 
 type ExpressionSlotV1 struct {
-	TypeID  string `json:"typeId"`
-	AssetID string `json:"assetId"`
+	TypeID    string `json:"typeId"`
+	AssetID   string `json:"assetId"`
+	SlotIndex *int   `json:"slotIndex,omitempty"`
 }
 
 type PresetV1 struct {
@@ -111,7 +115,14 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 		return err
 	}
 
-	usedInstances := map[*string]bool{}
+	usedInstances := map[string]bool{}
+	// A single-weapon apply/restore must not take a buddy instance from an
+	// unchanged weapon. Reserve those before assigning the edited weapons.
+	for _, gun := range loadout.Guns {
+		if _, changing := newLoadout[gun.ID]; !changing && gun.CharmInstanceID != "" {
+			usedInstances[gun.CharmInstanceID] = true
+		}
+	}
 	for _, gun := range loadout.Guns {
 		item, ok := newLoadout[gun.ID]
 		if !ok {
@@ -128,14 +139,14 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 			if buddy.ItemID != item.CharmLevelID {
 				continue
 			}
-			if _, used := usedInstances[buddy.InstanceID]; used {
+			if buddy.InstanceID == nil || usedInstances[*buddy.InstanceID] {
 				continue
 			}
 			gun.CharmID = item.CharmID
 			gun.CharmLevelID = item.CharmLevelID
 			gun.CharmInstanceID = *buddy.InstanceID
 
-			usedInstances[buddy.InstanceID] = true
+			usedInstances[*buddy.InstanceID] = true
 			break
 		}
 	}
@@ -152,48 +163,8 @@ func Apply(val *valclient.ValClient, newLoadout map[string]LoadoutItemV1, identi
 		}
 	}
 
-	if len(sprays) > 0 {
-		for _, sp := range sprays {
-			if sp.SprayID == "" || sp.EquipSlotID == "" {
-				continue
-			}
-			found := false
-			for _, expr := range loadout.ActiveExpressions {
-				if strings.EqualFold(expr.TypeID, sp.EquipSlotID) {
-					expr.AssetID = sp.SprayID
-					found = true
-					break
-				}
-			}
-			if !found {
-				loadout.ActiveExpressions = append(loadout.ActiveExpressions, &valclient.ActiveExpressions{
-					TypeID:  sp.EquipSlotID,
-					AssetID: sp.SprayID,
-				})
-			}
-		}
-	}
-
-	if len(expressions) > 0 {
-		for _, slot := range expressions {
-			if slot.TypeID == "" || slot.AssetID == "" {
-				continue
-			}
-			found := false
-			for _, expr := range loadout.ActiveExpressions {
-				if strings.EqualFold(expr.TypeID, slot.TypeID) {
-					expr.AssetID = slot.AssetID
-					found = true
-					break
-				}
-			}
-			if !found {
-				loadout.ActiveExpressions = append(loadout.ActiveExpressions, &valclient.ActiveExpressions{
-					TypeID:  slot.TypeID,
-					AssetID: slot.AssetID,
-				})
-			}
-		}
+	if err := applyExpressions(loadout, sprays, expressions); err != nil {
+		return err
 	}
 
 	if _, err := val.SetPlayerLoadout(&valclient.SetPlayerLoadoutRequest{

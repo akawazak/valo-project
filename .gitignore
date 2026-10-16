@@ -47,3 +47,6 @@ latest-portable.json
 frontend/src-tauri/gen/android/keystore.properties
 *.jks
 *.keystore
+
+# Local Obsidian vault settings and workspace state (notes remain versioned).
+/docs/.obsidian/

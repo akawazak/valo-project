@@ -787,6 +787,9 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
                     | "/v1/missions"
                     | "/v1/daily-ticket"
                     | "/v1/career/account-xp"
+                    | "/v1/career/accolades"
+                    | "/v1/career/favorites"
+                    | "/v1/career/premier"
                     | "/v1/contracts"
                     | "/v1/item-upgrades"
                     | "/v1/progression/events"
@@ -794,6 +797,7 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
                     | "/v1/live-loadouts"
                     | "/v1/social"
                     | "/v1/social/events"
+                    | "/v1/social/game-icons"
                     | "/v1/chat/conversations"
                     | "/v1/chat/summary"
                     | "/v1/chat/events"
@@ -805,6 +809,11 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
                     | "/v1/profile/agent-stats"
                     | "/v1/profile/map-stats"
                     | "/v1/profile/match-history"
+                    | "/v1/profile/queues"
+                    | "/v1/profile/teammates"
+                    | "/v1/profile/duo"
+                    | "/v1/profile/duo-partners"
+                    | "/v1/profile/insights"
                     | "/v1/profile/sync-status"
                     | "/v1/profile/leaderboard"
             ) || single_backend_segment(route, "/v1/profile/match-details/", "")
@@ -825,6 +834,7 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
                     | "/v1/social/requests"
                     | "/v1/chat/messages"
                     | "/v1/profile/sync"
+                    | "/v1/party/action"
             ) || single_backend_segment(route, "/v1/social/requests/", "")
                 || single_backend_segment(route, "/v1/chat/conversations/", "/snapshot")
                 || single_backend_segment(route, "/v1/chat/conversations/", "/read")
@@ -842,6 +852,7 @@ async fn perform_backend_request(
     mut body: Option<String>,
     secrets: RiotAccountSecrets,
 ) -> Result<BackendResponse, String> {
+    let selected_puuid = selected_backend_account(&headers)?;
     let method = reqwest::Method::from_bytes(method.as_bytes())
         .map_err(|_| "The local API method is invalid".to_string())?;
     if !is_allowed_backend_request(&path, &method) {
@@ -860,11 +871,6 @@ async fn perform_backend_request(
             format!("http://127.0.0.1:{}{}", state.backend_port, path),
         )
         .header("X-VantaVault-Key", &state.backend_token);
-    let selected_puuid = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
-        .map(|(_, value)| value.trim().to_string())
-        .filter(|value| valid_riot_account_id(value));
     let has_remote_tokens = secrets
         .access_token
         .as_ref()
@@ -943,12 +949,40 @@ async fn perform_backend_request(
     })
 }
 
+fn selected_backend_account(headers: &HashMap<String, String>) -> Result<Option<String>, String> {
+    let account_header = |name: &str| {
+        let mut values = headers
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.trim());
+        let value = values.next();
+        if values.next().is_some() {
+            return Err("The local API account scope is ambiguous".to_string());
+        }
+        Ok(value)
+    };
+    let selected = account_header("x-riot-selected-puuid")?.filter(|value| !value.is_empty());
+    if selected.is_some_and(|value| !valid_riot_account_id(value)) {
+        return Err("The selected Riot account is invalid".to_string());
+    }
+    if let Some(expected) = account_header("x-riot-expected-puuid")? {
+        if !valid_riot_account_id(expected) || selected != Some(expected) {
+            return Err("The local API request belongs to a different Riot account".to_string());
+        }
+    }
+    Ok(selected.map(str::to_string))
+}
+
 fn forwardable_backend_header(name: &str, has_remote_tokens: bool) -> bool {
     match name.to_ascii_lowercase().as_str() {
-        "content-type" | "x-riot-selected-puuid" => true,
+        "content-type" | "x-riot-selected-puuid" | "x-riot-expected-puuid" => true,
         "x-riot-region" => has_remote_tokens,
         _ => false,
     }
+}
+
+fn backend_request_needs_riot_secrets(path: &str, method: &str) -> bool {
+    !(path.split('?').next() == Some("/v1/presets") && matches!(method, "GET" | "POST"))
 }
 
 #[cfg(target_os = "windows")]
@@ -960,12 +994,10 @@ async fn backend_request(
     headers: HashMap<String, String>,
     body: Option<String>,
 ) -> Result<BackendResponse, String> {
-    let puuid = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
-        .map(|(_, value)| value.clone());
+    let puuid = selected_backend_account(&headers)?
+        .filter(|_| backend_request_needs_riot_secrets(&path, &method));
     let secrets = match puuid {
-        Some(puuid) if valid_riot_account_id(&puuid) => {
+        Some(puuid) => {
             tauri::async_runtime::spawn_blocking(move || load_windows_account_secrets(&puuid))
                 .await
                 .map_err(|error| format!("Could not unlock secure Riot credentials: {error}"))??
@@ -985,12 +1017,10 @@ async fn backend_request(
     headers: HashMap<String, String>,
     body: Option<String>,
 ) -> Result<BackendResponse, String> {
-    let puuid = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("x-riot-selected-puuid"))
-        .map(|(_, value)| value.clone());
+    let puuid = selected_backend_account(&headers)?
+        .filter(|_| backend_request_needs_riot_secrets(&path, &method));
     let secrets = match puuid {
-        Some(puuid) if valid_riot_account_id(&puuid) => bridge
+        Some(puuid) => bridge
             .0
             .run_mobile_plugin_async::<RiotAccountSecrets>(
                 "loadSecrets",
@@ -2456,10 +2486,10 @@ fn strip_chromium_host_key_hash<'a>(host_key: &str, plaintext: &'a [u8]) -> &'a 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_riot_cookie_header, cleanup_stale_sessions, forwardable_backend_header,
-        is_allowed_backend_request, is_valid_login_session_id, prune_session_cache,
-        recover_session_swap_artifacts, session_cache_size, strip_chromium_host_key_hash,
-        valid_riot_account_id,
+        backend_request_needs_riot_secrets, build_riot_cookie_header, cleanup_stale_sessions,
+        forwardable_backend_header, is_allowed_backend_request, is_valid_login_session_id,
+        prune_session_cache, recover_session_swap_artifacts, selected_backend_account,
+        session_cache_size, strip_chromium_host_key_hash, valid_riot_account_id,
     };
     use sha2::{Digest, Sha256};
 
@@ -2483,8 +2513,40 @@ mod tests {
             &reqwest::Method::GET,
         ));
         assert!(is_allowed_backend_request(
+            "/v1/profile/queues?puuid=player&region=eu",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/profile/teammates?puuid=player&region=eu",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/profile/duo?partner=mate&region=eu",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/profile/duo-partners?region=eu",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/profile/insights?puuid=player&region=eu&queue=competitive",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/social/game-icons",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
             "/v1/chat/conversations/dm%3Aplayer/read",
             &reqwest::Method::POST,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/party/action",
+            &reqwest::Method::POST,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/party/action",
+            &reqwest::Method::GET,
         ));
         assert!(!is_allowed_backend_request(
             "/v1/bootstrap-proof",
@@ -2508,9 +2570,68 @@ mod tests {
     fn backend_proxy_never_forwards_region_without_complete_remote_tokens() {
         assert!(forwardable_backend_header("Content-Type", false));
         assert!(forwardable_backend_header("X-Riot-Selected-Puuid", false));
+        assert!(forwardable_backend_header("X-Riot-Expected-Puuid", false));
         assert!(!forwardable_backend_header("X-Riot-Region", false));
         assert!(forwardable_backend_header("X-Riot-Region", true));
         assert!(!forwardable_backend_header("X-Riot-Access-Token", true));
+    }
+
+    #[test]
+    fn backend_proxy_keeps_requests_bound_to_the_expected_account() {
+        let mut headers = std::collections::HashMap::from([
+            ("X-Riot-Selected-Puuid".to_string(), "account-a".to_string()),
+            ("x-riot-expected-puuid".to_string(), "account-a".to_string()),
+        ]);
+        assert_eq!(
+            selected_backend_account(&headers).unwrap().as_deref(),
+            Some("account-a")
+        );
+        headers.insert("X-Riot-Selected-Puuid".to_string(), "account-b".to_string());
+        assert!(selected_backend_account(&headers).is_err());
+        headers.remove("X-Riot-Selected-Puuid");
+        assert!(selected_backend_account(&headers).is_err());
+    }
+
+    #[test]
+    fn backend_proxy_rejects_ambiguous_or_invalid_account_headers() {
+        let mut headers = std::collections::HashMap::from([
+            ("X-Riot-Selected-Puuid".to_string(), "account-a".to_string()),
+            ("x-riot-selected-puuid".to_string(), "account-b".to_string()),
+        ]);
+        assert!(selected_backend_account(&headers).is_err());
+        headers.remove("x-riot-selected-puuid");
+        headers.insert(
+            "X-Riot-Selected-Puuid".to_string(),
+            "../account-a".to_string(),
+        );
+        assert!(selected_backend_account(&headers).is_err());
+    }
+
+    #[test]
+    fn backend_proxy_preserves_unscoped_and_legacy_requests() {
+        let mut headers = std::collections::HashMap::new();
+        assert_eq!(selected_backend_account(&headers).unwrap(), None);
+        headers.insert("X-Riot-Selected-Puuid".to_string(), String::new());
+        assert_eq!(selected_backend_account(&headers).unwrap(), None);
+        headers.insert("X-Riot-Selected-Puuid".to_string(), "account-a".to_string());
+        assert_eq!(
+            selected_backend_account(&headers).unwrap().as_deref(),
+            Some("account-a")
+        );
+    }
+
+    #[test]
+    fn local_presets_do_not_unlock_riot_credentials_but_apply_still_does() {
+        assert!(!backend_request_needs_riot_secrets("/v1/presets", "GET"));
+        assert!(!backend_request_needs_riot_secrets(
+            "/v1/presets?owner=account-a",
+            "POST"
+        ));
+        assert!(backend_request_needs_riot_secrets(
+            "/v1/apply-loadout",
+            "POST"
+        ));
+        assert!(backend_request_needs_riot_secrets("/v1/presets", "DELETE"));
     }
 
     #[cfg(target_os = "windows")]

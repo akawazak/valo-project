@@ -2,6 +2,7 @@ import Image from 'next/image';
 import { useState, useMemo } from 'react';
 import { Weapon, Skin } from '@/lib/types';
 import { useData } from '@/context/DataContext';
+import { TIER_COLORS } from "@/lib/contentTiers";
 
 type SkinListProps = {
     weapon: Weapon;
@@ -12,16 +13,6 @@ type SkinListProps = {
     onClose: () => void;
 };
 
-const TIER_COLORS: Record<string, string> = {
-    "12683d2c-44af-d54e-12a6-cf4fb56b09d7": "#5e9296",
-    "0c052332-f437-42f8-a2e6-8f4a7bf2a75a": "#4a9f6e",
-    "7c5ac5b0-49f4-9766-e57e-de0e08ee30b8": "#8e5bc8",
-    "4b0f4478-7fb6-7c1b-e23a-6371d8aaf2d4": "#d652a0",
-    "3ee4d8e2-4d71-b8b5-f97f-915f0f47d1ee": "#e09c32",
-    "dd7f1161-3c94-a4be-9df7-b9e56b073f43": "#f04e50",
-    "e1c8a98f-4e32-4964-b1ec-51c66a25216e": "#b44d4d",
-    "c564c281-c776-4467-9157-0a94cba04e6b": "#6b7280",
-};
 
 export default function SkinList({ weapon, ownedLevelIDs, ownedChromaIDs, onSkinSelect, show, onClose }: SkinListProps) {
     const [searchTerm, setSearchTerm] = useState('');

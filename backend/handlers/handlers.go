@@ -67,6 +67,11 @@ type Handler struct {
 	namesCache map[string]string
 	namesMu    sync.RWMutex
 
+	// Live rosters barely change once a match starts. Cache the normalized
+	// response briefly so the UI poll does not replay several Riot requests.
+	liveMatchMu    sync.Mutex
+	liveMatchCache map[string]liveMatchCacheEntry
+
 	// Equipped cards are normally included in VALORANT presence. Friends who
 	// are offline or only using Riot Mobile do not expose that field, so Social
 	// performs a small, cooldown-bound player-loadout lookup in the background.
@@ -80,6 +85,8 @@ type Handler struct {
 	// can show ranks without repeatedly hitting the refresh endpoint.
 	partyRankRefreshMu sync.Mutex
 	partyRankRefreshAt map[string]time.Time
+	profileRankMu      sync.Mutex
+	profileRankCache   map[string]profileRankCacheEntry
 
 	progressionMu          sync.Mutex
 	progressionSubscribers map[chan struct{}]struct{}
@@ -95,9 +102,11 @@ func NewHandler(Val *valclient.ValClient) *Handler {
 	return &Handler{
 		Val:                      Val,
 		namesCache:               make(map[string]string),
+		liveMatchCache:           make(map[string]liveMatchCacheEntry),
 		socialCardLookupAt:       make(map[string]time.Time),
 		socialCardLookupInFlight: make(map[string]struct{}),
 		partyRankRefreshAt:       make(map[string]time.Time),
+		profileRankCache:         make(map[string]profileRankCacheEntry),
 		progressionSubscribers:   make(map[chan struct{}]struct{}),
 		socialSubscribers:        make(map[chan struct{}]struct{}),
 		chatSubscribers:          make(map[chan struct{}]struct{}),
@@ -413,8 +422,9 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type ExpressionSlotResp struct {
-		TypeID  string `json:"typeId"`
-		AssetID string `json:"assetId"`
+		TypeID    string `json:"typeId"`
+		AssetID   string `json:"assetId"`
+		SlotIndex int    `json:"slotIndex"`
 	}
 
 	type PlayerLoadoutResp struct {
@@ -440,24 +450,28 @@ func (h *Handler) GetPlayerLoadout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for _, expr := range loadout.ActiveExpressions {
-		if expr.AssetID != "" {
+	for index, expr := range loadout.ActiveExpressions {
+		if expr != nil {
 			resp.Expressions = append(resp.Expressions, ExpressionSlotResp{
-				TypeID:  expr.TypeID,
-				AssetID: expr.AssetID,
+				TypeID:    expr.TypeID,
+				AssetID:   expr.AssetID,
+				SlotIndex: index,
 			})
-			resp.Sprays = append(resp.Sprays, SpraySlotResp{
-				EquipSlotID: expr.TypeID,
-				SprayID:     expr.AssetID,
-			})
+			if strings.EqualFold(expr.TypeID, presets.SprayExpressionTypeID) {
+				if positionID := presets.ExpressionWheelSlotID(index); positionID != "" {
+					resp.Sprays = append(resp.Sprays, SpraySlotResp{EquipSlotID: positionID, SprayID: expr.AssetID})
+				}
+			}
 		}
 	}
 
 	if loadout.Identity != nil {
 		resp.Identity = &presets.IdentityV1{
-			PlayerCardID:  loadout.Identity.PlayerCardID,
-			PlayerTitleID: loadout.Identity.PlayerTitleID,
-			AccountLevel:  loadout.Identity.AccountLevel,
+			PlayerCardID:           loadout.Identity.PlayerCardID,
+			PlayerTitleID:          loadout.Identity.PlayerTitleID,
+			AccountLevel:           loadout.Identity.AccountLevel,
+			PreferredLevelBorderID: loadout.Identity.PreferredLevelBorderID,
+			HideAccountLevel:       loadout.Identity.HideAccountLevel,
 		}
 	}
 
@@ -487,9 +501,14 @@ func (h *Handler) PostApplyLoadout(w http.ResponseWriter, r *http.Request) {
 
 	var req ApplyLoadoutRequest
 	if err := json.Unmarshal(bodyBytes, &req); err == nil && req.Loadout != nil {
-		expressions := append([]presets.ExpressionSlotV1{}, req.Expressions...)
-		expressions = append(expressions, req.Flexes...)
-		if err := presets.Apply(val, req.Loadout, req.Identity, req.Sprays, expressions); err != nil {
+		expressions := req.Expressions
+		sprays := req.Sprays
+		if expressions == nil {
+			expressions = req.Flexes
+		} else {
+			sprays = nil
+		}
+		if err := presets.Apply(val, req.Loadout, req.Identity, sprays, expressions); err != nil {
 			h.returnError(w, err)
 			return
 		}

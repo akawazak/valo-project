@@ -1287,6 +1287,22 @@
   font-size: 13px;
 }
 
+.mobile-account-removal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.mobile-account-removal button {
+  padding: 4px 0;
+  color: var(--mobile-accent, #ff4055);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 800;
+}
+
 .mobile-error {
   padding: 12px 14px;
   color: #ffd4da;

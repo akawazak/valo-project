@@ -11,6 +11,7 @@ import (
 
 var saveMu sync.Mutex
 
+// GetRaw returns nil only when no saved account snapshot exists yet.
 func GetRaw() ([]byte, error) {
 	path, err := getPath()
 	if err != nil {
@@ -19,13 +20,17 @@ func GetRaw() ([]byte, error) {
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return []byte("[]"), nil
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 {
-		return []byte("[]"), nil
+	var saved []json.RawMessage
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return nil, fmt.Errorf("invalid saved accounts JSON: %w", err)
+	}
+	if saved == nil {
+		return nil, fmt.Errorf("saved accounts must be a JSON array")
 	}
 	return data, nil
 }

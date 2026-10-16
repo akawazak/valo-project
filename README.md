@@ -33,7 +33,7 @@ VantaVault puts the local VALORANT storefront, loadouts, profiles, match history
 
 Account sessions and saved match data remain on your device. VantaVault can use a connected remote Riot session for account features and the local Riot Client for information that is only available while the game client is running.
 
-![VantaVault demo profile showing rank, season averages, and RR progression](website/assets/homepage-profile-sanitized.png)
+![VantaVault profile with a demo account: rank, badges, profile tools and RR progression](docs/assets/readme/profile.webp)
 
 ## Features
 
@@ -42,7 +42,9 @@ Account sessions and saved match data remain on your device. VantaVault can use 
 | **Storefront** | Daily offers, rotating featured bundles, Night Market, accessories, wallet balances, prices, upgrades, variants, and wishlist alerts while the local Windows VALORANT session is running. |
 | **Loadouts** | Weapons, skins, variants, buddies, sprays, player cards, titles, flexes, and saved presets. Presets can be imported, exported, edited, and applied when ready. |
 | **Profiles** | Current RR, rank history, lifetime peak, match history, win rate, agent and map performance, progression, and locally stored round analytics. |
+| **Insights and Duos** | A playstyle radar and archetype, profile badges earned from your stats, Accolades, face-to-face Compare, and Duos: who backs who up, your best agent pairs and your latest trades with the people you queue with. |
 | **Social** | Friends, player cards, Riot presence, party state, friend requests, chat history, and available pregame or live-match information. |
+| **Party controls** | Choose the queue, ready up, start or cancel the queue, open or close the party and invite friends who can join right now, with your account standing shown alongside. Single clicks only, re-checked against the current party first. |
 | **Live match** | Queue, map, teams, agents, confirmed Riot party markers, and live score when exposed by the active local session. |
 | **Accounts** | Multiple isolated Riot sessions, remote access renewal, and safe fallback to the local Riot Client when it is signed into the same account. |
 | **Discord** | Rich Presence for the store, loadout editor, agent select, queue, map, agent, and in-match activity. |
@@ -51,13 +53,25 @@ Account sessions and saved match data remain on your device. VantaVault can use 
 <details>
 <summary><strong>More screenshots</strong></summary>
 
+### Party controls and invites
+
+![VantaVault party panel with queue controls and the Invite friends list, using demo identities](docs/assets/readme/party.webp)
+
+### Duos
+
+![VantaVault Duos screen comparing a demo player with their duo partner](docs/assets/readme/duos.webp)
+
+### Insights
+
+![VantaVault Insights with a playstyle radar and archetype for a demo account](docs/assets/readme/insights.webp)
+
+### Compare
+
+![VantaVault Compare putting two demo player cards face to face](docs/assets/readme/compare.webp)
+
 ### Complete loadout editor
 
 ![VantaVault loadout editor using a demo identity](website/assets/homepage-loadout-sanitized.png)
-
-### Party and friends
-
-![VantaVault Party and Friends panel using demo identities](website/assets/party-friends-sanitized.png)
 
 </details>
 
@@ -113,13 +127,13 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.29
+## What's new in 0.5.30
 
-- Account Manager preserves its saved order while it is open, scrolls to the current account, and applies favorite ordering only after it is reopened.
-- Account rows can retain their player-card previews and communicate ready, expired, and sign-in-required states more clearly.
-- Live-match agent records and likely-party context now use locally cached completed-match evidence, avoiding request bursts during live polling.
-- Desktop and Android share the same supported remote-account contracts, with platform-only capabilities kept separate.
-- Startup, account recovery, and incomplete Riot-data states are handled without falling through to a framework error page.
+- Party controls in the friends panel: choose the queue, ready up, start or cancel the queue, open or close the party and invite friends from a list of who can join right now. Each action is a single click that VantaVault re-checks against the current party first.
+- Account standing next to the party: good standing, active penalties or a queue restriction with the time left.
+- New profile tools: Duos, Accolades, a rebuilt Insights, face-to-face Compare and badges earned from your stats.
+- Undo the last loadout change after applying a preset or skin, and a short session recap when VALORANT closes.
+- Reopening after a long break keeps the selected account and reloads its loadout after renewing the session.
 
 ## Development
 

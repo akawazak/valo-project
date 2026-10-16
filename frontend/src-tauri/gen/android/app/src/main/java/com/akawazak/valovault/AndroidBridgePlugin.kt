@@ -63,6 +63,9 @@ class RiotAccountArgs {
   lateinit var puuid: String
 }
 
+internal fun mergeRiotSecretValue(previous: String?, update: String?): String =
+  update?.takeIf { it.isNotEmpty() } ?: previous.orEmpty()
+
 @TauriPlugin
 class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
   private val cookieManager = CookieManager.getInstance()
@@ -132,14 +135,16 @@ class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  @Synchronized
   fun saveSecrets(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(RiotSecretsArgs::class.java)
       validatePuuid(args.puuid)
-      val plaintext = JSONObject()
-        .put("accessToken", args.accessToken ?: "")
-        .put("entitlementsToken", args.entitlementsToken ?: "")
-        .put("ssid", args.ssid ?: "")
+      val secrets = readSecrets(args.puuid)
+      val plaintext = secrets
+        .put("accessToken", mergeRiotSecretValue(secrets.optString("accessToken"), args.accessToken))
+        .put("entitlementsToken", mergeRiotSecretValue(secrets.optString("entitlementsToken"), args.entitlementsToken))
+        .put("ssid", mergeRiotSecretValue(secrets.optString("ssid"), args.ssid))
         .toString()
         .toByteArray(Charsets.UTF_8)
 
@@ -165,33 +170,12 @@ class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  @Synchronized
   fun loadSecrets(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(RiotAccountArgs::class.java)
       validatePuuid(args.puuid)
-      val file = secretFile(args.puuid)
-      if (!file.isFile) {
-        invoke.resolve(emptySecrets())
-        return
-      }
-
-      val payload = JSONObject(file.readText(Charsets.UTF_8))
-      if (payload.optInt("schema") != SECRET_SCHEMA) {
-        throw IllegalStateException("Unsupported credential schema.")
-      }
-
-      val nonce = Base64.decode(payload.getString("nonce"), Base64.NO_WRAP)
-      val ciphertext = Base64.decode(payload.getString("ciphertext"), Base64.NO_WRAP)
-      val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-      cipher.init(
-        Cipher.DECRYPT_MODE,
-        getOrCreateSecretKey(),
-        GCMParameterSpec(GCM_TAG_BITS, nonce),
-      )
-      cipher.updateAAD(aadFor(args.puuid))
-      val plaintext = cipher.doFinal(ciphertext)
-      val secrets = JSONObject(String(plaintext, Charsets.UTF_8))
-      plaintext.fill(0)
+      val secrets = readSecrets(args.puuid)
 
       val response = JSObject()
       response.put("accessToken", secrets.optString("accessToken").ifBlank { null })
@@ -217,6 +201,7 @@ class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   @Command
+  @Synchronized
   fun deleteSecrets(invoke: Invoke) {
     try {
       val args = invoke.parseArgs(RiotAccountArgs::class.java)
@@ -228,6 +213,32 @@ class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
       invoke.resolve()
     } catch (error: Exception) {
       invoke.reject("Could not delete saved Riot credentials.", error)
+    }
+  }
+
+  private fun readSecrets(puuid: String): JSONObject {
+    val file = secretFile(puuid)
+    if (!file.isFile) return JSONObject()
+
+    val payload = JSONObject(file.readText(Charsets.UTF_8))
+    if (payload.optInt("schema") != SECRET_SCHEMA) {
+      throw IllegalStateException("Unsupported credential schema.")
+    }
+
+    val nonce = Base64.decode(payload.getString("nonce"), Base64.NO_WRAP)
+    val ciphertext = Base64.decode(payload.getString("ciphertext"), Base64.NO_WRAP)
+    val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+    cipher.init(
+      Cipher.DECRYPT_MODE,
+      getOrCreateSecretKey(),
+      GCMParameterSpec(GCM_TAG_BITS, nonce),
+    )
+    cipher.updateAAD(aadFor(puuid))
+    val plaintext = cipher.doFinal(ciphertext)
+    return try {
+      JSONObject(String(plaintext, Charsets.UTF_8))
+    } finally {
+      plaintext.fill(0)
     }
   }
 
@@ -550,14 +561,6 @@ class AndroidBridgePlugin(private val activity: Activity) : Plugin(activity) {
       temporary.delete()
       throw IllegalStateException("Credential file could not be committed.")
     }
-  }
-
-  private fun emptySecrets(): JSObject {
-    val response = JSObject()
-    response.put("accessToken", null)
-    response.put("entitlementsToken", null)
-    response.put("ssid", null)
-    return response
   }
 
   private fun dp(value: Int): Int {

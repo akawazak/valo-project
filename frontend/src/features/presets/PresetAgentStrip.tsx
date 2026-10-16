@@ -45,7 +45,7 @@ export default function PresetAgentStrip({
                     <span className="preset-agent-toolbar-icons" aria-hidden="true">
                         {assigned.slice(0, 3).map((agent) => <Image key={agent.uuid} src={agent.displayIcon} alt="" width={20} height={20} unoptimized />)}
                     </span>
-                    <span>{assigned.length === 0 ? 'Assign Agents' : assigned.length === 1 ? assigned[0].displayName : `${assigned.length} Agents`}</span>
+                    <span>{assigned.length === 0 ? 'Assign agents' : assigned.length === 1 ? assigned[0].displayName : `${assigned.length} agents`}</span>
                 </button>
                 {picker}
             </div>

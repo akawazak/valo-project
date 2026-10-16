@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import Image from "next/image";
 import SkinVideoModal from "@/components/SkinVideoModal";
 import SkinVideoPlayer from "@/components/SkinVideoPlayer";
 import { useData } from "@/context/DataContext";
 import { Weapon, Skin, LoadoutItemV1 } from "@/lib/types";
+import { CONTENT_TIERS, TIER_COLORS } from "@/lib/contentTiers";
+import { chromaLabel, levelLabel } from "@/lib/skinLabels";
 
 type UnifiedSkinSelectorModalProps = {
     weapon: Weapon;
@@ -23,16 +25,6 @@ type UnifiedSkinSelectorModalProps = {
     onClose: () => void;
 };
 
-const TIER_COLORS: Record<string, string> = {
-    "12683d2c-44af-d54e-12a6-cf4fb56b09d7": "#5e9296",
-    "0c052332-f437-42f8-a2e6-8f4a7bf2a75a": "#4a9f6e",
-    "7c5ac5b0-49f4-9766-e57e-de0e08ee30b8": "#8e5bc8",
-    "4b0f4478-7fb6-7c1b-e23a-6371d8aaf2d4": "#d652a0",
-    "3ee4d8e2-4d71-b8b5-f97f-915f0f47d1ee": "#e09c32",
-    "dd7f1161-3c94-a4be-9df7-b9e56b073f43": "#f04e50",
-    "e1c8a98f-4e32-4964-b1ec-51c66a25216e": "#b44d4d",
-    "c564c281-c776-4467-9157-0a94cba04e6b": "#6b7280",
-};
 
 export default function UnifiedSkinSelectorModal({
     weapon,
@@ -45,6 +37,7 @@ export default function UnifiedSkinSelectorModal({
     onBuddySelect,
     onApplyWeapon,
     saveAction,
+    editingContext,
     show,
     onClose,
 }: UnifiedSkinSelectorModalProps) {
@@ -71,6 +64,55 @@ export default function UnifiedSkinSelectorModal({
     const [searchTerm, setSearchTerm] = useState("");
     const [isVideoPlaying, setIsVideoPlaying] = useState(false);
     const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+    const dialogRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!show) return;
+        const previousFocus = document.activeElement as HTMLElement | null;
+        dialogRef.current?.focus({ preventScroll: true });
+        return () => {
+            if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+        };
+    }, [show]);
+
+    useEffect(() => {
+        if (!show || !isVideoModalOpen) return;
+        const previousFocus = document.activeElement as HTMLElement | null;
+        document.querySelector<HTMLButtonElement>('.skin-video-modal button')?.focus({ preventScroll: true });
+        return () => {
+            if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+        };
+    }, [show, isVideoModalOpen]);
+
+    const handleDialogKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        const dialog = isVideoModalOpen
+            ? document.querySelector<HTMLElement>('.skin-video-modal')
+            : dialogRef.current;
+        if (event.defaultPrevented || !dialog?.contains(event.target as Node)) return;
+        if (event.key === 'Escape') {
+            if (document.fullscreenElement) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (isVideoModalOpen) setIsVideoModalOpen(false);
+            else onClose();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const controls = Array.from(dialog.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex], [contenteditable="true"]',
+        )).filter(element => element.tabIndex >= 0 && element.getClientRects().length > 0);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (!first) {
+            event.preventDefault();
+            dialog.focus();
+        } else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog)) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
 
     // Sync state when weapon or active selection changes
     useEffect(() => {
@@ -194,9 +236,9 @@ export default function UnifiedSkinSelectorModal({
 
     const isMelee = weapon.category === "EEquippableCategory::Melee";
 
-    return (<>
+    return (<div style={{ display: 'contents' }} onKeyDown={handleDialogKeys}>
         <div className="unified-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="unified-modal-container">
+            <div ref={dialogRef} tabIndex={-1} className="unified-modal-container" role="dialog" aria-modal="true" aria-label={`Customize ${weapon.displayName} in ${editingContext}`}>
                 <button type="button" className="unified-modal-close-btn" onClick={onClose} aria-label="Close">✕</button>
 
                 {/* Grid Split Content */}
@@ -204,8 +246,8 @@ export default function UnifiedSkinSelectorModal({
                     {/* Left Pane: Preview, Chromas, Levels, Buddy */}
                     <div className="unified-modal-left">
                         {/* Preview Render */}
-                        <div className={`unified-modal-preview-box${isVideoPlaying ? " is-video" : ""}`}>
-                            <div className="unified-modal-card-tier-line" style={{ backgroundColor: tierColor }} />
+                        <div className={`unified-modal-preview-box has-tier${isVideoPlaying ? " is-video" : ""}`} style={{ "--tier": tierColor } as React.CSSProperties}>
+                            {CONTENT_TIERS[selectedSkin.contentTierUuid] ? <span className="unified-modal-preview-edition"><img src={CONTENT_TIERS[selectedSkin.contentTierUuid].icon} alt="" />{CONTENT_TIERS[selectedSkin.contentTierUuid].name}</span> : null}
                             {isVideoPlaying && previewVideoUrl
                                 ? <SkinVideoPlayer key={previewVideoUrl} className="unified-modal-inline-player" videoUrl={previewVideoUrl} posterUrl={previewRenderUrl} />
                                 : <img src={previewRenderUrl} alt={selectedSkin.displayName} className="unified-modal-preview-img" />}
@@ -213,19 +255,22 @@ export default function UnifiedSkinSelectorModal({
 
                         {/* Metadata */}
                         <div className="unified-modal-skin-meta">
+                            <p className="unified-modal-editing-context">{editingContext}</p>
                             <h4>{selectedSkin.displayName}</h4>
-                            <span>{activeChromaObj?.displayName || "Default Variant"}</span>
+                            <span>{weapon.displayName}{selectedSkin.chromas.length > 1 ? ` · ${chromaLabel(activeChromaObj?.displayName || "", Math.max(0, selectedChromaIndex))}` : ""}</span>
                         </div>
-                        {(previewVideoUrl || ownedLevels.length > 1) && <div className="preset-inspect-rail">
-                            {previewVideoUrl && <button type="button" className="preset-preview-mode" onClick={() => setIsVideoPlaying((playing) => !playing)} aria-label={isVideoPlaying ? "Return to weapon view" : `Play ${selectedSkin.displayName} preview`}><i aria-hidden="true">{isVideoPlaying ? "×" : "▶"}</i>{isVideoPlaying ? "Weapon" : "Preview"}</button>}
+                        {(previewVideoUrl || ownedLevels.length > 1) && <div className="preset-inspect-rail skin-picker-rail">
+                            {previewVideoUrl ? <button type="button" className={`store-preview-play${isVideoPlaying ? " is-playing" : ""}`} onClick={() => setIsVideoPlaying((playing) => !playing)} aria-label={isVideoPlaying ? "Stop the preview video" : `Play the ${selectedSkin.displayName} preview`}>
+                                <i aria-hidden="true">{isVideoPlaying ? <svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" /></svg> : <svg viewBox="0 0 16 16"><path d="M5.5 3.6v8.8a.6.6 0 0 0 .9.5l6.9-4.4a.6.6 0 0 0 0-1L6.4 3.1a.6.6 0 0 0-.9.5Z" /></svg>}</i>
+                                {isVideoPlaying ? "Stop" : "Preview"}
+                            </button> : null}
                             {previewVideoUrl && isVideoPlaying && <button type="button" className="preset-preview-expand" onClick={() => setIsVideoModalOpen(true)} aria-label={`Open ${selectedSkin.displayName} preview in a large window`} title="Open large preview">↗</button>}
-                            {ownedLevels.length > 1 && <div className="preset-level-switcher" aria-label="Upgrade level"><span>Level</span>{ownedLevels.map((level, index) => <button key={level.uuid} type="button" className={selectedLevelId === level.uuid ? "active" : ""} onClick={() => handleLevelSelect(level.uuid)} aria-label={`Show level ${index + 1}`} aria-pressed={selectedLevelId === level.uuid}>{index + 1}</button>)}</div>}
+                            {ownedLevels.length > 1 && <div className="store-preview-upgrades" role="group" aria-label="Upgrade level">{ownedLevels.map((level, index) => <button key={level.uuid} type="button" className={selectedLevelId === level.uuid ? "active" : ""} onClick={() => handleLevelSelect(level.uuid)} aria-pressed={selectedLevelId === level.uuid}><b>{index + 1}</b>{levelLabel(level.levelItem)}</button>)}</div>}
                         </div>}
 
                         {/* Keep the equipped buddy visible before the variant gallery. */}
                         {!isMelee && (
                             <div className="unified-modal-buddy-section">
-                                <div className="unified-modal-section-title">Gun Buddy</div>
                                 <button
                                     type="button"
                                     className={`equipped-buddy-pill${activeTab === "buddies" ? " active" : ""}`}
@@ -239,16 +284,14 @@ export default function UnifiedSkinSelectorModal({
                                                 style={{ width: "85%", height: "85%", objectFit: "contain" }}
                                             />
                                         ) : (
-                                            <span style={{ fontSize: "0.95rem" }}>🚫</span>
+                                            <span className="equipped-buddy-empty" aria-hidden="true" />
                                         )}
                                     </div>
                                     <div className="equipped-buddy-info">
-                                        <span className="equipped-buddy-label">Current Buddy</span>
+                                        <span className="equipped-buddy-label">Gun buddy</span>
                                         <span className="equipped-buddy-name">{equippedBuddy?.displayName || "None"}</span>
                                     </div>
-                                    <span style={{ fontSize: "0.6rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
-                                        {activeTab === "buddies" ? "SHOW SKINS" : "CHANGE"}
-                                    </span>
+                                    <span className="equipped-buddy-action">{activeTab === "buddies" ? "Show skins" : "Change"}</span>
                                 </button>
                             </div>
                         )}
@@ -268,6 +311,7 @@ export default function UnifiedSkinSelectorModal({
                                             aria-label={index === 0 ? "Show default variant" : `Show variant ${index + 1}`}
                                         >
                                             <img src={chroma.fullRender || chroma.displayIcon || chroma.swatch || previewRenderUrl} alt="" />
+                                            <small>{chromaLabel(chroma.displayName, selectedSkin.chromas.indexOf(chroma))}</small>
                                             {chroma.streamedVideo ? <span aria-hidden="true">▶</span> : null}
                                         </button>
                                     ))}
@@ -331,17 +375,21 @@ export default function UnifiedSkinSelectorModal({
                                                 <button
                                                     key={skin.uuid}
                                                     type="button"
-                                                    className={`unified-modal-card-item${isActive ? " active" : ""}`}
+                                                    className={`unified-modal-card-item${isActive ? " active" : ""}${TIER_COLORS[skin.contentTierUuid] ? " has-tier" : ""}`}
+                                                    style={{ "--tier": skinTierColor } as React.CSSProperties}
                                                     onClick={() => handleSkinClick(skin)}
                                                     title={skin.displayName}
                                                 >
                                                     <div className="unified-modal-card-tier-line" style={{ backgroundColor: skinTierColor }} />
+                                                    {CONTENT_TIERS[skin.contentTierUuid] && (
+                                                        <img className="unified-modal-card-edition" src={CONTENT_TIERS[skin.contentTierUuid].icon} alt={CONTENT_TIERS[skin.contentTierUuid].name} title={`${CONTENT_TIERS[skin.contentTierUuid].name} Edition`} />
+                                                    )}
                                                     <div className="unified-modal-card-img-wrap">
                                                         <img src={skinIcon} alt="" />
                                                     </div>
                                                     <div className="unified-modal-card-info">
                                                         <span className="unified-modal-card-name">{skin.displayName}</span>
-                                                        {isActive && <span className="unified-modal-card-status">Equipped</span>}
+                                                        {isActive && <span className="unified-modal-card-status">Selected</span>}
                                                     </div>
                                                 </button>
                                             );
@@ -394,7 +442,7 @@ export default function UnifiedSkinSelectorModal({
                                                     <span className="unified-modal-buddy-card-name">{buddy.displayName}</span>
                                                     {isEquipped && (
                                                         <span className="unified-modal-card-status" style={{ color: "var(--green)" }}>
-                                                            Equipped
+                                                            Selected
                                                         </span>
                                                     )}
                                                     {isLimitReached && (
@@ -414,7 +462,7 @@ export default function UnifiedSkinSelectorModal({
                 <div className="unified-modal-footer">
                     <div className="unified-modal-footer-copy">
                         <strong>{selectedSkin.displayName}</strong>
-                        <span>Save changes the preset. Apply changes only this weapon in VALORANT.</span>
+                        <span>{saveAction?.detail || `Apply puts this on your ${weapon.displayName} in VALORANT right away.`}</span>
                     </div>
                     <div className="unified-modal-footer-actions">
                         {saveAction ? (
@@ -437,5 +485,5 @@ export default function UnifiedSkinSelectorModal({
                 onClose={() => setIsVideoModalOpen(false)}
             />
         ) : null}
-    </>);
+    </div>);
 }

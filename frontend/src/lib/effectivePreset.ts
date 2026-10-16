@@ -1,4 +1,5 @@
 import { ExpressionSlot, IdentityV1, LoadoutItemV1, Preset, SpraySlot } from '@/lib/types';
+import { expressionMetadata, normalizeExpressions, replaceExpressionSlot, resolveExpressions } from './spraySlots';
 
 export const DEFAULT_PRESET_ID = 'default-preset';
 
@@ -34,12 +35,25 @@ export function buildPresetApplyRequest(preset: Preset, allPresets: Preset[]): P
             if (!sprays?.length) sprays = parent.sprays;
             if (!flexes?.length) flexes = parent.flexes;
             if (!expressions?.length) expressions = parent.expressions;
+            if (!preset.expressions?.length && parent.expressions?.length && (preset.sprays?.length || preset.flexes?.length)) {
+                expressions = normalizeExpressions(parent.expressions);
+                for (const override of resolveExpressions([], preset.sprays || [], preset.flexes || [])) {
+                    expressions = replaceExpressionSlot(expressions, override.slotIndex!, override.typeId, override.assetId);
+                }
+            }
         }
     }
-    return { loadout, identity, sprays, flexes, expressions };
+    if (expressions?.length) {
+        const metadata = expressionMetadata(normalizeExpressions(expressions));
+        return { loadout, identity, ...metadata };
+    }
+    // Older share codes used [] as a placeholder beside legacy sprays. A slot
+    // is cleared with the None asset, rather than an empty modern wheel array.
+    return { loadout, identity, sprays, flexes, expressions: undefined };
 }
 
 export function effectiveSprays(preset: Preset | null | undefined, game: GameLoadoutMeta): SpraySlot[] {
+    if (preset?.expressions?.length) return expressionMetadata(normalizeExpressions(preset.expressions)).sprays;
     if (preset?.sprays && preset.sprays.length > 0) {
         return [...preset.sprays];
     }
@@ -47,6 +61,7 @@ export function effectiveSprays(preset: Preset | null | undefined, game: GameLoa
 }
 
 export function effectiveFlexes(preset: Preset | null | undefined, game: GameLoadoutMeta): ExpressionSlot[] {
+    if (preset?.expressions?.length) return expressionMetadata(normalizeExpressions(preset.expressions)).flexes;
     if (preset?.flexes && preset.flexes.length > 0) {
         return [...preset.flexes];
     }
@@ -55,8 +70,9 @@ export function effectiveFlexes(preset: Preset | null | undefined, game: GameLoa
 
 export function effectiveExpressions(preset: Preset | null | undefined, game: GameLoadoutMeta): ExpressionSlot[] {
     if (preset?.expressions && preset.expressions.length > 0) {
-        return [...preset.expressions];
+        return normalizeExpressions(preset.expressions);
     }
+    if (preset?.sprays?.length || preset?.flexes?.length) return resolveExpressions([], preset.sprays || [], preset.flexes || []);
     return [...(game.expressions ?? [])];
 }
 

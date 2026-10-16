@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -16,8 +17,18 @@ type PartyResponse struct {
 	QueueID        string         `json:"queueId,omitempty"`
 	QueueStartedAt int64          `json:"queueStartedAt,omitempty"`
 	Members        []*PartyMember `json:"members,omitempty"`
-	Source         string         `json:"source,omitempty"`
-	Error          string         `json:"error,omitempty"`
+	// Accessibility is Riot's OPEN or CLOSED party setting.
+	Accessibility string `json:"accessibility,omitempty"`
+	// EligibleQueues are the queue IDs Riot says this party can enter right now.
+	EligibleQueues []string `json:"eligibleQueues,omitempty"`
+	// QueueIneligibilities are Riot's codes for why some queues are blocked.
+	QueueIneligibilities []string `json:"queueIneligibilities,omitempty"`
+	// RestrictedSeconds is Riot's remaining queue restriction for this party.
+	RestrictedSeconds int `json:"restrictedSeconds,omitempty"`
+	// CustomGame is true while the party is in custom game setup.
+	CustomGame bool   `json:"customGame,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 type PartyMember struct {
@@ -44,13 +55,17 @@ type currentPartyPlayerResponse struct {
 }
 
 type partyDetailsResponse struct {
-	ID              string `json:"ID"`
-	PartyID         string `json:"PartyID"`
-	QueueID         string `json:"QueueID"`
-	QueueEntryTime  string `json:"QueueEntryTime"`
-	State           string `json:"State"`
-	PreviousState   string `json:"PreviousState"`
-	MatchmakingData struct {
+	ID                   string   `json:"ID"`
+	PartyID              string   `json:"PartyID"`
+	QueueID              string   `json:"QueueID"`
+	QueueEntryTime       string   `json:"QueueEntryTime"`
+	State                string   `json:"State"`
+	PreviousState        string   `json:"PreviousState"`
+	Accessibility        string   `json:"Accessibility"`
+	EligibleQueues       []string `json:"EligibleQueues"`
+	QueueIneligibilities []string `json:"QueueIneligibilities"`
+	RestrictedSeconds    float64  `json:"RestrictedSeconds"`
+	MatchmakingData      struct {
 		QueueID string `json:"QueueID"`
 	} `json:"MatchmakingData"`
 	Members []struct {
@@ -245,6 +260,14 @@ func (h *Handler) buildPartyResponse(val *valclient.ValClient, source string, de
 		QueueID: details.MatchmakingData.QueueID,
 		Source:  source,
 		Members: make([]*PartyMember, 0, len(details.Members)),
+
+		Accessibility:        strings.ToUpper(details.Accessibility),
+		EligibleQueues:       details.EligibleQueues,
+		QueueIneligibilities: details.QueueIneligibilities,
+		CustomGame:           strings.EqualFold(details.State, "CUSTOM_GAME_SETUP"),
+	}
+	if details.RestrictedSeconds > 0 {
+		resp.RestrictedSeconds = int(math.Ceil(details.RestrictedSeconds))
 	}
 	if phase == "matchmaking" {
 		resp.QueueStartedAt = parseQueueEntryTime(details.QueueEntryTime)

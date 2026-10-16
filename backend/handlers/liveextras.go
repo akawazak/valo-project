@@ -118,6 +118,12 @@ type SocialPresence struct {
 	// PartyGroup is an anonymous, process-local grouping key derived from
 	// Riot presence data. Raw party IDs are never returned to the frontend.
 	PartyGroup string `json:"partyGroup,omitempty"`
+	// LastOnlineAt (ms) is Riot's last_online_ts for offline friends, or the
+	// last time VantaVault saw them online when Riot does not report one.
+	LastOnlineAt int64 `json:"lastOnlineAt,omitempty"`
+	// LastMatchAt (ms) is the start of the friend's latest match from Riot
+	// match history, refreshed in the background.
+	LastMatchAt int64 `json:"lastMatchAt,omitempty"`
 }
 
 func (h *Handler) GetLiveLoadouts(w http.ResponseWriter, r *http.Request) {

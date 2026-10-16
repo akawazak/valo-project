@@ -3,6 +3,10 @@ export interface Agent {
     displayName: string;
     displayIcon: string;
     isBaseContent: boolean;
+    /** valorant-api.com art, present when agents come from /v1/agents. */
+    fullPortrait?: string;
+    background?: string;
+    backgroundGradientColors?: string[];
 }
 
 export interface RiotAccount {
@@ -43,6 +47,8 @@ export interface IdentityV1 {
     playerCardId: string;
     playerTitleId: string;
     accountLevel?: number;
+    preferredLevelBorderId?: string;
+    hideAccountLevel?: boolean;
 }
 
 export interface SpraySlot {
@@ -53,6 +59,7 @@ export interface SpraySlot {
 export interface ExpressionSlot {
     typeId: string;
     assetId: string;
+    slotIndex?: number;
 }
 
 export interface Preset {
@@ -86,6 +93,7 @@ export interface Weapon {
     displayName: string;
     displayIcon: string;
     category: string;
+    shopData?: { cost?: number } | null;
     skins: Skin[];
 }
 
@@ -110,6 +118,8 @@ export interface SkinLevel {
     displayName: string;
     displayIcon: string;
     streamedVideo?: string;
+    /** e.g. "EEquippableSkinLevelItem::VFX"; null for the base level. */
+    levelItem?: string | null;
 }
 
 export interface GunBuddyLevel {

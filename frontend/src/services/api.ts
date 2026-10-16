@@ -2,8 +2,10 @@ import { Weapon, Agent, OwnedSkinsResponse, LoadoutItemV1, Preset, GunBuddy, Con
 import { AppRequestError, LocalClientError } from '@/lib/errors';
 import { isAndroidRuntime } from '@/lib/platform';
 import { fetchCacheFirstJson } from '@/lib/resourceCache';
+import { FLEX_TYPE_ID, expressionMetadata, normalizeExpressions } from '../lib/spraySlots';
 
 export const LOCAL_URL = "http://localhost:31719/v1"
+export type AccountRequestScope = Pick<RiotAccount, 'puuid' | 'region'>;
 const PUBLIC_API_TIMEOUT_MS = 8000;
 let activeRemoteAccount: {
     puuid: string;
@@ -14,6 +16,10 @@ const REQUEST_WARNING_WINDOW_MS = 30_000;
 let lastAuthInvalidEventAt = 0;
 const AUTH_INVALID_EVENT_WINDOW_MS = 2_000;
 const AUTH_FAILURE_CODES = ["AUTH_REQUIRED", "MISSING_ENTITLEMENT", "BAD_CLAIMS"];
+let activeAccountRevision = 0;
+let accountSelectionRevision = 0;
+let accountSelectionKey = '';
+const responseOwners = new WeakMap<Response, { puuid: string; revision: number }>();
 
 export function reportAppError(message: string) {
     if (typeof window !== "undefined") {
@@ -60,7 +66,9 @@ export async function appFetch(input: string | URL | Request, init?: RequestInit
         body: typeof init?.body === "string" ? init.body : null,
     });
     if (init?.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-    return new Response(result.body, {
+    // Fetch forbids a body for these statuses, even an empty string. The local
+    // chat deletion endpoint returns 204 after successfully clearing history.
+    return new Response([204, 205, 304].includes(result.status) ? null : result.body, {
         status: result.status,
         headers: { "Content-Type": result.contentType },
     });
@@ -83,6 +91,10 @@ export function activateAccount(account: {
     region: string;
     authSource?: "oauth" | "lockfile";
 }) {
+    activeAccountRevision++;
+    const selectionKey = `${account.puuid.trim().toLowerCase()}:${account.region.toLowerCase()}`;
+    if (selectionKey !== accountSelectionKey) accountSelectionRevision++;
+    accountSelectionKey = selectionKey;
     if (isAndroidRuntime()) localStorage.setItem("use_local_sso", "false");
     localStorage.setItem("riot_puuid", account.puuid);
     localStorage.setItem("riot_region", account.region);
@@ -104,13 +116,34 @@ export function activateAccount(account: {
 }
 
 export function clearActiveAccount() {
+    activeAccountRevision++;
+    accountSelectionRevision++;
+    accountSelectionKey = '';
     activeRemoteAccount = null;
+    localStorage.removeItem("riot_puuid");
+    localStorage.removeItem("riot_region");
     localStorage.removeItem("riot_access_token");
     localStorage.removeItem("riot_entitlements");
 }
 
 export function hasActiveRemoteAuth() {
     return Boolean(activeRemoteAccount);
+}
+
+export type AccountRequest = { owner: AccountRequestScope; isCurrent: () => boolean };
+
+/** Capture before awaiting; switching away and back still invalidates this request. */
+export function captureAccountRequest(account?: AccountRequestScope | null): AccountRequest | null {
+    if (account === null) return null;
+    const puuid = (account?.puuid ?? localStorage.getItem('riot_puuid'))?.trim();
+    if (!puuid) return null;
+    const owner = { puuid, region: account?.region ?? localStorage.getItem('riot_region') ?? '' };
+    const revision = accountSelectionRevision;
+    return {
+        owner,
+        isCurrent: () => revision === accountSelectionRevision
+            && localStorage.getItem('riot_puuid')?.trim().toLowerCase() === puuid.toLowerCase(),
+    };
 }
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs = PUBLIC_API_TIMEOUT_MS): Promise<T> {
@@ -129,23 +162,35 @@ export function fetchCachedPublicJson<T>(url: string): Promise<T> {
 async function fetchWithAuth(
     url: string,
     init?: RequestInit,
-    options: { forceRemoteAuth?: boolean } = {},
+    options: { forceRemoteAuth?: boolean; owner?: AccountRequestScope } = {},
 ): Promise<Response> {
     const headers = new Headers(init?.headers || {});
+    if (options.owner) {
+        headers.set("X-Riot-Selected-Puuid", options.owner.puuid);
+        headers.set("X-Riot-Expected-Puuid", options.owner.puuid);
+        headers.set("X-Riot-Region", options.owner.region);
+    }
     if (typeof window !== "undefined") {
         const android = isAndroidRuntime();
         if (options.forceRemoteAuth || android) {
             const selectedPuuid = localStorage.getItem("riot_puuid")?.trim();
-            if (selectedPuuid) headers.set("X-Riot-Selected-Puuid", selectedPuuid);
+            if (selectedPuuid && !headers.has("X-Riot-Selected-Puuid")) headers.set("X-Riot-Selected-Puuid", selectedPuuid);
         }
         // The selected account is authoritative. A global local-mode preference
         // must never make requests silently fall back to another Riot account.
         if (activeRemoteAccount) {
-            headers.set("X-Riot-Selected-Puuid", activeRemoteAccount.puuid);
-            headers.set("X-Riot-Region", activeRemoteAccount.region);
+            if (!headers.has("X-Riot-Selected-Puuid")) headers.set("X-Riot-Selected-Puuid", activeRemoteAccount.puuid);
+            if (!headers.has("X-Riot-Region")) headers.set("X-Riot-Region", activeRemoteAccount.region);
         }
     }
-    return appFetch(url, { ...init, headers });
+    // Capture before IPC/import awaits. An old response must not expire the
+    // account selected while that request was in flight.
+    const requestOwner = headers.get("X-Riot-Selected-Puuid")
+        ?? (typeof localStorage !== "undefined" ? localStorage.getItem("riot_puuid") : null);
+    const requestRevision = activeAccountRevision;
+    const response = await appFetch(url, { ...init, headers });
+    if (requestOwner) responseOwners.set(response, { puuid: requestOwner, revision: requestRevision });
+    return response;
 }
 
 async function requestErrorFromResponse(
@@ -170,15 +215,19 @@ async function requestErrorFromResponse(
     const authFailure = response.status === 401
         || response.status === 403
         || AUTH_FAILURE_CODES.includes(serverCode);
+    const requestOwner = responseOwners.get(response);
+    const selectedOwner = typeof localStorage !== "undefined" ? localStorage.getItem("riot_puuid") : null;
     if (
         typeof window !== "undefined"
         && authFailure
         && AUTH_FAILURE_CODES.includes(serverCode)
+        && (!requestOwner || (requestOwner.puuid.toLowerCase() === selectedOwner?.toLowerCase()
+            && requestOwner.revision === activeAccountRevision))
         && Date.now() - lastAuthInvalidEventAt >= AUTH_INVALID_EVENT_WINDOW_MS
     ) {
         lastAuthInvalidEventAt = Date.now();
         window.dispatchEvent(new CustomEvent("vantavault:riot-auth-invalid", {
-            detail: { code: serverCode, status: response.status },
+            detail: { code: serverCode, status: response.status, puuid: requestOwner?.puuid },
         }));
     }
     return new AppRequestError({
@@ -292,22 +341,18 @@ export type PlayerLoadoutData = {
     identity?: IdentityV1;
 };
 
-export async function getPlayerLoadoutData(): Promise<PlayerLoadoutData> {
+export async function getPlayerLoadoutData(owner?: AccountRequestScope): Promise<PlayerLoadoutData> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL + '/player-loadout');
+        const response = await fetchWithAuth(LOCAL_URL + '/player-loadout', undefined, { owner });
         if (!response.ok) {
             throw await requestErrorFromResponse(response, "VV-LOADOUT", "Could not fetch your current loadout.");
         }
         const data = await response.json();
-        const expressions = (data.expressions ?? []) as ExpressionSlot[];
-        const [sprayCatalog, flexCatalog] = await Promise.all([getSprays(), getFlexes()]);
-        const sprayIds = new Set(sprayCatalog.map((spray) => spray.uuid.toLowerCase()));
-        const flexIds = new Set(flexCatalog.map((flex) => flex.uuid.toLowerCase()));
+        const expressions = normalizeExpressions((data.expressions ?? []) as ExpressionSlot[]);
         return {
             loadout: (data.loadout ?? data) as Record<string, LoadoutItemV1>,
-            sprays: ((data.sprays ?? []) as SpraySlot[])
-                .filter((slot) => sprayIds.has(slot.sprayId.toLowerCase())),
-            flexes: expressions.filter((expr) => flexIds.has(expr.assetId.toLowerCase())),
+            sprays: expressions.length ? expressionMetadata(expressions).sprays : (data.sprays ?? []) as SpraySlot[],
+            flexes: expressions.filter((expr) => expr.typeId.toLowerCase() === FLEX_TYPE_ID),
             expressions,
             identity: data.identity as IdentityV1 | undefined,
         };
@@ -397,9 +442,9 @@ export async function getOwnedAgents(): Promise<OwnedAgentsResponse> {
     }
 }
 
-export async function getPresets(): Promise<Preset[]> {
+export async function getPresets(owner?: AccountRequestScope): Promise<Preset[]> {
     try {
-        const response = await fetchWithAuth(LOCAL_URL+'/presets');
+        const response = await fetchWithAuth(LOCAL_URL+'/presets', undefined, { owner });
         if (!response.ok) {
             throw await requestErrorFromResponse(response, "VV-PRESETS", "Could not fetch presets.");
         }
@@ -410,12 +455,13 @@ export async function getPresets(): Promise<Preset[]> {
     }
 }
 
-export async function savePresets(presets: Preset[]): Promise<void> {
+export async function savePresets(presets: Preset[], owner?: AccountRequestScope): Promise<void> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/presets', {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(presets),
-        });
+        }, { owner });
         if (!response.ok) {
             throw await requestErrorFromResponse(response, "VV-PRESETS-SAVE", "Could not save presets.");
         }
@@ -425,15 +471,15 @@ export async function savePresets(presets: Preset[]): Promise<void> {
     }
 }
 
-export async function getPersistedAccounts(): Promise<RiotAccount[]> {
-    try {
-        const response = await appFetch(LOCAL_URL + '/accounts');
-        if (!response.ok) return [];
-        const data = await response.json();
-        return Array.isArray(data) ? data as RiotAccount[] : [];
-    } catch {
-        return [];
+export async function getPersistedAccounts(): Promise<RiotAccount[] | null> {
+    const response = await appFetch(LOCAL_URL + '/accounts', { headers: { 'X-Riot-Selected-Puuid': '' } });
+    if (!response.ok) {
+        throw await requestErrorFromResponse(response, "VV-ACCOUNTS", "Could not load saved Riot accounts.");
     }
+    if (response.status === 204) return null;
+    const data = await response.json();
+    if (!Array.isArray(data)) throw new Error('Saved Riot accounts returned an invalid response.');
+    return data as RiotAccount[];
 }
 
 let accountSaveQueue: Promise<void> = Promise.resolve();
@@ -448,7 +494,8 @@ export function savePersistedAccounts(accounts: RiotAccount[]): Promise<void> {
     accountSaveQueue = accountSaveQueue.catch(() => undefined).then(async () => {
         const response = await appFetch(LOCAL_URL + '/accounts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            // Local account management must work even if Riot credentials cannot be unlocked.
+            headers: { 'Content-Type': 'application/json', 'X-Riot-Selected-Puuid': '' },
             body: snapshot,
         });
         if (!response.ok) {
@@ -466,12 +513,12 @@ export interface ApplyLoadoutRequest {
     expressions?: ExpressionSlot[];
 }
 
-export async function applyLoadout(request: ApplyLoadoutRequest): Promise<void> {
+export async function applyLoadout(request: ApplyLoadoutRequest, owner?: AccountRequestScope): Promise<void> {
     try {
         const response = await fetchWithAuth(LOCAL_URL+'/apply-loadout', {
             method: 'POST',
             body: JSON.stringify(request),
-        });
+        }, { owner });
         if (!response.ok) {
             throw await requestErrorFromResponse(response, "VV-LOADOUT-APPLY", "Could not apply the loadout.");
         }
@@ -802,6 +849,31 @@ export async function getAccountXP(): Promise<AccountXPResponse> {
     return response.json();
 }
 
+export interface AccoladeRecord { id: string; best: number; count: number }
+export interface AccoladesResponse {
+    /** Riot's accolade catalog: id and the threshold it takes to earn it. */
+    definitions: Array<{ id: string; threshold: number }>;
+    lifetime: AccoladeRecord[];
+    /** Act UUID to that act's records. */
+    acts: Record<string, AccoladeRecord[]>;
+    /** The signed-in player's values in their recent Competitive/Premier matches. */
+    matches: Array<{ matchId: string; startedAt: number; accolades: Array<{ id: string; earned: boolean; value: number }> }>;
+}
+
+/** The signed-in player's accolades (13.06). Undocumented endpoint: load only when the user opens the view. */
+export async function getAccolades(): Promise<AccoladesResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + '/career/accolades');
+    if (!response.ok) throw new Error(await response.text() || 'Could not load accolades.');
+    return response.json();
+}
+
+/** Raw 13.06 career data (favourites, Premier). Shapes are not documented yet. */
+export async function getCareerExtra(kind: "favorites" | "premier"): Promise<unknown> {
+    const response = await fetchWithAuth(LOCAL_URL + '/career/' + kind);
+    if (!response.ok) throw new Error(await response.text() || `Could not load ${kind}`);
+    return response.json();
+}
+
 export async function getMatchHistory(startIndex = 0, endIndex = 20, queue?: string): Promise<MatchHistoryResponse> {
     const params = new URLSearchParams({ startIndex: String(startIndex), endIndex: String(endIndex) });
     if (queue) params.set('queue', queue);
@@ -916,6 +988,8 @@ export interface ProfileOverview {
     rankActs: ProfileRankActSummary[];
     rankSource?: "live" | "cache";
     rankError?: string;
+    lastCacheSyncedAt?: number;
+    lastLiveRankRefreshedAt?: number;
     seasonSummary: ProfileSeasonSummary | null;
 }
 
@@ -964,6 +1038,7 @@ export interface ProfileMapStatsResponse {
 }
 
 export interface ProfilePlayerStats {
+    currentCompetitiveTier?: number;
     subject: string;
     teamId: string;
     partyId?: string;
@@ -990,6 +1065,12 @@ export interface ProfilePlayerStats {
     adr: number;
     acs: number;
     hsPct: number;
+    /** Riot's own per-team MVP (cached v6+). */
+    teamMvp?: boolean;
+    /** Riot behaviorFactors (cached v6+). */
+    behavior?: { afkRounds: number; stayedInSpawnRounds: number; friendlyFireOutgoing: number; friendlyFireIncoming: number; selfDamage: number };
+    /** Riot partyRRPenalties entry for this player's party. */
+    partyRRPenalty?: number;
 }
 
 export interface ProfileMatchPartyMember {
@@ -1014,6 +1095,7 @@ export interface ProfileMatchInfo {
     blueRoundsWon: number;
     redRoundsWon: number;
     blueWins: boolean;
+    earlyCompletion?: boolean;
 }
 
 export interface ProfileMatchSummary {
@@ -1034,6 +1116,14 @@ export interface ProfileMatchSummary {
     performanceBonus?: number;
     localPlayer: ProfilePlayerStats;
     partyMembers?: ProfileMatchPartyMember[];
+    /** Free-for-all (Deathmatch) only: rank by kills among all players. */
+    placement?: number;
+    playerCount?: number;
+    bestOtherKills?: number;
+    /** Numbered-team modes (Gauntlet): teams in the match once results are cached; `win` is then real. */
+    teamCount?: number;
+    /** Numbered-team modes: the local team's final standing (1 = winner). */
+    teamPlacement?: number;
 }
 
 export interface ProfileMatchHistoryResponse {
@@ -1047,6 +1137,8 @@ export interface ProfileMatchHistoryResponse {
 }
 
 export interface ProfileMatchDetails {
+    rankError?: string;
+    rankRetryAt?: number;
     matchId: string;
     matchInfo: ProfileMatchInfo;
     players: ProfilePlayerStats[];
@@ -1199,6 +1291,166 @@ export async function getMapStats(
     return response.json();
 }
 
+export interface ProfileQueueStat {
+    queueID: string;
+    gameMode: string;
+    matches: number;
+}
+
+export interface ProfileTeammateStat {
+    subject: string;
+    gameName: string;
+    tagLine: string;
+    characterId: string;
+    playerCardId?: string;
+    /** Games played in the same party. */
+    games: number;
+    /** Of those, games with a team result (excludes Deathmatch and similar). */
+    decided: number;
+    wins: number;
+    lastPlayed: number;
+}
+
+export interface CareerTally { attempts: number; wins: number }
+export interface CareerInsights {
+    puuid: string;
+    region: string;
+    queue: string;
+    matches: number;
+    /** Rounds where you became your team's last survivor; bySize[0] is 1v1. */
+    clutches: { attempts: number; wins: number; bySize: CareerTally[] };
+    /** Kills (and deaths) by Riot damage item: weapon UUID, "ability", "spike", "melee" or "other". */
+    weapons: Array<{ item: string; count: number }>;
+    weaponDeaths: Array<{ item: string; count: number }>;
+    buys: Array<{ type: "pistol" | "eco" | "force" | "full"; rounds: number; wins: number }>;
+    sessions: { decided: number; wins: number; afterTwoLosses: CareerTally; byGame: CareerTally[]; byHour: CareerTally[]; sessions: number };
+    /** Six 0–100 habits ranked against the other players in the same lobbies; absent under 5 matches. */
+    playstyle?: CareerPlaystyle;
+}
+
+export type PlaystyleKey = "aim" | "entry" | "clutch" | "teamplay" | "economy" | "consistency";
+export interface CareerPlaystyle {
+    matches: number;
+    recent: number;
+    /** recentScore is -1 when the latest matches are too few to compare. */
+    axes: Array<{ key: PlaystyleKey; score: number; recentScore: number; value: number; lobby: number }>;
+    /** How often you die first in a round, ranked against your lobbies (higher = more often). */
+    firstDeath?: { score: number; value: number; lobby: number };
+}
+
+let gameIconsPromise: Promise<Record<string, string>> | null = null;
+/** Official game icons (PNG data URLs) read from the local Riot Client install. */
+export function getGameIcons(): Promise<Record<string, string>> {
+    gameIconsPromise ??= fetchWithAuth(`${LOCAL_URL}/social/game-icons`)
+        .then((response) => (response.ok ? response.json() : { icons: {} }))
+        .then((payload: { icons?: Record<string, string> }) => payload.icons || {})
+        .catch(() => {
+            gameIconsPromise = null;
+            return {};
+        });
+    return gameIconsPromise;
+}
+
+export async function getCareerInsights(opts: { puuid?: string; region?: string } = {}, queue = ""): Promise<CareerInsights> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    if (queue) params.set("queue", queue);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/insights${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Failed to load career insights.");
+    }
+    return response.json();
+}
+
+export async function getFrequentTeammates(
+    opts: { puuid?: string; region?: string } = {},
+    limit = 10,
+): Promise<{ puuid: string; region: string; teammates: ProfileTeammateStat[] }> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    params.set("limit", String(limit));
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/teammates${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch frequent teammates.');
+    }
+    return response.json();
+}
+
+export interface DuoCount { count: number; eligible: number }
+
+/** How the profile owner and one party partner back each other up (same party and team, round-based games). */
+export interface DuoChemistry {
+    puuid: string;
+    region: string;
+    partner: string;
+    games: number;
+    decided: number;
+    wins: number;
+    killFeedGames: number;
+    youTradedThem: DuoCount;
+    theyTradedYou: DuoCount;
+    yourFirstDeathsCovered: DuoCount;
+    theirFirstDeathsCovered: DuoCount;
+    theyAssistedYou: number;
+    youAssistedThem: number;
+    pairings: { you: string; partner: string; games: number; decided: number; wins: number }[];
+    moments: { matchId: string; round: number; mapId: string; start: number; kind: "you-traded" | "they-traded"; gapMillis: number }[];
+    recent: { matchId: string; mapId: string; start: number; you: string; partner: string; decided: boolean; won: boolean }[];
+}
+
+export async function getDuoPartners(
+    opts: { puuid?: string; region?: string } = {},
+): Promise<{ puuid: string; region: string; partners: ProfileTeammateStat[] }> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/duo-partners?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to load duo partners.');
+    }
+    return response.json();
+}
+
+export async function getDuoChemistry(
+    partner: string,
+    opts: { puuid?: string; region?: string; queue?: string } = {},
+): Promise<DuoChemistry> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    params.set("partner", partner);
+    if (opts.queue) params.set("queue", opts.queue);
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/duo?${params.toString()}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to load duo chemistry.');
+    }
+    return response.json();
+}
+
+export interface ProfileQueuesResponse {
+    puuid: string;
+    region: string;
+    queues: ProfileQueueStat[];
+}
+
+export async function getPlayedQueues(
+    opts: { puuid?: string; region?: string } = {},
+): Promise<ProfileQueuesResponse> {
+    const params = new URLSearchParams();
+    appendProfileParams(params, opts);
+    const qs = params.toString();
+    const response = await fetchWithAuth(`${LOCAL_URL}/profile/queues${qs ? `?${qs}` : ""}`);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Failed to fetch played queues.');
+    }
+    return response.json();
+}
+
 export async function getProfileMatchHistory(
     startIndex = 0,
     endIndex = 20,
@@ -1223,11 +1475,12 @@ export async function getProfileMatchHistory(
 
 export async function getProfileMatchDetails(
     matchID: string,
-    opts: { puuid?: string; region?: string; analytics?: boolean } = {},
+    opts: { puuid?: string; region?: string; analytics?: boolean; ranks?: boolean } = {},
 ): Promise<ProfileMatchDetails> {
     const params = new URLSearchParams();
     appendProfileParams(params, opts);
     if (opts.analytics) params.set("analytics", "true");
+    if (opts.ranks) params.set("ranks", "true");
     const qs = params.toString();
     const response = await fetchWithAuth(`${LOCAL_URL}/profile/match-details/${encodeURIComponent(matchID)}${qs ? `?${qs}` : ""}`);
     if (!response.ok) {
@@ -1287,6 +1540,8 @@ export interface LiveMatchResponse {
     enemyTeam?: LivePlayer[];
     source?: "local" | "remote";
     error?: string;
+    retryAt?: number;
+    stale?: boolean;
 }
 
 export interface LivePlayer {
@@ -1306,6 +1561,8 @@ export interface LivePlayer {
     historyPartyGroup?: string;
     historyPartyMatches?: number;
     historyPartyLastSeenAt?: number;
+    /** Your cached history with this player: games as teammates and as opponents. */
+    encounters?: { with: number; withWins: number; against: number; againstWins: number; lastPlayedAt: number };
     cachedEvidence?: {
         puuid: string;
         agentId?: string;
@@ -1452,8 +1709,35 @@ export interface PartyStatusResponse {
     queueId?: string;
     queueStartedAt?: number;
     members?: PartyMember[];
+    /** Riot's OPEN / CLOSED party setting. */
+    accessibility?: "OPEN" | "CLOSED" | string;
+    /** Queue IDs Riot says this party can enter right now. */
+    eligibleQueues?: string[];
+    /** Riot's codes for why other queues are blocked. */
+    queueIneligibilities?: string[];
+    /** Seconds left on a queue restriction, as Riot reports it. */
+    restrictedSeconds?: number;
+    customGame?: boolean;
     source?: "remote" | "local";
     error?: string;
+}
+
+export type PartyAction =
+    | { action: "ready" | "unready" | "start" | "cancel" | "open" | "close" }
+    | { action: "queue"; queueId: string }
+    | { action: "invite"; name: string; tag: string };
+
+/** One party button press. The backend re-checks the party with Riot first and refuses anything the game client would not allow. */
+export async function postPartyAction(action: PartyAction): Promise<PartyStatusResponse> {
+    const response = await fetchWithAuth(LOCAL_URL + "/party/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
+    }, { forceRemoteAuth: true });
+    const payload = await response.json().catch(() => null) as (PartyStatusResponse & { error?: string }) | null;
+    if (!response.ok) throw new Error(payload?.error || "The party action did not go through.");
+    if (!payload) throw new Error("The party action went through, but the party could not be refreshed.");
+    return payload;
 }
 
 export interface PartyMember {
@@ -1595,6 +1879,10 @@ export interface SocialPresence {
     allyScore?: number;
     enemyScore?: number;
     scoreAvailable?: boolean;
+    /** Offline friends: ms timestamp of when they were last online. */
+    lastOnlineAt?: number;
+    /** Start of the friend's latest match (ms), from Riot match history. */
+    lastMatchAt?: number;
 }
 
 export interface DailyTicketResponse {
@@ -1802,7 +2090,10 @@ export async function clearChatHistory(conversationKey?: string, accountPuuid?: 
     const query = new URLSearchParams();
     if (conversationKey) query.set('conversationKey', encodedChatKey(conversationKey));
     if (accountPuuid) query.set('accountPuuid', accountPuuid);
-    const response = await fetchWithAuth(`${LOCAL_URL}/chat/history${query.size ? `?${query}` : ''}`, { method: 'DELETE' }, { forceRemoteAuth: true });
+    const url = `${LOCAL_URL}/chat/history${query.size ? `?${query}` : ''}`;
+    const response = accountPuuid
+        ? await appFetch(url, { method: 'DELETE', headers: { 'X-Riot-Selected-Puuid': '' } })
+        : await fetchWithAuth(url, { method: 'DELETE' }, { forceRemoteAuth: true });
     if (!response.ok) throw new Error(await response.text() || 'Could not clear chat history.');
 }
 

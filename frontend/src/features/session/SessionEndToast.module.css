@@ -1,0 +1,17 @@
+/* Session over card (canvas "ProfileNav" section 3, 2026-10-14) */
+.toast { position: fixed; right: 22px; bottom: 22px; z-index: 900; width: min(380px, calc(100vw - 32px)); border: 1px solid rgba(255,70,85,.45); border-radius: 14px; background: #141a21; box-shadow: 0 24px 60px rgba(0,0,0,.6); color: #e8edf2; animation: slideIn .28s ease-out; }
+.body { display: grid; gap: 4px; padding: 14px 18px 16px; }
+.body em { color: #ff8a94; font-size: 10.5px; font-style: normal; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.body h4 { margin: 0 0 2px; font-size: 16px; }
+.row { display: flex; align-items: baseline; gap: 14px; }
+.row strong, .row b { font-family: Bahnschrift, "Segoe UI", sans-serif; font-stretch: condensed; font-size: 26px; font-weight: 700; line-height: 1; }
+.win { color: #2fd6a3; }
+.loss { color: #ff5a67; }
+.body p { margin: 2px 0 8px; color: #8b97a3; font-size: 12px; }
+.actions { display: flex; gap: 8px; }
+.actions button { height: 32px; padding: 0 14px; border: 1px solid #2c3540; border-radius: 8px; background: #1a2028; color: #dbe1e8; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.actions .primary { border-color: #ff4655; background: #ff4655; color: #fff; }
+.close { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border: 0; border-radius: 6px; background: none; color: #6f7b87; font-size: 18px; cursor: pointer; }
+.close:hover { color: #fff; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(12px); } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }

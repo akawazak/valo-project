@@ -40,6 +40,8 @@ func (h *Handler) attachSocialHistory(account string, response *SocialStatusResp
 		_ = recordSocialSnapshot(db, account, response, time.Now().UnixMilli())
 	}
 	attachSavedSocialCards(db, account, response)
+	attachSavedLastOnline(db, account, response)
+	attachFriendActivity(db, response)
 	response.Activity, _ = readSocialActivity(db, account, 100)
 	response.FormerContacts, _ = readFormerSocialContacts(db, account, 100)
 	firstSeen := map[string]int64{}
@@ -82,6 +84,34 @@ func attachSavedSocialCards(db *sql.DB, account string, response *SocialStatusRe
 	for i := range response.Presences {
 		if response.Presences[i].CardID == "" {
 			response.Presences[i].CardID = cards[strings.ToLower(response.Presences[i].Puuid)]
+		}
+	}
+}
+
+// attachSavedLastOnline fills LastOnlineAt from VantaVault's own record when
+// the Riot roster omits last_online_ts (for example over remote XMPP). A
+// friend's last-online moment is the same fact whichever of the user's
+// signed-in accounts observed it, so the newest sighting across them wins.
+func attachSavedLastOnline(db *sql.DB, account string, response *SocialStatusResponse) {
+	if db == nil || response == nil || len(response.Presences) == 0 {
+		return
+	}
+	rows, err := db.Query(`SELECT peerPuuid,MAX(lastSeenOnlineAt) FROM social_contacts WHERE lastSeenOnlineAt>0 GROUP BY peerPuuid`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	seen := make(map[string]int64)
+	for rows.Next() {
+		var peer string
+		var at int64
+		if rows.Scan(&peer, &at) == nil {
+			seen[strings.ToLower(peer)] = at
+		}
+	}
+	for i := range response.Presences {
+		if saved := seen[strings.ToLower(response.Presences[i].Puuid)]; saved > response.Presences[i].LastOnlineAt {
+			response.Presences[i].LastOnlineAt = saved
 		}
 	}
 }

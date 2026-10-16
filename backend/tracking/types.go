@@ -17,32 +17,48 @@ package tracking
 // Derived fields (KD, KDA, ADR, ACS, HSPct) are precomputed on the
 // backend at row-serialization time (see design doc §3).
 type PlayerStats struct {
-	Subject         string       `json:"subject"`
-	TeamID          string       `json:"teamId"`
-	PartyID         string       `json:"partyId,omitempty"`
-	GameName        string       `json:"gameName"`
-	TagLine         string       `json:"tagLine"`
-	PlayerCardID    string       `json:"playerCardId,omitempty"`
-	PlayerTitleID   string       `json:"playerTitleId,omitempty"`
-	CharacterID     string       `json:"characterId"`
-	Kills           int          `json:"kills"`
-	Deaths          int          `json:"deaths"`
-	Assists         int          `json:"assists"`
-	Score           int          `json:"score"`
-	Headshots       int          `json:"headshots"`
-	Bodyshots       int          `json:"bodyshots"`
-	Legshots        int          `json:"legshots"`
-	DamageDealt     int          `json:"damageDealt"`
-	RoundsPlayed    int          `json:"roundsPlayed"`
-	PlaytimeMillis  int64        `json:"playtimeMillis,omitempty"`
-	AbilityCasts    AbilityCasts `json:"abilityCasts,omitempty"`
-	IsLocal         bool         `json:"isLocal"`
-	CompetitiveTier int          `json:"competitiveTier"`
-	KD              float64      `json:"kd"`
-	KDA             float64      `json:"kda"`
-	ADR             float64      `json:"adr"`
-	ACS             float64      `json:"acs"`
-	HSPct           float64      `json:"hsPct"`
+	Subject                string       `json:"subject"`
+	TeamID                 string       `json:"teamId"`
+	PartyID                string       `json:"partyId,omitempty"`
+	GameName               string       `json:"gameName"`
+	TagLine                string       `json:"tagLine"`
+	PlayerCardID           string       `json:"playerCardId,omitempty"`
+	PlayerTitleID          string       `json:"playerTitleId,omitempty"`
+	CharacterID            string       `json:"characterId"`
+	Kills                  int          `json:"kills"`
+	Deaths                 int          `json:"deaths"`
+	Assists                int          `json:"assists"`
+	Score                  int          `json:"score"`
+	Headshots              int          `json:"headshots"`
+	Bodyshots              int          `json:"bodyshots"`
+	Legshots               int          `json:"legshots"`
+	DamageDealt            int          `json:"damageDealt"`
+	RoundsPlayed           int          `json:"roundsPlayed"`
+	PlaytimeMillis         int64        `json:"playtimeMillis,omitempty"`
+	AbilityCasts           AbilityCasts `json:"abilityCasts,omitempty"`
+	IsLocal                bool         `json:"isLocal"`
+	CompetitiveTier        int          `json:"competitiveTier"`
+	CurrentCompetitiveTier int          `json:"currentCompetitiveTier,omitempty"`
+	KD                     float64      `json:"kd"`
+	KDA                    float64      `json:"kda"`
+	ADR                    float64      `json:"adr"`
+	ACS                    float64      `json:"acs"`
+	HSPct                  float64      `json:"hsPct"`
+	// TeamMVP is Riot's own per-team MVP (teams[].mvp).
+	TeamMVP bool `json:"teamMvp,omitempty"`
+	// Behavior is Riot's behaviorFactors; nil for rows cached before v6.
+	Behavior *PlayerBehavior `json:"behavior,omitempty"`
+	// PartyRRPenalty is Riot's partyRRPenalties entry for this player's party.
+	PartyRRPenalty int `json:"partyRRPenalty,omitempty"`
+}
+
+// PlayerBehavior mirrors the parts of Riot's behaviorFactors worth showing.
+type PlayerBehavior struct {
+	AFKRounds            int `json:"afkRounds"`
+	StayedInSpawnRounds  int `json:"stayedInSpawnRounds"`
+	FriendlyFireOutgoing int `json:"friendlyFireOutgoing"`
+	FriendlyFireIncoming int `json:"friendlyFireIncoming"`
+	SelfDamage           int `json:"selfDamage"`
 }
 
 type AbilityCasts struct {
@@ -162,6 +178,15 @@ type MatchSummary struct {
 	PerformanceBonus int                `json:"performanceBonus,omitempty"`
 	LocalPlayer      PlayerStats        `json:"localPlayer"`
 	PartyMembers     []MatchPartyMember `json:"partyMembers,omitempty"`
+	// Free-for-all modes (Deathmatch) have no team result, so the row ranks
+	// the player by kills instead. Zero for team modes.
+	Placement      int `json:"placement,omitempty"`
+	PlayerCount    int `json:"playerCount,omitempty"`
+	BestOtherKills int `json:"bestOtherKills,omitempty"`
+	// TeamCount is set for numbered-team modes (Gauntlet) once Riot's team
+	// results are cached; Win then reflects the local team's result.
+	TeamCount     int `json:"teamCount,omitempty"`
+	TeamPlacement int `json:"teamPlacement,omitempty"`
 }
 
 // RRSnapshot is one row of `rr_snapshots` plus the API-shaped JSON.
@@ -248,16 +273,19 @@ type MatchInfo struct {
 	BlueRoundsWon    int    `json:"blueRoundsWon"`
 	RedRoundsWon     int    `json:"redRoundsWon"`
 	BlueWins         bool   `json:"blueWins"`
+	EarlyCompletion  bool   `json:"earlyCompletion,omitempty"`
 }
 
 // MatchDetails is the payload of `GET /v1/profile/match-details/:matchID`.
 type MatchDetails struct {
-	MatchID    string        `json:"matchId"`
-	MatchInfo  MatchInfo     `json:"matchInfo"`
-	Players    []PlayerStats `json:"players"`
-	Kills      []KillEvent   `json:"kills,omitempty"`
-	Rounds     []MatchRound  `json:"rounds,omitempty"`
-	ServedFrom string        `json:"servedFrom"`
+	RankError   string        `json:"rankError,omitempty"`
+	RankRetryAt int64         `json:"rankRetryAt,omitempty"`
+	MatchID     string        `json:"matchId"`
+	MatchInfo   MatchInfo     `json:"matchInfo"`
+	Players     []PlayerStats `json:"players"`
+	Kills       []KillEvent   `json:"kills,omitempty"`
+	Rounds      []MatchRound  `json:"rounds,omitempty"`
+	ServedFrom  string        `json:"servedFrom"`
 }
 
 // CurrentRank mirrors the Riot
@@ -372,6 +400,7 @@ type MatchRow struct {
 	CachedAt         int64
 	AccountPuuid     string
 	AnalyticsVersion int
+	EarlyCompletion  int
 }
 
 // PlayerRow is a raw row from the `match_players` table.
@@ -399,6 +428,8 @@ type PlayerRow struct {
 	PlaytimeMillis  int64
 	AbilityCasts    AbilityCasts
 	IsLocal         bool
+	Behavior        PlayerBehavior
+	PartyRRPenalty  int
 }
 
 // MatchCache bundles a match row with all of its player rows.
@@ -407,6 +438,7 @@ type MatchCache struct {
 	Players []PlayerRow
 	Kills   []KillEvent
 	Rounds  []MatchRound
+	Teams   []TeamResult
 }
 
 // LocalPlayerRow is the per-row payload for the local player inside

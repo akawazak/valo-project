@@ -13,6 +13,7 @@ import { useData } from "@/context/DataContext";
 import { publishAppNotification } from "@/lib/appNotifications";
 import { playUiSound } from "@/lib/uiSounds";
 import ResilientAssetImage from "@/components/ResilientAssetImage";
+import { chromaLabel, levelLabel } from "@/lib/skinLabels";
 import { AppRequestError } from "@/lib/errors";
 
 const VP_ID = "85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741";
@@ -20,6 +21,8 @@ const RP_ID = "e59aa87c-4cbf-517a-5983-6e81511be9b7";
 
 const VP_ICON = "https://media.valorant-api.com/currencies/85ad13f7-3d1b-5128-9eb2-7cd8ee0b5741/displayicon.png";
 const RP_ICON = "https://media.valorant-api.com/currencies/e59aa87c-4cbf-517a-5983-6e81511be9b7/displayicon.png";
+const KC_ID = "85ca954a-41f2-ce94-9b45-8ca3dd39a00d";
+const KC_ICON = `https://media.valorant-api.com/currencies/${KC_ID}/displayicon.png`;
 const BUNDLE_ROTATION_MS = 8000;
 const SKIN_LEVEL_TYPE_ID = "e7c63390-eda7-46e0-bb7a-a6abdacd2433";
 const PLAYER_CARD_TYPE_ID = "3f296c07-64c3-494c-923b-fe692a4fa1bd";
@@ -336,12 +339,13 @@ function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOf
     const assetFallback = <StoreAssetPlaceholder kind={offer.weaponName} name={offer.name} />;
     return (
         <div
-            className={`store-card store-card--${categoryClass}${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
+            className={`store-card store-card--${categoryClass}${offer.tierColor ? " has-tier" : ""}${offer.isOwned ? " owned" : ""}${offer.nightMarket ? " night-market-offer" : ""}`}
             style={{
                 "--tier-color-border": hexToRgba(tc, 0.25),
                 "--tier-color-hover-border": hexToRgba(tc, 0.6),
                 "--tier-bg-gradient": `linear-gradient(180deg, ${hexToRgba(tc, 0.06)} 0%, rgba(18,22,30,0.9) 100%)`,
                 "--tier-color-raw": hexToRgba(tc, 1),
+                "--tier": hexToRgba(tc, 1),
             } as React.CSSProperties}
             role="button"
             tabIndex={0}
@@ -360,7 +364,13 @@ function OfferCard({ offer, wished, onToggleWishlist, onOpen }: { offer: StoreOf
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5 4.2 13A5.2 5.2 0 0 1 11.6 5.7l.4.4.4-.4A5.2 5.2 0 0 1 19.8 13L12 20.5Z" /></svg>
             </button>
             <div className="store-card-header">
-                {offer.isOwned && <span className="store-card-owned-badge">✓ OWNED</span>}
+                {offer.tierColor && (
+                    <span className="store-card-edition" title={offer.tierName}>
+                        {offer.tierIcon && <Image src={offer.tierIcon} alt="" width={14} height={14} unoptimized />}
+                        {offer.tierName.replace(/s*Edition$/i, "")}
+                    </span>
+                )}
+                {offer.isOwned && <span className="store-card-owned-badge">✓ Owned</span>}
             </div>
             <div className="store-card-name">{offer.name}</div>
             <div className="store-card-category">{offer.weaponName}</div>
@@ -421,11 +431,14 @@ function StoreItemPreviewModal({ offer, wished, vpBalance, onToggleWishlist, onC
         ? selectedChroma?.streamedVideo || selectedLevel?.streamedVideo || ""
         : selectedLevel?.streamedVideo || selectedChroma?.streamedVideo || "";
     const previewImage = selectedChroma?.fullRender || selectedChroma?.displayIcon || offer.image;
+    // valorant-api highlight colours are RRGGBBAA without "#".
+    const tierHex = offer.tierColor ? `#${offer.tierColor.replace("#", "").slice(0, 6)}` : undefined;
     return createPortal(
         <div className="store-preview-backdrop" role="presentation" onMouseDown={onClose}>
             <section className="store-preview-modal" role="dialog" aria-modal="true" aria-label={`${offer.name} preview`} onMouseDown={(event) => event.stopPropagation()}>
                 <button type="button" className="store-preview-close" onClick={onClose} aria-label="Close preview">×</button>
-                <div className={`store-preview-visual${isVideoPlaying ? " is-video" : ""}`}>
+                <div className={`store-preview-visual${isVideoPlaying ? " is-video" : ""}${tierHex ? " has-tier" : ""}`} style={tierHex ? { "--tier": tierHex } as React.CSSProperties : undefined}>
+                    {offer.tierIcon || offer.tierName ? <span className="store-preview-edition">{offer.tierIcon ? <Image src={offer.tierIcon} alt="" width={18} height={18} unoptimized /> : null}{offer.tierName.replace(/ Edition$/i, "")}</span> : null}
                     {isVideoPlaying && previewVideoUrl ? (
                         <SkinVideoPlayer
                             key={previewVideoUrl}
@@ -439,31 +452,37 @@ function StoreItemPreviewModal({ offer, wished, vpBalance, onToggleWishlist, onC
                         <div className="store-card-no-image">No preview available</div>
                     )}
                     <div className="store-preview-inspect-rail">
-                        {previewVideoUrl && <button type="button" className="store-preview-mode-button" onClick={() => setIsVideoPlaying((playing) => !playing)} aria-label={isVideoPlaying ? "Return to weapon view" : `Play ${offer.name} preview`}><i aria-hidden="true">{isVideoPlaying ? "×" : "▶"}</i>{isVideoPlaying ? "Weapon" : "Preview"}</button>}
-                        {levels.length > 1 && <div className="store-preview-level-switcher" aria-label="Upgrade level"><span>Level</span>{levels.map((level, index) => <button type="button" key={level.uuid} className={selectedLevel?.uuid === level.uuid ? "active" : ""} onClick={() => setSelectedLevelId(level.uuid)} aria-label={`Show level ${index + 1}`} aria-pressed={selectedLevel?.uuid === level.uuid}>{index + 1}</button>)}</div>}
+                        {previewVideoUrl ? <button type="button" className={`store-preview-play${isVideoPlaying ? " is-playing" : ""}`} onClick={() => setIsVideoPlaying((playing) => !playing)} aria-label={isVideoPlaying ? "Stop the preview video" : `Play the ${offer.name} preview`}>
+                            <i aria-hidden="true">{isVideoPlaying ? <svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" /></svg> : <svg viewBox="0 0 16 16"><path d="M5.5 3.6v8.8a.6.6 0 0 0 .9.5l6.9-4.4a.6.6 0 0 0 0-1L6.4 3.1a.6.6 0 0 0-.9.5Z" /></svg>}</i>
+                            {isVideoPlaying ? "Stop" : "Preview"}
+                        </button> : null}
+                        {levels.length > 1 ? <div className="store-preview-upgrades" role="group" aria-label="Upgrade level">{levels.map((level, index) => <button type="button" key={level.uuid} className={selectedLevel?.uuid === level.uuid ? "active" : ""} onClick={() => setSelectedLevelId(level.uuid)} aria-pressed={selectedLevel?.uuid === level.uuid} title={level.streamedVideo ? "Has a preview video" : undefined}><b>{index + 1}</b>{levelLabel(level.levelItem)}</button>)}</div> : null}
                     </div>
                 </div>
                 <div className="store-preview-details">
+                    <p className="store-preview-weapon">{offer.weaponName}</p>
                     <h2>{offer.name}</h2>
-                    <p>{offer.weaponName}</p>
-                    <div className="store-preview-actions">
-                        <div className="store-card-price-pill"><Image src={VP_ICON} alt="VP" width={15} height={15} unoptimized />{offer.priceValue.toLocaleString()}</div>
-                        <button type="button" className={`store-preview-wishlist${wished ? " active" : ""}`} onClick={() => onToggleWishlist(offer)}>{wished ? "♥ Wishlisted" : "♡ Add to wishlist"}</button>
-                    </div>
-                    {offer.priceValue > 0 && (
-                        <div className={`store-preview-balance${vpBalance >= offer.priceValue ? " can-afford" : " short"}`}>
-                            {vpBalance >= offer.priceValue ? `Affordable — ${Math.max(0, vpBalance - offer.priceValue).toLocaleString()} VP remaining` : `${(offer.priceValue - vpBalance).toLocaleString()} VP needed`}
+                    {offer.tierName ? <p className="store-preview-tier-line" style={tierHex ? { color: tierHex } : undefined}>{offer.tierIcon ? <Image src={offer.tierIcon} alt="" width={16} height={16} unoptimized /> : null}{offer.tierName}</p> : null}
+                    <div className="store-preview-buy">
+                        <div className="store-preview-price">
+                            <Image src={VP_ICON} alt="VP" width={22} height={22} unoptimized />
+                            <strong>{offer.priceValue.toLocaleString()}</strong>
+                            {offer.basePrice && offer.basePrice > offer.priceValue ? <s>{offer.basePrice.toLocaleString()}</s> : null}
+                            {offer.discount ? <em>-{offer.discount}%</em> : null}
                         </div>
-                    )}
+                        {offer.isOwned ? <p className="store-preview-balance is-owned">✓ You own this skin</p> : offer.priceValue > 0 ? <p className={`store-preview-balance${vpBalance >= offer.priceValue ? " can-afford" : " short"}`}>{vpBalance >= offer.priceValue ? <>You can buy this · <b>{Math.max(0, vpBalance - offer.priceValue).toLocaleString()} VP</b> left after</> : <>You&apos;re <b>{(offer.priceValue - vpBalance).toLocaleString()} VP</b> short</>}</p> : null}
+                        <button type="button" className={`store-preview-wishlist${wished ? " active" : ""}`} onClick={() => onToggleWishlist(offer)} aria-pressed={wished}>{wished ? "♥ On your wishlist" : "♡ Add to wishlist"}</button>
+                    </div>
                     {chromas.length > 1 && (
                         <div className="store-preview-section">
-                            <strong>Variants</strong>
+                            <strong>Variants <span>{chromas.length}</span></strong>
                             <div className="store-preview-chromas">
                                 {chromas.map((chroma, index) => (
                                     <button type="button" key={chroma.uuid} className={selectedChroma?.uuid === chroma.uuid ? "active" : ""} onClick={() => setSelectedChromaId(chroma.uuid)} title={index === 0 ? "Default" : `Variant ${index + 1}`} aria-label={index === 0 ? "Show default variant" : `Show variant ${index + 1}`}>
                                         {chroma.fullRender || chroma.displayIcon || chroma.swatch
                                             ? <Image className="full-render" src={chroma.fullRender || chroma.displayIcon || chroma.swatch} alt="" width={112} height={54} unoptimized />
                                             : <span className="store-preview-chroma-fallback" aria-hidden="true">{index + 1}</span>}
+                                        <small>{chromaLabel(chroma.displayName, index)}</small>
                                         {chroma.streamedVideo ? <span className="store-preview-chroma-video" aria-hidden="true">▶</span> : null}
                                     </button>
                                 ))}
@@ -500,6 +519,9 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     const [wishlist, setWishlist] = useState<Record<string, string>>({});
 
     const didAutoRefreshAtZeroRef = useRef(false);
+    const storeRequestRef = useRef(0);
+    const storeOwnerRef = useRef(activeAccount?.puuid || "");
+    storeOwnerRef.current = activeAccount?.puuid || "";
     const wishlistStorageKey = `vantavault:wishlist:${activeAccount?.puuid || "guest"}`;
 
     useEffect(() => {
@@ -570,10 +592,15 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     );
 
     const refreshStorefront = useCallback(() => {
+        const owner = activeAccount?.puuid || "";
+        const request = ++storeRequestRef.current;
+        const isCurrent = () => request === storeRequestRef.current && owner === storeOwnerRef.current
+            && owner === (localStorage.getItem("riot_puuid") || "");
         if (!activeAccount) {
             setStorefront(null);
             setWallet(null);
             setStorefrontError("");
+            setIsLoadingStorefront(false);
             return;
         }
         setIsLoadingStorefront(true);
@@ -581,6 +608,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         setIsTokenExpired(false);
         Promise.all([getStorefront(), getWallet()])
             .then(([sf, w]) => {
+                if (!isCurrent()) return;
                 setStorefront(sf);
                 setWallet(w);
                 const dailyRemaining = sf.SkinsPanelLayout?.SingleItemOffersRemainingDurationInSeconds || 0;
@@ -599,6 +627,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 setAccessorySeconds(sf.AccessoryStore?.AccessoryStoreRemainingDurationInSeconds || 0);
             })
             .catch(e => {
+                if (!isCurrent()) return;
                 setStorefront(null);
                 setWallet(null);
                 const msg = e instanceof Error ? e.message : "Live storefront unavailable.";
@@ -610,11 +639,12 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     setIsTokenExpired(true);
                 }
             })
-            .finally(() => setIsLoadingStorefront(false));
+            .finally(() => { if (isCurrent()) setIsLoadingStorefront(false); });
     }, [activeAccount, setIsTokenExpired]);
 
     useEffect(() => {
         refreshStorefront();
+        return () => { storeRequestRef.current += 1; };
     }, [refreshKey, refreshStorefront]);
 
     useEffect(() => {
@@ -817,6 +847,12 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                                 <Image src={RP_ICON} alt="RP" width={16} height={16} unoptimized className="currency-icon" />
                                 {rpBalance.toLocaleString()}
                             </span>
+                            {wallet[KC_ID] != null && (
+                                <span className="wallet-value kc">
+                                    <Image src={KC_ICON} alt="KC" width={16} height={16} unoptimized className="currency-icon" />
+                                    {wallet[KC_ID].toLocaleString()}
+                                </span>
+                            )}
                         </div>
                     )}
                     <button type="button" className="btn-tactical" onClick={refreshStorefront} disabled={isLoadingStorefront}>
@@ -892,7 +928,7 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                                     <div className="storefront-bundle-description">{bundle.description}</div>
                                 )}
                                 {(bundleSeconds[bundle.key] ?? 0) > 0 && (
-                                    <div className="storefront-bundle-timer">Ends in {formatDuration(bundleSeconds[bundle.key])}</div>
+                                    <div className="storefront-bundle-timer">Ends in {formatOfferWindow(bundleSeconds[bundle.key])}</div>
                                 )}
                             </div>
                             <div className="storefront-bundle-right">
@@ -901,7 +937,10 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                                     {bundle.totalDisc.toLocaleString()}
                                 </div>
                                 {bundle.totalBase > bundle.totalDisc && (
-                                    <div className="storefront-bundle-orig-price">{bundle.totalBase.toLocaleString()}</div>
+                                    <div className="storefront-bundle-savings">
+                                        <s>{bundle.totalBase.toLocaleString()}</s>
+                                        <span>{Math.round((1 - bundle.totalDisc / bundle.totalBase) * 100)}% off</span>
+                                    </div>
                                 )}
                                 <div className={`storefront-bundle-chevron${bundleOpen ? " open" : ""}`}>⌄</div>
                             </div>
@@ -962,13 +1001,13 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                     </div>
                     <div className="accessory-grid">
                         {accessories.map(item => (
-                            <div className="accessory-card clip-tactical-sm" key={item.uuid}>
-                                {item.image && <Image src={item.image} alt={item.name} width={54} height={54} unoptimized className="accessory-icon" />}
+                            <div className="accessory-card clip-tactical-sm" data-kind={item.kind.toLowerCase()} key={item.uuid}>
+                                <span className="accessory-art">{item.image && <Image src={item.image} alt={item.name} width={54} height={54} unoptimized className="accessory-icon" />}</span>
                                 <div className="accessory-copy">
                                     <span>{item.kind}</span>
                                     <strong>{item.name}</strong>
                                 </div>
-                                <div className="accessory-price">{item.priceValue.toLocaleString()}</div>
+                                <div className="accessory-price"><Image src={KC_ICON} alt="KC" width={14} height={14} unoptimized className="currency-icon" />{item.priceValue.toLocaleString()}</div>
                             </div>
                         ))}
                     </div>

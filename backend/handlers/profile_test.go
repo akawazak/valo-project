@@ -220,3 +220,27 @@ func TestMergeRankActsPreservesCachedActsMissingFromRecentUpdates(t *testing.T) 
 		t.Fatalf("cached previous act was lost: %+v", got[1])
 	}
 }
+
+func TestBuildMatchDetailsSkipsPerRoundStatsForFreeForAll(t *testing.T) {
+	deathmatch := &tracking.MatchCache{
+		Match: tracking.MatchRow{MatchID: "dm"},
+		Players: []tracking.PlayerRow{
+			{Subject: "local", TeamID: "local", IsLocal: true, Score: 9957, DamageDealt: 4000, RoundsPlayed: 1},
+		},
+	}
+	detail := buildMatchDetails(deathmatch)
+	if got := detail.Players[0]; got.ACS != 0 || got.ADR != 0 {
+		t.Fatalf("deathmatch ACS/ADR = %v/%v, want 0/0", got.ACS, got.ADR)
+	}
+
+	standard := &tracking.MatchCache{
+		Match: tracking.MatchRow{MatchID: "std", BlueRoundsWon: 13, RedRoundsWon: 7},
+		Players: []tracking.PlayerRow{
+			{Subject: "local", TeamID: "Blue", IsLocal: true, Score: 4000, DamageDealt: 3000, RoundsPlayed: 20},
+		},
+	}
+	detail = buildMatchDetails(standard)
+	if got := detail.Players[0]; got.ACS != 200 || got.ADR != 150 {
+		t.Fatalf("standard ACS/ADR = %v/%v, want 200/150", got.ACS, got.ADR)
+	}
+}

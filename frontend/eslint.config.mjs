@@ -9,8 +9,7 @@ export default [
   {
     ignores: [
         "node_modules/**",
-        ".next/**",
-        ".next-android/**",
+        ".next*/**",
         "out/**",
         "build/**",
         "next-env.d.ts",

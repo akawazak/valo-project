@@ -24,6 +24,7 @@ import {
 } from "@/services/api";
 import type { StorefrontBundleItem, StorefrontResponse } from "@/lib/types";
 import { presenceActivity, presenceState, queueName } from "@/features/party/presence";
+import { useQueues } from "@/lib/gameMeta";
 import {
   MobileGameImage,
   MobileErrorNotice,
@@ -148,6 +149,7 @@ export default function MobileHomeV2({
   onInitialLoadSettled: (accountPuuid: string) => void;
   preferences: MobilePreferences;
 }) {
+  useQueues(); // queue names for presence labels
   const {
     activeAccount,
     allBuddies,

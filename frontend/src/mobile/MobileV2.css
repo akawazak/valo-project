@@ -4569,6 +4569,26 @@ button.mv2-chat-history-state.failed {
   font-size: 11px;
 }
 
+.mv2-account-removal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: var(--mv2-text);
+  text-align: left;
+  background: var(--mv2-raised);
+  border-color: var(--mv2-border);
+}
+
+.mv2-account-removal button {
+  padding: 4px 0;
+  color: var(--mv2-accent);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 800;
+}
+
 /* Live */
 
 .mv2-live-score {

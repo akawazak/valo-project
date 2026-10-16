@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -108,6 +110,20 @@ CREATE TABLE IF NOT EXISTS match_rounds (
     PRIMARY KEY (matchID, roundNum)
 );
 CREATE INDEX IF NOT EXISTS idx_match_rounds_match_round ON match_rounds(matchID, roundNum);
+
+-- Every team in Riot's teams[], including numbered teams (Gauntlet duos)
+-- that the Blue/Red columns on matches cannot represent.
+CREATE TABLE IF NOT EXISTS match_teams (
+    matchID      TEXT    NOT NULL,
+    teamId       TEXT    NOT NULL,
+    won          INTEGER NOT NULL DEFAULT 0,
+    roundsPlayed INTEGER NOT NULL DEFAULT 0,
+    roundsWon    INTEGER NOT NULL DEFAULT 0,
+    numPoints    INTEGER NOT NULL DEFAULT 0,
+    placement    INTEGER NOT NULL DEFAULT 0,
+    mvp          TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (matchID, teamId)
+);
 
 CREATE TABLE IF NOT EXISTS rr_snapshots (
     puuid          TEXT    NOT NULL DEFAULT '',
@@ -303,6 +319,15 @@ func OpenTrackingDB(appConfigDir string) (*sql.DB, error) {
 		{"match_rounds", "defuseLocationY", "INTEGER NOT NULL DEFAULT 0"},
 		{"match_rounds", "playerStats", "TEXT NOT NULL DEFAULT '[]'"},
 		{"rr_snapshots", "performanceBonus", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_teams", "placement", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_teams", "mvp", "TEXT NOT NULL DEFAULT ''"},
+		{"matches", "earlyCompletion", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "afkRounds", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "stayedInSpawnRounds", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "friendlyFireOutgoing", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "friendlyFireIncoming", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "selfDamage", "INTEGER NOT NULL DEFAULT 0"},
+		{"match_players", "partyRRPenalty", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumnIfMissing(db, migration.table, migration.column, migration.definition); err != nil {
 			_ = db.Close()
@@ -516,6 +541,12 @@ func PruneMatchesBefore(db *sql.DB, cutoffMillis int64) (int64, error) {
 		return 0, fmt.Errorf("tracking: prune match rounds: %w", err)
 	}
 	if _, err := tx.Exec(`
+		DELETE FROM match_teams
+		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
+	`, cutoffMillis); err != nil {
+		return 0, fmt.Errorf("tracking: prune match teams: %w", err)
+	}
+	if _, err := tx.Exec(`
 		DELETE FROM match_kills
 		WHERE matchID IN (SELECT matchID FROM matches WHERE gameStartMillis < ?)
 	`, cutoffMillis); err != nil {
@@ -583,6 +614,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		return fmt.Errorf("tracking: InsertMatchDetails: raw is empty")
 	}
 
+	captureRawMatch(matchID, raw)
+
 	parsed, err := parseMatchDetails(raw, puuid, resolvedNames)
 	if err != nil {
 		return fmt.Errorf("tracking: parse match details: %w", err)
@@ -601,8 +634,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		INSERT OR REPLACE INTO matches
 		    (matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId,
 		     gameLengthMillis, completionState, blueWins, blueRoundsWon, redRoundsWon,
-		     rawJsonPath, cachedAt, accountPuuid, analyticsVersion)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     rawJsonPath, cachedAt, accountPuuid, analyticsVersion, earlyCompletion)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		parsed.Match.MatchID,
 		parsed.Match.QueueID,
@@ -619,7 +652,8 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		"",
 		cachedAt,
 		puuid,
-		3,
+		CurrentAnalyticsVersion,
+		boolToInt(parsed.Match.EarlyCompletion),
 	)
 	if err != nil {
 		return fmt.Errorf("tracking: insert match: %w", err)
@@ -634,8 +668,9 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 		INSERT INTO match_players
 		    (matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		     kills, deaths, assists, score, headshots, bodyshots, legshots,
-		     damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal,
+		     afkRounds, stayedInSpawnRounds, friendlyFireOutgoing, friendlyFireIncoming, selfDamage, partyRRPenalty)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("tracking: prepare player insert: %w", err)
@@ -670,9 +705,30 @@ func InsertMatchDetails(db *sql.DB, _ string, matchID, puuid string, raw []byte,
 			p.AbilityCasts.Ability2,
 			p.AbilityCasts.Ultimate,
 			boolToInt(p.IsLocal),
+			p.Behavior.AFKRounds,
+			p.Behavior.StayedInSpawnRounds,
+			p.Behavior.FriendlyFireOutgoing,
+			p.Behavior.FriendlyFireIncoming,
+			p.Behavior.SelfDamage,
+			p.PartyRRPenalty,
 		)
 		if err != nil {
 			return fmt.Errorf("tracking: insert player %s: %w", p.Subject, err)
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM match_teams WHERE matchID = ?`, matchID); err != nil {
+		return fmt.Errorf("tracking: clear old team results: %w", err)
+	}
+	for _, team := range parsed.Teams {
+		if team.TeamID == "" {
+			continue
+		}
+		if _, err := tx.Exec(`
+			INSERT OR REPLACE INTO match_teams (matchID, teamId, won, roundsPlayed, roundsWon, numPoints, placement, mvp)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, matchID, team.TeamID, boolToInt(team.Won), team.RoundsPlayed, team.RoundsWon, team.NumPoints, team.Placement, strings.ToLower(team.MVP)); err != nil {
+			return fmt.Errorf("tracking: insert team %s: %w", team.TeamID, err)
 		}
 	}
 
@@ -753,13 +809,13 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	err := db.QueryRow(`
 		SELECT matchID, queueID, mapID, gameMode, isRanked, gameStartMillis, seasonId,
 		       gameLengthMillis, completionState, blueWins, blueRoundsWon, redRoundsWon,
-		       rawJsonPath, cachedAt, accountPuuid, analyticsVersion
+		       rawJsonPath, cachedAt, accountPuuid, analyticsVersion, earlyCompletion
 		FROM matches WHERE matchID = ?`, matchID,
 	).Scan(
 		&m.MatchID, &m.QueueID, &m.MapID, &m.GameMode, &m.IsRanked, &m.GameStartMillis,
 		&m.SeasonID, &m.GameLengthMillis, &m.CompletionState, &m.BlueWins,
 		&m.BlueRoundsWon, &m.RedRoundsWon, &m.RawJsonPath, &m.CachedAt, &m.AccountPuuid,
-		&m.AnalyticsVersion,
+		&m.AnalyticsVersion, &m.EarlyCompletion,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -771,7 +827,8 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 	rows, err := db.Query(`
 		SELECT matchID, subject, teamId, partyId, gameName, tagLine, playerCardId, playerTitleId, characterId, accountLevel, competitiveTier,
 		       kills, deaths, assists, score, headshots, bodyshots, legshots,
-		       damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal
+		       damageDealt, roundsPlayed, playtimeMillis, grenadeCasts, ability1Casts, ability2Casts, ultimateCasts, isLocal,
+		       afkRounds, stayedInSpawnRounds, friendlyFireOutgoing, friendlyFireIncoming, selfDamage, partyRRPenalty
 		FROM match_players WHERE matchID = ? ORDER BY teamId, score DESC`, matchID)
 	if err != nil {
 		return nil, fmt.Errorf("tracking: GetMatchFromCache players: %w", err)
@@ -790,6 +847,8 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 			&p.Headshots, &p.Bodyshots, &p.Legshots, &p.DamageDealt,
 			&p.RoundsPlayed, &p.PlaytimeMillis, &p.AbilityCasts.Grenade, &p.AbilityCasts.Ability1,
 			&p.AbilityCasts.Ability2, &p.AbilityCasts.Ultimate, &isLocal,
+			&p.Behavior.AFKRounds, &p.Behavior.StayedInSpawnRounds, &p.Behavior.FriendlyFireOutgoing,
+			&p.Behavior.FriendlyFireIncoming, &p.Behavior.SelfDamage, &p.PartyRRPenalty,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: scan player: %w", err)
 		}
@@ -877,7 +936,28 @@ func GetMatchFromCache(db *sql.DB, matchID, puuid string) (*MatchCache, error) {
 		return nil, fmt.Errorf("tracking: iterate round results: %w", err)
 	}
 
-	return &MatchCache{Match: m, Players: players, Kills: kills, Rounds: rounds}, nil
+	teamRows, err := db.Query(`
+		SELECT teamId, won, roundsPlayed, roundsWon, numPoints, placement, mvp
+		FROM match_teams WHERE matchID = ? ORDER BY teamId`, matchID)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: select team results: %w", err)
+	}
+	defer teamRows.Close()
+	var teams []TeamResult
+	for teamRows.Next() {
+		var team TeamResult
+		var won int
+		if err := teamRows.Scan(&team.TeamID, &won, &team.RoundsPlayed, &team.RoundsWon, &team.NumPoints, &team.Placement, &team.MVP); err != nil {
+			return nil, fmt.Errorf("tracking: scan team result: %w", err)
+		}
+		team.Won = won == 1
+		teams = append(teams, team)
+	}
+	if err := teamRows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: iterate team results: %w", err)
+	}
+
+	return &MatchCache{Match: m, Players: players, Kills: kills, Rounds: rounds, Teams: teams}, nil
 }
 
 // UpsertRRSnapshot inserts a new RR snapshot row, or REPLACES an
@@ -1033,6 +1113,12 @@ func ListCachedMatches(db *sql.DB, puuid, queue string, start, end int) ([]Match
 	return ListCachedMatchesFiltered(db, puuid, queue, "", start, end)
 }
 
+// IsFreeForAll reports modes where every player is on their own (Deathmatch),
+// including custom games that only carry the game-mode path.
+func IsFreeForAll(queueID, gameMode string) bool {
+	return strings.EqualFold(queueID, "deathmatch") || strings.Contains(strings.ToLower(gameMode), "/deathmatch/")
+}
+
 // ListCachedMatchesFiltered is ListCachedMatches with an optional act filter.
 func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start, end int) ([]MatchSummary, error) {
 	if puuid == "" {
@@ -1065,7 +1151,14 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 		       mp.teamId, mp.partyId, mp.characterId, mp.kills, mp.deaths, mp.assists, mp.score,
 		       mp.headshots, mp.bodyshots, mp.legshots, mp.damageDealt,
 		       mp.roundsPlayed,
-		       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0), COALESCE(rr.afkPenalty, 0), COALESCE(rr.performanceBonus, 0)
+		       COALESCE(rr.tierAfter, 0), COALESCE(rr.rrEarned, 0), COALESCE(rr.afkPenalty, 0), COALESCE(rr.performanceBonus, 0),
+		       (SELECT COUNT(*) FROM match_players o WHERE o.matchID = m.matchID),
+		       (SELECT COUNT(*) FROM match_players o WHERE o.matchID = m.matchID AND o.subject <> mp.subject
+		            AND (o.kills > mp.kills OR (o.kills = mp.kills AND o.score > mp.score))) + 1,
+		       (SELECT COALESCE(MAX(o.kills), 0) FROM match_players o WHERE o.matchID = m.matchID AND o.subject <> mp.subject),
+		       (SELECT COUNT(*) FROM match_teams mt WHERE mt.matchID = m.matchID),
+		       COALESCE((SELECT mt.won FROM match_teams mt WHERE mt.matchID = m.matchID AND mt.teamId = mp.teamId), 0),
+		       COALESCE((SELECT mt.placement FROM match_teams mt WHERE mt.matchID = m.matchID AND mt.teamId = mp.teamId), 0)
 		FROM matches m
 		JOIN match_players mp ON mp.matchID = m.matchID
 		LEFT JOIN rr_snapshots rr ON rr.matchID = m.matchID AND rr.puuid = mp.subject
@@ -1083,10 +1176,16 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 	var out []MatchSummary
 	for rows.Next() {
 		var (
-			s          MatchSummary
-			isRanked   int
-			blueWins   int
-			roundsPlay int
+			s              MatchSummary
+			isRanked       int
+			blueWins       int
+			roundsPlay     int
+			playerCount    int
+			placement      int
+			bestOtherKills int
+			teamCount      int
+			teamWon        int
+			teamPlacement  int
 		)
 		if err := rows.Scan(
 			&s.MatchID, &s.QueueID, &s.MapID, &s.GameMode, &s.GameStartMillis,
@@ -1097,14 +1196,27 @@ func ListCachedMatchesFiltered(db *sql.DB, puuid, queue, seasonID string, start,
 			&s.LocalPlayer.Headshots, &s.LocalPlayer.Bodyshots, &s.LocalPlayer.Legshots,
 			&s.LocalPlayer.DamageDealt, &roundsPlay,
 			&s.TierAfter, &s.RREarned, &s.AFKPenalty, &s.PerformanceBonus,
+			&playerCount, &placement, &bestOtherKills, &teamCount, &teamWon, &teamPlacement,
 		); err != nil {
 			return nil, fmt.Errorf("tracking: ListCachedMatches scan: %w", err)
+		}
+		if IsFreeForAll(s.QueueID, s.GameMode) && playerCount > 1 {
+			s.Placement = placement
+			s.PlayerCount = playerCount
+			s.BestOtherKills = bestOtherKills
 		}
 		s.IsRanked = isRanked == 1
 		s.LocalPlayer.RoundsPlayed = roundsPlay
 		s.Win = (blueWins == 1 && strings.EqualFold(s.LocalPlayer.TeamID, "Blue")) ||
 			(blueWins == 0 && strings.EqualFold(s.LocalPlayer.TeamID, "Red"))
-		s.LocalPlayer = deriveLocalPlayer(s.LocalPlayer)
+		if UsesNumberedTeams(s.LocalPlayer.TeamID) && teamCount > 0 {
+			s.Win = teamWon == 1
+			s.TeamCount = teamCount
+			if teamPlacement > 0 && teamPlacement <= teamCount {
+				s.TeamPlacement = teamPlacement
+			}
+		}
+		s.LocalPlayer = deriveLocalPlayer(s.LocalPlayer, HasTeamRounds(s.BlueRoundsWon, s.RedRoundsWon))
 		if s.LocalPlayer.PartyID != "" {
 			partyRows, partyErr := db.Query(`
 				SELECT subject, gameName, tagLine, characterId, playerCardId, playerTitleId
@@ -2077,15 +2189,26 @@ func ratio(num, denom int) float64 {
 	return float64(int(r*100+0.5)) / 100
 }
 
-func deriveLocalPlayer(p LocalPlayerRow) LocalPlayerRow {
-	if p.RoundsPlayed < 1 {
-		p.RoundsPlayed = 1
+// HasTeamRounds reports whether a match was played in scored team rounds.
+// Free-for-all modes such as Deathmatch finish 0:0 and report a single
+// "round", so per-round stats (ADR, ACS) are meaningless for them.
+func HasTeamRounds(blueRoundsWon, redRoundsWon int) bool {
+	return blueRoundsWon+redRoundsWon > 0
+}
+
+func deriveLocalPlayer(p LocalPlayerRow, teamRounds bool) LocalPlayerRow {
+	if p.RoundsPlayed < 0 {
+		p.RoundsPlayed = 0
 	}
 	if p.Kills < 0 {
 		p.Kills = 0
 	}
-	p.ADR = round1(float64(p.DamageDealt) / float64(p.RoundsPlayed))
-	p.ACS = round1(float64(p.Score) / float64(p.RoundsPlayed))
+	// Modes without Blue/Red rounds can still be multi-round (Gauntlet); only
+	// single-"round" modes like Deathmatch would inflate per-round stats.
+	if (teamRounds && p.RoundsPlayed > 0) || p.RoundsPlayed > 1 {
+		p.ADR = round1(float64(p.DamageDealt) / float64(p.RoundsPlayed))
+		p.ACS = round1(float64(p.Score) / float64(p.RoundsPlayed))
+	}
 	totalShots := p.Headshots + p.Bodyshots + p.Legshots
 	p.HSPct = round1(float64(p.Headshots) / float64(maxInt(totalShots, 1)) * 100.0)
 	p.KD = ratio(p.Kills, p.Deaths)
@@ -2114,6 +2237,32 @@ type parsedMatch struct {
 	Players []parsedPlayer
 	Kills   []KillEvent
 	Rounds  []MatchRound
+	Teams   []TeamResult
+}
+
+// CurrentAnalyticsVersion marks rows written by the current parser.
+// 4 added match_teams, 5 team placement, 6 team MVP, behaviorFactors, party
+// RR penalties and early completion. Older rows refetch once when opened.
+const CurrentAnalyticsVersion = 6
+
+// TeamResult is one entry of Riot's teams[] for a match.
+type TeamResult struct {
+	TeamID       string `json:"teamId"`
+	Won          bool   `json:"won"`
+	RoundsPlayed int    `json:"roundsPlayed"`
+	RoundsWon    int    `json:"roundsWon"`
+	NumPoints    int    `json:"numPoints"`
+	// Placement is Riot's undocumented tempR: the final standing (1 = winner).
+	// Verified on Gauntlet, where all eight duos report distinct 1..8 values.
+	Placement int `json:"tempR"`
+	// MVP is the team's MVP subject as Riot reports it.
+	MVP string `json:"mvp"`
+}
+
+// UsesNumberedTeams reports modes whose players sit on Team_1..Team_N
+// (Gauntlet duos) rather than Blue/Red.
+func UsesNumberedTeams(teamID string) bool {
+	return strings.HasPrefix(strings.ToLower(teamID), "team_")
 }
 
 type parsedMatchHeader struct {
@@ -2126,6 +2275,7 @@ type parsedMatchHeader struct {
 	SeasonID         string
 	GameLengthMillis int64
 	CompletionState  string
+	EarlyCompletion  bool
 	BlueWins         bool
 	BlueRoundsWon    int
 	RedRoundsWon     int
@@ -2154,6 +2304,8 @@ type parsedPlayer struct {
 	PlaytimeMillis  int64
 	AbilityCasts    AbilityCasts
 	IsLocal         bool
+	Behavior        PlayerBehavior
+	PartyRRPenalty  int
 }
 
 // rawMatchDetails matches the Riot MatchDetailsResponse shape (see
@@ -2162,15 +2314,17 @@ type parsedPlayer struct {
 // else.
 type rawMatchDetails struct {
 	MatchInfo struct {
-		MatchID          string `json:"matchId"`
-		MapID            string `json:"mapId"`
-		QueueID          string `json:"queueID"`
-		GameMode         string `json:"gameMode"`
-		IsRanked         bool   `json:"isRanked"`
-		GameStartMillis  int64  `json:"gameStartMillis"`
-		SeasonID         string `json:"seasonId"`
-		GameLengthMillis int64  `json:"gameLengthMillis"`
-		CompletionState  string `json:"completionState"`
+		MatchID           string             `json:"matchId"`
+		MapID             string             `json:"mapId"`
+		QueueID           string             `json:"queueID"`
+		GameMode          string             `json:"gameMode"`
+		IsRanked          bool               `json:"isRanked"`
+		GameStartMillis   int64              `json:"gameStartMillis"`
+		SeasonID          string             `json:"seasonId"`
+		GameLengthMillis  int64              `json:"gameLengthMillis"`
+		CompletionState   string             `json:"completionState"`
+		IsEarlyCompletion bool               `json:"isEarlyCompletion"`
+		PartyRRPenalties  map[string]float64 `json:"partyRRPenalties"`
 	} `json:"matchInfo"`
 	Players []struct {
 		Subject        string `json:"subject"`
@@ -2189,7 +2343,14 @@ type rawMatchDetails struct {
 		CharacterID     string `json:"characterId"`
 		AccountLevel    int    `json:"accountLevel"`
 		CompetitiveTier int    `json:"competitiveTier"`
-		Stats           *struct {
+		BehaviorFactors *struct {
+			AFKRounds            float64 `json:"afkRounds"`
+			StayedInSpawnRounds  float64 `json:"stayedInSpawnRounds"`
+			FriendlyFireOutgoing float64 `json:"friendlyFireOutgoing"`
+			FriendlyFireIncoming float64 `json:"friendlyFireIncoming"`
+			SelfDamage           float64 `json:"selfDamage"`
+		} `json:"behaviorFactors"`
+		Stats *struct {
 			Score          int   `json:"score"`
 			RoundsPlayed   int   `json:"roundsPlayed"`
 			Kills          int   `json:"kills"`
@@ -2208,11 +2369,7 @@ type rawMatchDetails struct {
 			Damage   int    `json:"damage"`
 		} `json:"roundDamage"`
 	} `json:"players"`
-	Teams []struct {
-		TeamID    string `json:"teamId"`
-		Won       bool   `json:"won"`
-		RoundsWon int    `json:"roundsWon"`
-	} `json:"teams"`
+	Teams        []TeamResult `json:"teams"`
 	RoundResults []struct {
 		RoundNum        int    `json:"roundNum"`
 		WinningTeam     string `json:"winningTeam"`
@@ -2305,9 +2462,11 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 			SeasonID:         r.MatchInfo.SeasonID,
 			GameLengthMillis: r.MatchInfo.GameLengthMillis,
 			CompletionState:  r.MatchInfo.CompletionState,
+			EarlyCompletion:  r.MatchInfo.IsEarlyCompletion,
 		},
 	}
 
+	out.Teams = r.Teams
 	for _, t := range r.Teams {
 		switch strings.ToLower(t.TeamID) {
 		case "blue":
@@ -2399,6 +2558,16 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 			CharacterID:     p.CharacterID,
 			AccountLevel:    p.AccountLevel,
 			CompetitiveTier: p.CompetitiveTier,
+			PartyRRPenalty:  int(math.Round(r.MatchInfo.PartyRRPenalties[p.PartyID])),
+		}
+		if b := p.BehaviorFactors; b != nil {
+			pl.Behavior = PlayerBehavior{
+				AFKRounds:            int(math.Round(b.AFKRounds)),
+				StayedInSpawnRounds:  int(math.Round(b.StayedInSpawnRounds)),
+				FriendlyFireOutgoing: int(math.Round(b.FriendlyFireOutgoing)),
+				FriendlyFireIncoming: int(math.Round(b.FriendlyFireIncoming)),
+				SelfDamage:           int(math.Round(b.SelfDamage)),
+			}
 		}
 		if p.Stats != nil {
 			pl.Kills = p.Stats.Kills
@@ -2444,4 +2613,150 @@ func parseMatchDetails(raw []byte, puuid string, resolvedNames map[string]struct
 	}
 
 	return out, nil
+}
+
+// QueueStat is one queue the player has cached matches in. GameMode is the
+// Riot asset path of the most recent match so clients can resolve a display
+// name from public metadata instead of a hardcoded queue list.
+type QueueStat struct {
+	QueueID  string `json:"queueID"`
+	GameMode string `json:"gameMode"`
+	Matches  int    `json:"matches"`
+}
+
+// TeammateStat is a player who queued in the same party as the profile owner.
+// Wins and Decided only count round-based games, where a team result exists.
+type TeammateStat struct {
+	Subject      string `json:"subject"`
+	GameName     string `json:"gameName"`
+	TagLine      string `json:"tagLine"`
+	CharacterID  string `json:"characterId"`
+	PlayerCardID string `json:"playerCardId,omitempty"`
+	Games        int    `json:"games"`
+	Decided      int    `json:"decided"`
+	Wins         int    `json:"wins"`
+	LastPlayed   int64  `json:"lastPlayed"`
+}
+
+// ListFrequentTeammates returns the players who most often shared a party with
+// puuid across the cached matches, most games first. Name, tag and agent come
+// from the most recent shared match that recorded a name.
+func ListFrequentTeammates(db *sql.DB, puuid string, limit int) ([]TeammateStat, error) {
+	if puuid == "" {
+		return nil, fmt.Errorf("tracking: ListFrequentTeammates: puuid is required")
+	}
+	if limit <= 0 {
+		limit = 3
+	}
+	subject := strings.ToLower(puuid)
+	rows, err := db.Query(`
+		SELECT other.subject,
+		       COUNT(*),
+		       SUM(CASE WHEN m.blueRoundsWon + m.redRoundsWon > 0 THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN m.blueRoundsWon + m.redRoundsWon > 0 AND (
+		                (m.blueWins = 1 AND lower(me.teamId) = 'blue') OR
+		                (m.blueWins = 0 AND lower(me.teamId) = 'red'))
+		           THEN 1 ELSE 0 END),
+		       MAX(m.gameStartMillis)
+		FROM match_players me
+		JOIN match_players other
+		  ON other.matchID = me.matchID AND other.partyId = me.partyId AND other.subject <> me.subject
+		JOIN matches m ON m.matchID = me.matchID
+		WHERE me.subject = ? AND trim(me.partyId) != ''
+		GROUP BY other.subject
+		ORDER BY COUNT(*) DESC, MAX(m.gameStartMillis) DESC
+		LIMIT ?
+	`, subject, limit)
+	if err != nil {
+		return nil, fmt.Errorf("tracking: ListFrequentTeammates query: %w", err)
+	}
+	out := []TeammateStat{}
+	for rows.Next() {
+		var mate TeammateStat
+		if err := rows.Scan(&mate.Subject, &mate.Games, &mate.Decided, &mate.Wins, &mate.LastPlayed); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("tracking: ListFrequentTeammates scan: %w", err)
+		}
+		out = append(out, mate)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("tracking: ListFrequentTeammates rows: %w", err)
+	}
+	rows.Close()
+
+	for i := range out {
+		err := db.QueryRow(`
+			SELECT other.gameName, other.tagLine, lower(other.characterId), other.playerCardId
+			FROM match_players me
+			JOIN match_players other
+			  ON other.matchID = me.matchID AND other.partyId = me.partyId AND other.subject = ?
+			JOIN matches m ON m.matchID = me.matchID
+			WHERE me.subject = ? AND trim(me.partyId) != ''
+			ORDER BY (other.gameName != '') DESC, m.gameStartMillis DESC
+			LIMIT 1
+		`, out[i].Subject, subject).Scan(&out[i].GameName, &out[i].TagLine, &out[i].CharacterID, &out[i].PlayerCardID)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("tracking: ListFrequentTeammates identity: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// ListPlayedQueues returns the queues present in the player's cached
+// matches, most played first.
+func ListPlayedQueues(db *sql.DB, puuid string) ([]QueueStat, error) {
+	if puuid == "" {
+		return nil, fmt.Errorf("tracking: ListPlayedQueues: puuid is required")
+	}
+	rows, err := db.Query(`
+		SELECT m.queueID,
+		       (SELECT m2.gameMode FROM matches m2
+		         JOIN match_players mp2 ON mp2.matchID = m2.matchID
+		        WHERE mp2.subject = ? AND m2.queueID = m.queueID
+		        ORDER BY m2.gameStartMillis DESC LIMIT 1),
+		       COUNT(*)
+		FROM matches m
+		JOIN match_players mp ON mp.matchID = m.matchID
+		WHERE mp.subject = ? AND m.queueID != ''
+		GROUP BY m.queueID
+		ORDER BY COUNT(*) DESC, m.queueID ASC
+	`, strings.ToLower(puuid), strings.ToLower(puuid))
+	if err != nil {
+		return nil, fmt.Errorf("tracking: ListPlayedQueues query: %w", err)
+	}
+	defer rows.Close()
+
+	out := []QueueStat{}
+	for rows.Next() {
+		var q QueueStat
+		if err := rows.Scan(&q.QueueID, &q.GameMode, &q.Matches); err != nil {
+			return nil, fmt.Errorf("tracking: ListPlayedQueues scan: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracking: ListPlayedQueues rows: %w", err)
+	}
+	return out, nil
+}
+
+// RawCaptureDirEnv names a directory where InsertMatchDetails writes each
+// match-details payload verbatim. Development only: it lets new Riot fields
+// (e.g. after a patch) be inspected before the parser learns them.
+const RawCaptureDirEnv = "VALOVAULT_CAPTURE_RAW_DIR"
+
+func captureRawMatch(matchID string, raw []byte) {
+	dir := strings.TrimSpace(os.Getenv(RawCaptureDirEnv))
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("tracking: raw capture: %v", err)
+		return
+	}
+	name := filepath.Base(filepath.Clean("/" + matchID))
+	if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o600); err != nil {
+		log.Printf("tracking: raw capture: %v", err)
+	}
 }

@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useData } from '@/context/DataContext';
 import IdentitySelector from '@/features/identity/IdentitySelector';
-import { getPlayerCardPortraitUrl } from '@/lib/playerCardArt';
+import { getPlayerCardPortraitUrl, getPlayerLevelBorder, type PlayerLevelBorder } from '@/lib/playerCardArt';
 import { fetchCachedPublicJson } from '@/services/api';
 
 type CompetitiveTierSet = {
@@ -19,6 +19,8 @@ type PlayerCardPanelProps = {
     onSelectTitle: (titleId: string) => void;
     accountName?: string;
     accountLevel?: number;
+    preferredLevelBorderId?: string;
+    hideAccountLevel?: boolean;
     accountRank?: string;
     accountRankTier?: number;
     showUnownedCosmetics?: boolean;
@@ -31,6 +33,8 @@ export default function PlayerCardPanel({
     onSelectTitle,
     accountName,
     accountLevel,
+    preferredLevelBorderId,
+    hideAccountLevel = false,
     accountRank,
     accountRankTier = 0,
     showUnownedCosmetics = false,
@@ -38,7 +42,9 @@ export default function PlayerCardPanel({
     const { playerCards, playerTitles } = useData();
     const [pickerOpen, setPickerOpen] = useState(false);
     const [portraitFailed, setPortraitFailed] = useState(false);
-    const [rankIcon, setRankIcon] = useState("");
+    const [rankArt, setRankArt] = useState({ tier: 0, url: "" });
+    const [levelBorders, setLevelBorders] = useState<PlayerLevelBorder[]>([]);
+    const [failedLevelFrame, setFailedLevelFrame] = useState("");
 
     const selectedCard = useMemo(
         () => playerCards.find(c => c.uuid.toLowerCase() === currentCardId.toLowerCase()),
@@ -52,18 +58,32 @@ export default function PlayerCardPanel({
 
     const titleText = selectedTitle?.titleText || selectedTitle?.displayName || 'No Title';
     const portraitUrl = getPlayerCardPortraitUrl(selectedCard);
-    const levelText = Number.isFinite(accountLevel) && accountLevel && accountLevel > 0 ? String(accountLevel) : "1";
+    const showLevel = !hideAccountLevel && Number.isFinite(accountLevel) && Number(accountLevel) > 0;
+    const levelText = showLevel ? String(accountLevel) : "";
+    const levelBorder = getPlayerLevelBorder(levelBorders, Number(accountLevel), preferredLevelBorderId);
+    const levelFrame = levelBorder?.levelNumberAppearance && levelBorder.levelNumberAppearance !== failedLevelFrame ? levelBorder.levelNumberAppearance : "";
     const accountLabel = accountName?.trim() || "Current Account";
+    const displayName = accountLabel.split('#')[0].trim() || accountLabel;
     const rankLabel = accountRank?.trim() || "Unranked";
+    const rankIcon = rankArt.tier === accountRankTier ? rankArt.url : "";
 
     useEffect(() => {
         setPortraitFailed(false);
     }, [portraitUrl]);
 
     useEffect(() => {
+        if (!showLevel) return;
+        let alive = true;
+        fetchCachedPublicJson<{ data?: PlayerLevelBorder[] }>("https://valorant-api.com/v1/levelborders")
+            .then(data => { if (alive) setLevelBorders(data.data || []); })
+            .catch(() => { if (alive) setLevelBorders([]); });
+        return () => { alive = false; };
+    }, [showLevel]);
+
+    useEffect(() => {
         let alive = true;
         if (!accountRankTier || accountRankTier <= 0) {
-            setRankIcon("");
+            setRankArt({ tier: 0, url: "" });
             return;
         }
         fetchCachedPublicJson<{ data?: CompetitiveTierSet[] }>("https://valorant-api.com/v1/competitivetiers")
@@ -71,10 +91,10 @@ export default function PlayerCardPanel({
                 if (!alive) return;
                 const latest = data.data?.[data.data.length - 1];
                 const tier = latest?.tiers?.find((item) => item.tier === accountRankTier);
-                setRankIcon(tier?.smallIcon || tier?.largeIcon || "");
+                setRankArt({ tier: accountRankTier, url: tier?.largeIcon || tier?.smallIcon || "" });
             })
             .catch(() => {
-                if (alive) setRankIcon("");
+                if (alive) setRankArt({ tier: accountRankTier, url: "" });
             });
         return () => {
             alive = false;
@@ -89,13 +109,19 @@ export default function PlayerCardPanel({
                 type="button"
                 className="player-card-slot-premium"
                 onClick={() => setPickerOpen(true)}
-                aria-label="Change player card and title"
-                title="Change player card and title"
+                aria-label={`Change player card and title for ${accountLabel}`}
+                title={`${accountLabel} · Change player card and title`}
             >
-                <span className="player-card-rank-badge" aria-label={`Account level ${levelText}`}>{levelText}</span>
+                {showLevel && (
+                    <span className={`player-card-rank-badge${levelFrame ? ' player-card-level-badge--art' : ''}`} aria-label={`Account level ${levelText}`}>
+                        {levelFrame && <img src={levelFrame} alt="" aria-hidden="true" draggable={false} onError={() => setFailedLevelFrame(levelFrame)} />}
+                        <span>{levelText}</span>
+                    </span>
+                )}
                 <div className="player-card-portrait">
                     {portraitUrl && !portraitFailed ? (
                         <img
+                            className="player-card-portrait-art"
                             src={portraitUrl}
                             alt={selectedCard?.displayName || ''}
                             loading="lazy"
@@ -117,15 +143,20 @@ export default function PlayerCardPanel({
                     )}
 
                     <div className="player-card-portrait-scrim">
-                        <span className="player-card-portrait-name">
-                            {accountLabel}
-                        </span>
-                        <span className="player-card-portrait-title">
-                            {titleText}
-                        </span>
+                        <svg className="player-card-portrait-frame" viewBox="0 57 100 43" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                            <path d="M7.7 62V78.3L49.4 95.8L91.4 78.3V62" fill="none" stroke="currentColor" strokeWidth="0.9" vectorEffect="non-scaling-stroke" />
+                        </svg>
+                        <div className="player-card-portrait-identity">
+                            <span className="player-card-portrait-name">
+                                {displayName}
+                            </span>
+                            <span className="player-card-portrait-title">
+                                {titleText}
+                            </span>
+                        </div>
                         {rankIcon && (
                             <span className="player-card-portrait-rank" aria-label={rankLabel} title={rankLabel}>
-                                <img src={rankIcon} alt="" aria-hidden="true" />
+                                <img src={rankIcon} alt="" aria-hidden="true" onError={() => setRankArt(current => current.tier === accountRankTier && current.url === rankIcon ? { tier: accountRankTier, url: "" } : current)} />
                             </span>
                         )}
                     </div>

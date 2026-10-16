@@ -5,6 +5,7 @@ import { useData } from "@/context/DataContext";
 import {
   actOnSocialRequest,
   applyLoadout,
+  captureAccountRequest,
   getChatConversations,
   getChatMessages,
   getLiveMatch,
@@ -44,6 +45,7 @@ import type {
   StorefrontResponse,
   Weapon,
 } from "@/lib/types";
+import { buildPresetApplyRequest } from "@/lib/effectivePreset";
 import "./MobileApp.css";
 
 type MobileTab = "home" | "arsenal" | "presets" | "social" | "profile";
@@ -420,7 +422,42 @@ export default function MobileApp() {
   const [busyAction, setBusyAction] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [pendingAccountDelete, setPendingAccountDelete] = useState<{ puuid: string; name: string; deadline: number; committing?: boolean } | null>(null);
   const hasSubpage = Boolean(liveMatchOpen || selectedWeaponId || selectedConversation);
+
+  useEffect(() => {
+    setPlayerData(null);
+    setPresets([]);
+    setSelectedWeaponId('');
+    setNewPresetOpen(false);
+    setNewPresetName('');
+    setBusyAction('');
+    setMessage('');
+    setError('');
+    setRefreshing(false);
+    setStorefront(null);
+    setWallet({});
+    setParty(null);
+    setLiveMatch(null);
+    setLiveMatchOpen(false);
+    setSocial(null);
+    setProfile(null);
+    setProfileSync(null);
+    setMatches([]);
+    setConversations([]);
+    setSelectedConversation(null);
+    setChatMessages([]);
+    setChatDraft('');
+  }, [activeAccount?.puuid]);
+
+  useEffect(() => {
+    if (!pendingAccountDelete || pendingAccountDelete.committing) return;
+    const timer = window.setTimeout(() => {
+      setPendingAccountDelete((current) => current ? { ...current, committing: true } : null);
+      void handleDeleteAccount(pendingAccountDelete.puuid).catch(() => undefined).finally(() => setPendingAccountDelete(null));
+    }, Math.max(0, pendingAccountDelete.deadline - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [handleDeleteAccount, pendingAccountDelete]);
 
   useEffect(() => {
     if (!hasSubpage) return;
@@ -440,21 +477,26 @@ export default function MobileApp() {
   }, []);
 
   const showMessage = useCallback((next: string) => {
+    const request = captureAccountRequest();
+    if (!request?.isCurrent()) return;
     setMessage(next);
-    window.setTimeout(() => setMessage(""), 2600);
+    window.setTimeout(() => { if (request.isCurrent()) setMessage(""); }, 2600);
   }, []);
 
   const refreshCore = useCallback(async () => {
     if (!activeAccount || !isClientHealthy) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setRefreshing(true);
     setError("");
     const results = await Promise.allSettled([
-      getPlayerLoadoutData(),
-      getPresets(),
+      getPlayerLoadoutData(request.owner),
+      getPresets(request.owner),
       getStorefront(),
       getWallet(),
       getPartyStatus(),
     ]);
+    if (!request.isCurrent()) return;
     if (results[0].status === "fulfilled") setPlayerData(results[0].value);
     if (results[1].status === "fulfilled") setPresets(results[1].value);
     if (results[2].status === "fulfilled") setStorefront(results[2].value);
@@ -464,6 +506,7 @@ export default function MobileApp() {
       setParty(nextParty);
       if (nextParty.phase === "coregame") {
         const nextMatch = await getLiveMatch();
+        if (!request.isCurrent()) return;
         setLiveMatch(nextMatch.phase === "coregame" ? nextMatch : null);
       } else {
         setLiveMatch(null);
@@ -479,11 +522,14 @@ export default function MobileApp() {
 
   const refreshSocial = useCallback(async () => {
     if (!activeAccount || !isClientHealthy) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     const [socialResult, conversationsResult, partyResult] = await Promise.allSettled([
       getSocialStatus(),
       getChatConversations(),
       getPartyStatus(),
     ]);
+    if (!request.isCurrent()) return;
     if (socialResult.status === "fulfilled") {
       setSocial(socialResult.value);
       if (socialResult.value.status === "unavailable" && socialResult.value.error) {
@@ -500,12 +546,15 @@ export default function MobileApp() {
 
   const refreshProfile = useCallback(async () => {
     if (!activeAccount || !isClientHealthy) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     const options = { puuid: activeAccount.puuid, region: activeAccount.region };
     const [overviewResult, historyResult, syncResult] = await Promise.allSettled([
       getProfileOverview(options),
       getProfileMatchHistory(0, 10, undefined, options),
       getProfileSyncStatus(options),
     ]);
+    if (!request.isCurrent()) return;
     if (overviewResult.status === "fulfilled") setProfile(overviewResult.value);
     if (historyResult.status === "fulfilled") setMatches(historyResult.value.matches || []);
     if (syncResult.status === "fulfilled") setProfileSync(syncResult.value);
@@ -517,21 +566,27 @@ export default function MobileApp() {
 
   const syncProfile = useCallback(async () => {
     if (!activeAccount || !isClientHealthy) return;
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     const options = { puuid: activeAccount.puuid, region: activeAccount.region };
     setBusyAction("profile-sync");
     setError("");
     try {
       await postProfileSync(options);
+      if (!request.isCurrent()) return;
       showMessage("Match sync started.");
       let finalStatus: ProfileSyncStatus | null = null;
       for (let attempt = 0; attempt < 45; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 900 : 1800));
+        if (!request.isCurrent()) return;
         const status = await getProfileSyncStatus(options);
+        if (!request.isCurrent()) return;
         setProfileSync(status);
         finalStatus = status;
         if (!status.inFlight) break;
       }
       await refreshProfile();
+      if (!request.isCurrent()) return;
       if (finalStatus?.lastError) {
         if (finalStatus.errorKind === "rate_limited" && finalStatus.retryAt) {
           setError(`Riot rate limit reached. Try again after ${new Date(finalStatus.retryAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`);
@@ -544,9 +599,9 @@ export default function MobileApp() {
         showMessage("Match history is up to date.");
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Match history could not be synced.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Match history could not be synced.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   }, [activeAccount, isClientHealthy, refreshProfile, showMessage]);
 
@@ -562,15 +617,21 @@ export default function MobileApp() {
   useEffect(() => {
     if (!activeAccount || !isClientHealthy) return;
     const timer = window.setInterval(() => {
+      const request = captureAccountRequest(activeAccount);
+      if (!request?.isCurrent()) return;
       void getPartyStatus().then(async (nextParty) => {
+        if (!request.isCurrent()) return;
         setParty(nextParty);
         if (nextParty.phase === "coregame") {
           const nextMatch = await getLiveMatch();
+          if (!request.isCurrent()) return;
           setLiveMatch(nextMatch.phase === "coregame" ? nextMatch : null);
         } else {
           setLiveMatch(null);
           setLiveMatchOpen(false);
         }
+      }).catch((reason) => {
+        if (request.isCurrent()) setError(reason instanceof Error ? reason.message : 'Party could not be refreshed.');
       });
     }, 15_000);
     return () => window.clearInterval(timer);
@@ -637,8 +698,9 @@ export default function MobileApp() {
     skin: Skin | null,
     buddy: GunBuddy | null,
   ) => {
+    const request = captureAccountRequest(activeAccount);
     const current = playerData?.loadout[weapon.uuid];
-    if (!current) return;
+    if (!current || !request?.isCurrent()) return;
     setBusyAction(`weapon:${weapon.uuid}`);
     setError("");
     try {
@@ -660,44 +722,44 @@ export default function MobileApp() {
         const level = buddy.levels.find((candidate) => owned.has(candidate.uuid.toLowerCase()));
         if (level) next = { ...next, charmID: buddy.uuid, charmLevelID: level.uuid };
       }
-      await applyLoadout({ loadout: { [weapon.uuid]: next } });
+      await applyLoadout({ loadout: { [weapon.uuid]: next } }, request.owner);
+      if (!request.isCurrent()) return;
       setPlayerData((currentData) => currentData ? {
         ...currentData,
         loadout: { ...currentData.loadout, [weapon.uuid]: next },
       } : currentData);
       showMessage(`${skin?.displayName || buddy?.displayName || weapon.displayName} applied.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not apply that loadout change.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not apply that loadout change.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
   const applyPreset = async (preset: Preset) => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusyAction(`preset:${preset.uuid}`);
     setError("");
     try {
-      await applyLoadout({
-        loadout: preset.loadout,
-        identity: preset.identity,
-        sprays: preset.sprays,
-        flexes: preset.flexes,
-        expressions: preset.expressions,
-      });
-      const fresh = await getPlayerLoadoutData();
+      await applyLoadout(buildPresetApplyRequest(preset, presets), request.owner);
+      if (!request.isCurrent()) return;
+      const fresh = await getPlayerLoadoutData(request.owner);
+      if (!request.isCurrent()) return;
       setPlayerData(fresh);
       showMessage(`${preset.name} applied.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not apply that preset.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not apply that preset.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
   const createPreset = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
     const name = newPresetName.trim();
-    if (!name || !playerData) return;
+    if (!name || !playerData || !request?.isCurrent()) return;
     const next: Preset = {
       uuid: crypto.randomUUID(),
       name,
@@ -711,53 +773,63 @@ export default function MobileApp() {
     setBusyAction("new-preset");
     try {
       const updated = [...presets, next];
-      await savePresets(updated);
+      await savePresets(updated, request.owner);
+      if (!request.isCurrent()) return;
       setPresets(updated);
       setNewPresetOpen(false);
       setNewPresetName("");
       showMessage(`${name} saved.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not save the preset.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not save the preset.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
   const removePreset = async (preset: Preset) => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusyAction(`delete:${preset.uuid}`);
     try {
       const updated = presets.filter((candidate) => candidate.uuid !== preset.uuid);
-      await savePresets(updated);
+      await savePresets(updated, request.owner);
+      if (!request.isCurrent()) return;
       setPresets(updated);
       showMessage(`${preset.name} deleted.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not delete the preset.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not delete the preset.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
   const openConversation = async (conversation: ChatConversation) => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setSelectedConversation(conversation);
     setChatMessages([]);
     try {
       const result = await getChatMessages(conversation.key);
+      if (!request.isCurrent()) return;
       setChatMessages(result.messages);
       await markChatRead(conversation.key);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open the conversation.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Could not open the conversation.");
     }
   };
 
   const submitChat = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
     const body = chatDraft.trim();
-    if (!body || !selectedConversation) return;
+    if (!body || !selectedConversation || !request?.isCurrent()) return;
     setChatDraft("");
     try {
       const sent = await sendChatMessage(selectedConversation.key, body, crypto.randomUUID());
+      if (!request.isCurrent()) return;
       setChatMessages((current) => [...current, sent]);
     } catch (reason) {
+      if (!request.isCurrent()) return;
       setError(reason instanceof Error ? reason.message : "Message could not be sent.");
       setChatDraft(body);
     }
@@ -765,6 +837,8 @@ export default function MobileApp() {
 
   const submitFriend = async (event: FormEvent) => {
     event.preventDefault();
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     const [gameName, ...tagParts] = friendName.trim().split("#");
     const gameTag = tagParts.join("#");
     if (!gameName || !gameTag) {
@@ -774,25 +848,30 @@ export default function MobileApp() {
     setBusyAction("friend");
     try {
       await sendSocialFriendRequest(gameName, gameTag);
+      if (!request.isCurrent()) return;
       setFriendName("");
       await refreshSocial();
+      if (!request.isCurrent()) return;
       showMessage(`Request sent to ${gameName}#${gameTag}.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Friend request could not be sent.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Friend request could not be sent.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
   const actOnRequest = async (puuid: string, action: "accept" | "deny" | "cancel") => {
+    const request = captureAccountRequest(activeAccount);
+    if (!request?.isCurrent()) return;
     setBusyAction(`request:${puuid}:${action}`);
     try {
       await actOnSocialRequest(puuid, action);
+      if (!request.isCurrent()) return;
       await refreshSocial();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Friend request could not be updated.");
+      if (request.isCurrent()) setError(reason instanceof Error ? reason.message : "Friend request could not be updated.");
     } finally {
-      setBusyAction("");
+      if (request.isCurrent()) setBusyAction("");
     }
   };
 
@@ -810,8 +889,12 @@ export default function MobileApp() {
           className="mobile-activity-row"
           type="button"
           onClick={() => {
+            const request = captureAccountRequest(activeAccount);
+            if (!request?.isCurrent()) return;
             setLiveMatchOpen(true);
-            void getLiveMatch().then((match) => setLiveMatch(match.phase === "coregame" ? match : null));
+            void getLiveMatch().then((match) => {
+              if (request.isCurrent()) setLiveMatch(match.phase === "coregame" ? match : null);
+            });
           }}
         >
           <span className="mobile-icon-box"><Icon name="arsenal" /></span>
@@ -916,7 +999,8 @@ export default function MobileApp() {
       />
       <div className="mobile-preset-list">
         {presets.length ? presets.map((preset) => {
-          const preview = Object.entries(preset.loadout).slice(0, 3).flatMap(([weaponId, item]) => {
+          const loadout = buildPresetApplyRequest(preset, presets).loadout;
+          const preview = Object.entries(loadout).slice(0, 3).flatMap(([weaponId, item]) => {
             const weapon = weapons.find((candidate) => candidate.uuid === weaponId);
             return weapon ? [{ key: weaponId, sources: skinRenderSources(weapon, item), name: weapon.displayName }] : [];
           });
@@ -929,7 +1013,7 @@ export default function MobileApp() {
               </div>
               <div>
                 <strong>{preset.name}</strong>
-                <span>{Object.keys(preset.loadout).length} weapon changes</span>
+                <span>{Object.keys(loadout).length} weapon changes</span>
               </div>
               <button type="button" onClick={() => void applyPreset(preset)} disabled={busyAction === `preset:${preset.uuid}`}>
                 {busyAction === `preset:${preset.uuid}` ? "Applying…" : "Apply"}
@@ -1178,6 +1262,12 @@ export default function MobileApp() {
       ) : null}
 
       {message ? <div className="mobile-toast" role="status">{message}</div> : null}
+      {pendingAccountDelete ? (
+        <div className="mobile-toast mobile-account-removal" role="status">
+          <span>{pendingAccountDelete.committing ? `Removing ${pendingAccountDelete.name}…` : `${pendingAccountDelete.name} removed`}</span>
+          {!pendingAccountDelete.committing ? <button type="button" onClick={() => setPendingAccountDelete(null)}>Undo</button> : null}
+        </div>
+      ) : null}
 
       {accountSheet ? (
         <div className="mobile-sheet-layer" onClick={() => setAccountSheet(false)}>
@@ -1218,13 +1308,11 @@ export default function MobileApp() {
             <button
               type="button"
               className="mobile-sheet-danger"
-              onClick={async () => {
-                try {
-                  await handleDeleteAccount(activeAccount.puuid);
-                  setAccountSheet(false);
-                } catch {
-                  // DataContext already surfaced the cleanup failure.
+              onClick={() => {
+                if (!pendingAccountDelete) {
+                  setPendingAccountDelete({ puuid: activeAccount.puuid, name: activeAccount.gameName, deadline: Date.now() + 5_000 });
                 }
+                setAccountSheet(false);
               }}
             >
               Remove current account

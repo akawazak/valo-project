@@ -19,11 +19,14 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 
 	const puuid = "1d5787db-3672-5dc1-a379-21e0db115d40"
 	requested := map[string]int{}
+	var requestedMu sync.Mutex
 	fetch := func(method, apiURL string, body []byte) ([]byte, error) {
 		if method != "GET" {
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
+		requestedMu.Lock()
 		requested[apiURL]++
+		requestedMu.Unlock()
 		switch {
 		case strings.Contains(apiURL, "/match-history/v1/history/"):
 			if !strings.Contains(apiURL, "startIndex=0&endIndex=20") {
@@ -112,6 +115,8 @@ func TestSyncManagerStartFetchesAndCachesMatch(t *testing.T) {
 	if state.LastHistoryEndIndex != -1 || state.LastCompetitiveEndIndex != -1 {
 		t.Fatalf("history cursors = %d/%d, want -1/-1", state.LastHistoryEndIndex, state.LastCompetitiveEndIndex)
 	}
+	requestedMu.Lock()
+	defer requestedMu.Unlock()
 	if len(requested) != 4 {
 		t.Fatalf("requested urls = %d, want 4: %#v", len(requested), requested)
 	}

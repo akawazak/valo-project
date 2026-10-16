@@ -25,12 +25,12 @@ const DISCORD_INVITE_URL = "https://discord.gg/gxGQwWyECE";
 const SOUND_PREVIEW_CUES = Object.keys(UI_SOUND_LABELS) as UiSound[];
 
 const SETTINGS_SECTIONS = [
-    { id: "general", label: "General", description: "Startup and cosmetic browsing" },
-    { id: "appearance", label: "Appearance", description: "Theme, wallpaper, and accent" },
-    { id: "match", label: "Match & social", description: "Sync, friends, and live match" },
-    { id: "data", label: "Data", description: "Backups, retention, and storage" },
-    { id: "connection", label: "Connection", description: "Choose how Riot signs in" },
-    { id: "about", label: "About", description: "Updates and community" },
+    { id: "general", label: "General", description: "Startup and cosmetic browsing", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" },
+    { id: "appearance", label: "Appearance", description: "Theme, wallpaper, and accent", icon: "M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-1.5a1.5 1.5 0 0 0-1 2.6 1.5 1.5 0 0 1-1 2.4H12Z M7.5 11.5h.01 M10.5 7.5h.01 M15.5 8.5h.01" },
+    { id: "match", label: "Match & social", description: "Sync, friends, and live match", icon: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z M22 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8" },
+    { id: "data", label: "Data", description: "Backups, retention, and storage", icon: "M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3Z M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" },
+    { id: "connection", label: "Connection", description: "Choose how Riot signs in", icon: "M9 17H7A5 5 0 0 1 7 7h2 M15 7h2a5 5 0 0 1 0 10h-2 M8 12h8" },
+    { id: "about", label: "About", description: "Updates and community", icon: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z M12 16v-4 M12 8h.01" },
 ] as const;
 
 type SettingsSection = typeof SETTINGS_SECTIONS[number]["id"];
@@ -248,6 +248,7 @@ export default function SettingsModal({
                                 }}
                                 aria-current={activeSection === section.id ? "page" : undefined}
                             >
+                                <i aria-hidden="true"><svg viewBox="0 0 24 24"><path d={section.icon} /></svg></i>
                                 <strong>{section.label}</strong>
                                 <span>{section.description}</span>
                             </button>
@@ -503,7 +504,7 @@ export default function SettingsModal({
                                     {isPortable && updateReady ? (
                                         <button
                                             type="button"
-                                            className="settings-update-now-btn"
+                                            className="settings-update-now-btn is-primary"
                                             onClick={onRestartForUpdate}
                                         >
                                             Restart now
@@ -519,12 +520,12 @@ export default function SettingsModal({
                                             onClick={onCheckForUpdates}
                                             disabled={isCheckingUpdate}
                                         >
-                                            {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                                            {isCheckingUpdate ? "Checking..." : "Check for updates"}
                                         </button>
                                     ) : updateReady ? (
                                         <button
                                             type="button"
-                                            className="settings-update-now-btn"
+                                            className="settings-update-now-btn is-primary"
                                             onClick={onRestartForUpdate}
                                         >
                                             Restart now
@@ -532,7 +533,7 @@ export default function SettingsModal({
                                     ) : updateAvailable ? (
                                         <button
                                             type="button"
-                                            className="settings-update-now-btn"
+                                            className="settings-update-now-btn is-primary"
                                             onClick={onInstallUpdate}
                                             disabled={isUpdating}
                                         >
@@ -545,7 +546,7 @@ export default function SettingsModal({
                                             onClick={onCheckForUpdates}
                                             disabled={isCheckingUpdate}
                                         >
-                                            {isCheckingUpdate ? "Checking..." : "Check for Updates"}
+                                            {isCheckingUpdate ? "Checking..." : "Check for updates"}
                                         </button>
                                     )}
                                 </div>
@@ -617,14 +618,14 @@ export default function SettingsModal({
                                 <div className="settings-item-control settings-storage-actions">
                                     <button
                                         type="button"
-                                        className="settings-update-now-btn"
+                                        className="settings-update-now-btn is-primary"
                                         disabled={recoveryBusy}
                                         onClick={async () => {
                                             setRecoveryBusy(true);
                                             setRecoveryMessage("");
                                             try {
-                                                await exportBackup();
-                                                setRecoveryMessage("Backup downloaded.");
+                                                if (await exportBackup()) setRecoveryMessage("Backup downloaded.");
+                                                else setRecoveryMessage("Account changed. Export again for the selected account.");
                                             } catch (error) {
                                                 setRecoveryMessage(error instanceof Error ? error.message : String(error));
                                             } finally {
@@ -632,10 +633,10 @@ export default function SettingsModal({
                                             }
                                         }}
                                     >
-                                        Export Backup
+                                        Export backup
                                     </button>
                                     <button type="button" className="btn-tactical-ghost" disabled={recoveryBusy} onClick={() => backupInputRef.current?.click()}>
-                                        Import Backup
+                                        Import backup
                                     </button>
                                     <input
                                         ref={backupInputRef}
@@ -649,8 +650,11 @@ export default function SettingsModal({
                                             setRecoveryBusy(true);
                                             setRecoveryMessage("");
                                             try {
-                                                await importBackup(file);
-                                                window.location.reload();
+                                                if (await importBackup(file)) window.location.reload();
+                                                else {
+                                                    setRecoveryMessage("Account changed. Select the account you want to restore and try again.");
+                                                    setRecoveryBusy(false);
+                                                }
                                             } catch (error) {
                                                 setRecoveryMessage(error instanceof Error ? error.message : String(error));
                                                 setRecoveryBusy(false);
@@ -682,7 +686,7 @@ export default function SettingsModal({
                                             }
                                         }}
                                     >
-                                        Download Diagnostics
+                                        Download diagnostics
                                     </button>
                                 </div>
                             </div>
@@ -718,7 +722,7 @@ export default function SettingsModal({
                             <div className="settings-storage-actions">
                                 <button
                                     type="button"
-                                    className="settings-update-now-btn"
+                                    className="settings-update-now-btn is-danger"
                                     disabled={storageBusy || !storage?.cachedMatches}
                                     onClick={async () => {
                                         if (!window.confirm("Clear cached match details and derived stats? Rank snapshots and connected accounts will be kept.")) return;
@@ -734,11 +738,11 @@ export default function SettingsModal({
                                         }
                                     }}
                                 >
-                                    Clear Match Cache
+                                    Clear match cache
                                 </button>
                                 <button
                                     type="button"
-                                    className="settings-update-now-btn"
+                                    className="settings-update-now-btn is-danger"
                                     disabled={storageBusy || sessionCacheBytes === 0}
                                     onClick={async () => {
                                         setStorageBusy(true);
@@ -755,10 +759,10 @@ export default function SettingsModal({
                                         }
                                     }}
                                 >
-                                    Clear Image Cache
+                                    Clear image cache
                                 </button>
                                 <button type="button" className="btn-tactical-ghost" disabled={storageBusy} onClick={() => void refreshStorage()}>
-                                    Refresh Usage
+                                    Refresh usage
                                 </button>
                             </div>
                             {storageMessage && <div className="settings-storage-message">{storageMessage}</div>}

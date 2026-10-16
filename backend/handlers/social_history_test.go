@@ -470,3 +470,28 @@ func TestExplicitRequestActionsAppearInActivityAndCancelResolvesRequest(t *testi
 		t.Fatalf("request state=%q, want resolved", state)
 	}
 }
+
+func TestAttachSavedLastOnlineUsesNewestSightingAcrossAccounts(t *testing.T) {
+	db, err := tracking.OpenTrackingDB(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	for _, stmt := range []string{
+		`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,firstSeenAt,lastSeenAt,lastSeenOnlineAt) VALUES('main','friend','Friend#1',1,1,0)`,
+		`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,firstSeenAt,lastSeenAt,lastSeenOnlineAt) VALUES('alt','friend','Friend#1',1,1,500)`,
+		`INSERT INTO social_contacts(accountPuuid,peerPuuid,displayName,firstSeenAt,lastSeenAt,lastSeenOnlineAt) VALUES('alt2','friend','Friend#1',1,1,300)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := &SocialStatusResponse{Presences: []SocialPresence{{Puuid: "FRIEND", State: "offline"}, {Puuid: "riot-known", State: "offline", LastOnlineAt: 900}}}
+	attachSavedLastOnline(db, "main", response)
+	if got := response.Presences[0].LastOnlineAt; got != 500 {
+		t.Fatalf("friend last online = %d, want 500 from the alt account", got)
+	}
+	if got := response.Presences[1].LastOnlineAt; got != 900 {
+		t.Fatalf("Riot-provided time was overwritten: %d", got)
+	}
+}

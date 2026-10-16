@@ -46,16 +46,6 @@ function readRememberedSocialCards(): Record<string, string> {
     return cards;
 }
 
-function relativeTime(timestamp?: number) {
-    if (!timestamp) return "never";
-    const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.floor(hours / 24)}d ago`;
-}
-
 interface AccountManagerModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -97,12 +87,14 @@ export default function AccountManagerModal({
     const [displayOrder, setDisplayOrder] = useState<string[]>([]);
     const [authDebugCopied, setAuthDebugCopied] = useState(false);
     const bulkCancelRef = useRef(false);
+    const bulkRunRef = useRef(0);
     const [query, setQuery] = useState("");
-    const [view, setView] = useState<"switch" | "manage">("switch");
+    const [accountFilter, setAccountFilter] = useState<"all" | "starred" | "attention">("all");
     const [accountCardIds, setAccountCardIds] = useState<Record<string, string>>(readAccountCardCache);
     const accountCardIdsRef = useRef(accountCardIds);
     const cardLookupAttemptedRef = useRef(new Set<string>());
     const currentAccountRowRef = useRef<HTMLDivElement>(null);
+    const accountListRef = useRef<HTMLDivElement>(null);
     const refreshTimeoutMs = 30_000;
     const bulkAttemptIntervalMs = 2_000;
 
@@ -208,6 +200,7 @@ export default function AccountManagerModal({
 
     useEffect(() => {
         if (isOpen) return;
+        bulkRunRef.current += 1;
         bulkCancelRef.current = true;
         accounts.forEach(onCancelRefresh);
         setRefreshingPuuids({});
@@ -218,7 +211,7 @@ export default function AccountManagerModal({
         setBulkCurrentAccount("");
         setBulkSummary("");
         setQuery("");
-        setView("switch");
+        setAccountFilter("all");
         cardLookupAttemptedRef.current.clear();
     }, [accounts, isOpen, onCancelRefresh]);
 
@@ -233,23 +226,47 @@ export default function AccountManagerModal({
     useEffect(() => {
         if (!isOpen || !activeAccount?.puuid) return;
         const frame = window.requestAnimationFrame(() => {
-            currentAccountRowRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
+            currentAccountRowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [activeAccount?.puuid, isOpen, view]);
+    }, [activeAccount?.puuid, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const previousFocus = document.activeElement as HTMLElement | null;
+        return () => { previousFocus?.focus(); };
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (accountListRef.current) accountListRef.current.scrollTop = 0;
+    }, [accountFilter, query]);
 
     if (!isOpen) return null;
+
+    const handleDialogKeys = (event: React.KeyboardEvent<HTMLElement>) => {
+        if (event.key === "Escape") {
+            event.stopPropagation();
+            onClose();
+        }
+        if (event.key !== "Tab") return;
+        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).filter((element) => element.getClientRects().length > 0);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
 
     const isAccountTokenExpired = (acc: RiotAccount) => {
         if (isLockfileAccount(acc)) return false;
         if (!acc.expiresAt) return true;
         return Date.now() >= acc.expiresAt;
     };
-    const renewableAccounts = accounts.filter(
-        (account) => !isLockfileAccount(account) && (isAccountTokenExpired(account) || Boolean(account.lastRefreshError)),
-    );
+    const renewableAccounts = accounts.filter((account) => !isLockfileAccount(account));
+    const attentionAccounts = new Set(renewableAccounts.filter((account) => isAccountTokenExpired(account) || Boolean(account.lastRefreshError) || accountRequiresManualRepair(account)).map((account) => account.puuid));
+    const attentionCount = attentionAccounts.size;
+    const renewalBusy = isBulkRefreshing || Object.values(refreshingPuuids).some(Boolean);
 
     const refreshWithTimeout = async (acc: RiotAccount, allowPopup: boolean) => {
+        if (allowPopup) return onRefreshAccount(acc, false, true);
         let timeoutId = 0;
         try {
             return await Promise.race([
@@ -291,7 +308,8 @@ export default function AccountManagerModal({
 
     const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (isBulkRefreshing || renewableAccounts.length === 0) return;
+        if (renewalBusy || renewableAccounts.length === 0) return;
+        const run = ++bulkRunRef.current;
         bulkCancelRef.current = false;
         setBulkSummary("");
         setIsBulkRefreshing(true);
@@ -302,6 +320,7 @@ export default function AccountManagerModal({
         let failed = 0;
 
         for (let i = 0; i < renewableAccounts.length; i++) {
+            if (run !== bulkRunRef.current) return;
             if (bulkCancelRef.current) break;
             const acc = renewableAccounts[i];
             const attemptStartedAt = Date.now();
@@ -309,20 +328,18 @@ export default function AccountManagerModal({
             setBulkCurrentAccount(`${acc.gameName}#${acc.tagLine}`);
             setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: true }));
             try {
-                const refreshed = await refreshWithTimeout(acc, true);
-                if (refreshed) {
-                    const cardId = await getProfilePlayerCard(acc.puuid, acc.region);
-                    rememberResolvedCard(acc.puuid.toLowerCase(), cardId);
-                }
+                const refreshed = await refreshWithTimeout(acc, false);
+                if (run !== bulkRunRef.current) return;
                 if (refreshed) renewed += 1;
                 else failed += 1;
                 setRefreshResults((prev) => ({ ...prev, [acc.puuid]: refreshed ? "success" : "failed" }));
             } catch {
+                if (run !== bulkRunRef.current) return;
                 failed += 1;
                 console.warn("Riot account renewal failed.");
                 setRefreshResults((prev) => ({ ...prev, [acc.puuid]: "failed" }));
             } finally {
-                setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
+                if (run === bulkRunRef.current) setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
             }
             if (!bulkCancelRef.current && i < renewableAccounts.length - 1) {
                 const remainingInterval = bulkAttemptIntervalMs - (Date.now() - attemptStartedAt);
@@ -331,6 +348,7 @@ export default function AccountManagerModal({
                 }
             }
         }
+        if (run !== bulkRunRef.current) return;
         setIsBulkRefreshing(false);
         setBulkCurrentAccount("");
         const checked = renewed + failed;
@@ -338,7 +356,7 @@ export default function AccountManagerModal({
         setBulkSummary(
             bulkCancelRef.current
                 ? `Stopped at ${checked}/${renewableAccounts.length} · ${renewed} renewed · ${failed} not renewed · ${remaining} remaining`
-                : `${renewed} renewed · ${failed} not renewed`,
+                : `${renewed} renewed · ${failed} need attention${failed ? " — use Sign in or Retry on those accounts" : ""}`,
         );
     };
 
@@ -370,35 +388,45 @@ export default function AccountManagerModal({
         .map((puuid) => accountByPuuid.get(puuid))
         .filter((account): account is RiotAccount => Boolean(account));
     const normalizedQuery = query.trim().toLowerCase();
-    const visibleAccounts = normalizedQuery
-        ? orderedAccounts.filter((account) => `${account.gameName}#${account.tagLine}`.toLowerCase().includes(normalizedQuery))
-        : orderedAccounts;
+    const visibleAccounts = orderedAccounts.filter((account) =>
+        (accountFilter === "all" || (accountFilter === "starred" ? account.favorite : attentionAccounts.has(account.puuid)))
+        && `${account.gameName}#${account.tagLine}`.toLowerCase().includes(normalizedQuery),
+    );
 
-    if (view === "switch") {
-        return (
-            <div className="settings-modal-overlay" onClick={onClose}>
+    return (
+            <div className="settings-modal-overlay account-switcher-overlay" onClick={onClose}>
                 <section
                     className="account-switcher-modal"
                     onClick={(event) => event.stopPropagation()}
                     role="dialog"
                     aria-modal="true"
                     aria-labelledby="account-switcher-title"
+                    onKeyDown={handleDialogKeys}
                 >
                     <header className="account-switcher-header">
                         <div className="account-switcher-heading">
-                            <img src="/brand-mark.svg" alt="" />
                             <div>
-                                <h2 id="account-switcher-title">Switch account</h2>
-                                <p>{accounts.length} saved accounts</p>
+                                <h2 id="account-switcher-title">Accounts <span>{accounts.length}</span></h2>
+                                <p>Switch accounts and keep your sessions ready.</p>
                             </div>
                         </div>
-                        <button type="button" onClick={onClose} aria-label="Close accounts">
+                        <button type="button" className="account-switcher-add" onClick={() => { onAddAccount(); onClose(); }}>
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                            Add account
+                        </button>
+                        <button type="button" className="account-switcher-close" onClick={onClose} aria-label="Close accounts">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <path d="M6 6l12 12M18 6 6 18" />
                             </svg>
                         </button>
                     </header>
 
+                    <div className="account-switcher-toolbar">
+                    <div className="account-switcher-filters" role="group" aria-label="Filter accounts">
+                        <button type="button" aria-pressed={accountFilter === "all"} onClick={() => setAccountFilter("all")}>All accounts</button>
+                        <button type="button" aria-pressed={accountFilter === "starred"} onClick={() => setAccountFilter("starred")}>Starred <span>{accounts.filter((account) => account.favorite).length}</span></button>
+                        <button type="button" aria-pressed={accountFilter === "attention"} onClick={() => setAccountFilter("attention")}>Needs attention <span>{attentionCount}</span></button>
+                    </div>
                     <label className="account-switcher-search">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <circle cx="11" cy="11" r="6.5" />
@@ -406,38 +434,49 @@ export default function AccountManagerModal({
                         </svg>
                         <input
                             type="search"
+                            autoFocus
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             placeholder="Find an account"
                             aria-label="Find an account"
                         />
                     </label>
+                    </div>
 
-                    <div className="account-switcher-list">
+                    {!isBulkRefreshing && Object.values(refreshingPuuids).some(Boolean) && (
+                        <p className="account-switcher-renewal-hint" role="status">
+                            Complete sign-in and any two-factor verification in the Riot window. You have up to five minutes; use Stop to cancel.
+                        </p>
+                    )}
+
+                    <div className="account-switcher-list" ref={accountListRef}>
                         {visibleAccounts.length > 0 ? visibleAccounts.map((account) => {
                             const isActive = account.puuid === activeAccount?.puuid;
                             const isLocal = isLockfileAccount(account);
                             const isExpired = isAccountTokenExpired(account);
-                            const needsSignIn = accountRequiresManualRepair(account) || [
+                            const needsRepair = accountRequiresManualRepair(account) || [
                                 "cookies_expired",
                                 "account_mismatch",
+                            ].includes(account.lastRefreshErrorCode || "");
+                            const needsSignIn = needsRepair || [
                                 "missing_cookies",
                                 "login_required",
                             ].includes(account.lastRefreshErrorCode || "");
-                            const stateLabel = isActive
-                                ? "Current"
-                                : isLocal
-                                    ? "Riot Client"
+                            const isRefreshing = !!refreshingPuuids[account.puuid];
+                            const renewalFailed = Boolean(account.lastRefreshError) || refreshResults[account.puuid] === "failed";
+                            const needsRenewalAction = isExpired || renewalFailed || isRefreshing;
+                            const accountHealth = isRefreshing ? "Renewing…" : isLocal
+                                    ? "Local session"
+                                    : refreshResults[account.puuid] === "success"
+                                        ? "Renewed just now"
                                     : needsSignIn
                                         ? "Sign-in required"
+                                        : renewalFailed
+                                            ? "Renewal failed"
                                         : isExpired
                                             ? "Session expired"
                                             : "Ready";
-                            const stateTone = isActive || isLocal || (!isExpired && !needsSignIn)
-                                ? "ready"
-                                : needsSignIn
-                                    ? "repair"
-                                    : "expired";
+                            const stateTone = isRefreshing ? "pending" : needsSignIn || renewalFailed ? "repair" : isExpired ? "expired" : "ready";
                             const cachedCardId = (account.playerCardId || accountCardIds[account.puuid.toLowerCase()])?.toLowerCase() || "";
                             const cachedCard = cachedCardId ? playerCardById.get(cachedCardId) : undefined;
                             const accountCardIcon = isActive && activePlayerCardIcon
@@ -453,7 +492,8 @@ export default function AccountManagerModal({
                                     <button
                                         type="button"
                                         className="account-switcher-select"
-                                        disabled={isActive}
+                                        disabled={isActive || renewalBusy}
+                                        aria-label={isActive ? `Current account: ${account.gameName}#${account.tagLine}` : `Switch to ${account.gameName}#${account.tagLine}`}
                                         onClick={() => {
                                             onSwitchAccount(account);
                                             onClose();
@@ -463,22 +503,41 @@ export default function AccountManagerModal({
                                             {accountCardIcon ? (
                                                 <img src={accountCardIcon} alt="" />
                                             ) : (
-                                                <span>{account.gameName.trim().charAt(0).toUpperCase() || "V"}</span>
+                                                <span>{account.gameName.match(/\d+$/)?.[0].slice(-4) || account.gameName.trim().slice(0, 2).toUpperCase() || "V"}</span>
                                             )}
                                         </span>
                                         <span className="account-switcher-identity">
-                                            <strong>{account.gameName}<small>#{account.tagLine}</small></strong>
-                                            <span><i data-tone={stateTone} />{stateLabel}</span>
+                                            <strong title={`${account.gameName}#${account.tagLine}`}>{account.gameName}<small>#{account.tagLine}</small></strong>
+                                            <span>{account.region.toUpperCase()}{isActive && <span className="account-switcher-current-label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7" /></svg>Current account</span>}</span>
                                         </span>
+                                        <span className="account-switcher-health" data-tone={stateTone}><i />{accountHealth}</span>
                                         <span className="account-switcher-mark" aria-hidden="true">
-                                            {isActive ? (
-                                                <svg viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7" /></svg>
-                                            ) : (
-                                                <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7" /></svg>
-                                            )}
+                                            {!isActive && <svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>}
                                         </span>
                                     </button>
                                     <div className="account-switcher-row-actions">
+                                        {!isLocal && needsRenewalAction ? (
+                                            <button
+                                                type="button"
+                                                className="account-switcher-renew"
+                                                data-action={isRefreshing ? "stop" : needsSignIn ? "sign-in" : "renew"}
+                                                onClick={(event) => {
+                                                    if (isRefreshing) {
+                                                        event.stopPropagation();
+                                                        setRefreshingPuuids((current) => ({ ...current, [account.puuid]: false }));
+                                                        onCancelRefresh(account);
+                                                        return;
+                                                    }
+                                                    void handleRefreshAccount(event, account);
+                                                }}
+                                                disabled={!isRefreshing && renewalBusy}
+                                                title={isRefreshing ? "Stop renewal" : needsSignIn ? "Sign in again" : "Renew account"}
+                                                aria-label={`${isRefreshing ? "Stop renewing" : needsSignIn ? "Sign in to" : "Renew"} ${account.gameName}#${account.tagLine}`}
+                                            >
+                                                <svg viewBox="0 0 24 24" aria-hidden="true">{isRefreshing ? <path d="M7 7h10v10H7z" /> : needsSignIn ? <path d="M14 4h5v16h-5M3 12h11m-4-4 4 4-4 4" /> : <path d="M20 6v5h-5M4 18v-5h5M18.5 10a7 7 0 0 0-12-3L4 11M5.5 14a7 7 0 0 0 12 3l2.5-4" />}</svg>
+                                                {isRefreshing ? "Stop" : needsSignIn ? "Sign in" : "Renew"}
+                                            </button>
+                                        ) : <span />}
                                         <button
                                             type="button"
                                             className={`account-switcher-favorite ${account.favorite ? "is-favorite" : ""}`}
@@ -496,6 +555,7 @@ export default function AccountManagerModal({
                                             onClick={() => onRequestDeleteAccount(account.puuid)}
                                             aria-label={`Remove ${account.gameName}#${account.tagLine}`}
                                             title="Remove account"
+                                            disabled={renewalBusy}
                                         >
                                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                                 <path d="M5 7h14M9 7V4h6v3M8 10v8M12 10v8M16 10v8M7 7l1 14h8l1-14" />
@@ -506,261 +566,49 @@ export default function AccountManagerModal({
                             );
                         }) : (
                             <div className="account-switcher-empty">
-                                {accounts.length > 0 ? "No matching accounts" : "No saved accounts yet"}
+                                <strong>{accounts.length > 0 ? "No matching accounts" : "Your accounts will appear here"}</strong>
+                                <span>{accounts.length > 0 ? "Try another name or choose a different filter." : "Add a Riot account to get started."}</span>
                             </div>
                         )}
                     </div>
+
+                    {isBulkRefreshing && (
+                        <div className="account-switcher-progress" role="status" aria-live="polite">
+                            <span>Renewing {bulkCurrentAccount || "saved account"}</span>
+                            <strong>{bulkProgressCurrent}/{bulkProgressTotal}</strong>
+                            <i style={{ width: `${bulkProgressTotal ? (bulkProgressCurrent / bulkProgressTotal) * 100 : 0}%` }} />
+                        </div>
+                    )}
+                    {bulkSummary && !isBulkRefreshing && (
+                        <div className="account-switcher-summary" role="status" aria-live="polite">{bulkSummary}</div>
+                    )}
 
                     <footer className="account-switcher-footer">
                         <button
                             type="button"
                             className="account-switcher-manage"
-                            onClick={() => {
-                                setQuery("");
-                                setView("manage");
-                            }}
+                            onClick={isBulkRefreshing ? handleCancelRefreshAll : handleRefreshAllAccounts}
+                            disabled={!isBulkRefreshing && (renewalBusy || !renewableAccounts.length)}
                         >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
-                                <circle cx="16" cy="7" r="2" />
-                                <circle cx="8" cy="17" r="2" />
-                            </svg>
-                            Manage accounts
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.5 10a7 7 0 0 0-12-3L4 11M5.5 14a7 7 0 0 0 12 3l2.5-4" /></svg>
+                            {isBulkRefreshing ? "Stop renewal" : "Renew all accounts"}
                         </button>
+                        <span className="account-switcher-count">{visibleAccounts.length} of {accounts.length} accounts</span>
                         <button
                             type="button"
-                            className="account-switcher-add"
-                            onClick={() => {
-                                onAddAccount();
-                                onClose();
-                            }}
+                            className="account-switcher-diagnostics"
+                            onClick={handleCopyAuthDebug}
+                            title="Copy a sanitized account diagnostic without tokens or cookies"
+                            aria-label={authDebugCopied ? "Account diagnostics copied" : "Copy account diagnostics"}
                         >
                             <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="M12 5v14M5 12h14" />
+                                {authDebugCopied
+                                    ? <path d="m5 12 4.5 4.5L19 7" />
+                                    : <path d="M9 5h10v14H9zM5 9v10h10M11 5V3h6v2" />}
                             </svg>
-                            Add account
                         </button>
                     </footer>
                 </section>
             </div>
         );
-    }
-
-    return (
-        <div className="settings-modal-overlay" onClick={onClose}>
-            <div className="settings-modal-container account-manager-modal" onClick={(e) => e.stopPropagation()}>
-                <button className="settings-modal-close" onClick={onClose} aria-label="Close accounts">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
-                </button>
-
-                <div className="account-manager-header">
-                    <div className="account-manager-heading">
-                        <img src="/brand-mark.svg" alt="" />
-                        <div>
-                            <button
-                                type="button"
-                                className="account-manager-back"
-                                onClick={() => {
-                                    setQuery("");
-                                    setView("switch");
-                                }}
-                            >
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6" /></svg>
-                                Switch accounts
-                            </button>
-                            <h2 className="account-manager-title">Manage accounts</h2>
-                            <p>{accounts.length} saved accounts</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="account-manager-body">
-                    <div className="account-manager-actions-row">
-                        <label className="account-manager-search">
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <circle cx="11" cy="11" r="6.5" />
-                                <path d="m16 16 4 4" />
-                            </svg>
-                            <input
-                                type="search"
-                                value={query}
-                                onChange={(event) => setQuery(event.target.value)}
-                                placeholder="Search accounts"
-                                aria-label="Search accounts"
-                            />
-                        </label>
-                        <button
-                            type="button"
-                            className="account-manager-add-button"
-                            onClick={() => {
-                                onAddAccount();
-                                onClose();
-                            }}
-                        >
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-                            Add account
-                        </button>
-                    </div>
-
-                    {renewableAccounts.length > 0 && <div className="account-manager-renew-row">
-                        <span>{renewableAccounts.length} expired {renewableAccounts.length === 1 ? "session" : "sessions"}</span>
-                        {isBulkRefreshing ? (
-                            <button type="button" onClick={handleCancelRefreshAll}>Stop</button>
-                        ) : (
-                            <button type="button" onClick={handleRefreshAllAccounts}>Renew all</button>
-                        )}
-                    </div>}
-
-                    {isBulkRefreshing && (
-                        <div className="settings-bulk-running" role="status" aria-live="polite">
-                            <span>Checking {bulkCurrentAccount || "saved session"}</span>
-                            <span>{bulkProgressCurrent}/{bulkProgressTotal}</span>
-                            <div
-                                className="settings-bulk-progress"
-                                role="progressbar"
-                                aria-valuemin={0}
-                                aria-valuemax={bulkProgressTotal}
-                                aria-valuenow={bulkProgressCurrent}
-                            >
-                                <div
-                                    className="settings-bulk-progress-fill"
-                                    style={{ width: `${(bulkProgressCurrent / bulkProgressTotal) * 100}%` }}
-                                />
-                            </div>
-                        </div>
-                    )}
-                    {bulkSummary && !isBulkRefreshing && (
-                        <div className="settings-bulk-summary" role="status" aria-live="polite">{bulkSummary}</div>
-                    )}
-
-                    {accounts.length > 0 ? (
-                        visibleAccounts.length > 0 ? <div className="settings-accounts-list">
-                            {visibleAccounts.map((acc) => {
-                                const isExpired = isAccountTokenExpired(acc);
-                                const isLocalSession = isLockfileAccount(acc);
-                                const isActive = activeAccount?.puuid === acc.puuid;
-                                const isFav = !!acc.favorite;
-                                const isRefreshing = !!refreshingPuuids[acc.puuid];
-                                const needsRepair = accountRequiresManualRepair(acc) ||
-                                    acc.lastRefreshErrorCode === "cookies_expired" ||
-                                    acc.lastRefreshErrorCode === "account_mismatch";
-                                const requiresSignIn = needsRepair || ["missing_cookies", "login_required"].includes(acc.lastRefreshErrorCode || "");
-                                const needsRenewalAction = isExpired || Boolean(acc.lastRefreshError) || refreshResults[acc.puuid] === "failed";
-                                const secondaryText = isLocalSession
-                                    ? "Available while Riot Client is open"
-                                    : refreshResults[acc.puuid] === "success"
-                                        ? "Ready · renewed just now"
-                                    : isActive
-                                        ? `Current account · renewed ${relativeTime(acc.lastRenewedAt)}`
-                                        : refreshResults[acc.puuid] === "failed"
-                                            ? "Renewal failed"
-                                        : requiresSignIn
-                                            ? "Sign-in required"
-                                            : acc.lastRefreshError
-                                                ? "Renewal failed"
-                                                : isExpired
-                                                    ? `Session expired · renewed ${relativeTime(acc.lastRenewedAt)}`
-                                                    : `Ready · renewed ${relativeTime(acc.lastRenewedAt)}`;
-
-                                return (
-                                    <div
-                                        key={acc.puuid}
-                                        ref={isActive ? currentAccountRowRef : undefined}
-                                        data-active-account-row={isActive ? "true" : undefined}
-                                        className={`settings-account-card ${isActive ? "active" : ""} ${
-                                            isExpired ? "expired" : ""
-                                        }`}
-                                    >
-                                        <div className="settings-account-details">
-                                            <button
-                                                type="button"
-                                                className={`settings-account-fav-btn ${isFav ? "is-fav" : ""}`}
-                                                onClick={() => onToggleFavorite(acc.puuid)}
-                                                title={isFav ? "Remove from favorites" : "Add to favorites"}
-                                            >
-                                                {isFav ? "★" : "☆"}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="settings-account-main"
-                                                disabled={isActive}
-                                                onClick={() => {
-                                                    if (!isActive) {
-                                                        onSwitchAccount(acc);
-                                                        onClose();
-                                                    }
-                                                }}
-                                            >
-                                                <span className="settings-account-identity">
-                                                        <span className="account-card-name">{acc.gameName}</span>
-                                                        <span className="account-card-tag">#{acc.tagLine}</span>
-                                                </span>
-                                                <span className={`settings-account-health ${requiresSignIn ? "needs-sign-in" : ""}`}>{secondaryText}</span>
-                                            </button>
-                                        </div>
-
-                                        <div className="settings-account-actions">
-                                            {isLocalSession ? null : isRefreshing ? (
-                                                <button
-                                                    type="button"
-                                                    className="settings-account-action-btn refresh-btn cancel-refresh-btn"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
-                                                        onCancelRefresh(acc);
-                                                    }}
-                                                    title="Cancel refresh"
-                                                >
-                                                    ✕
-                                                </button>
-                                            ) : needsRenewalAction ? (
-                                                <button
-                                                    type="button"
-                                                    className="settings-account-action-btn refresh-btn"
-                                                    onClick={(e) => handleRefreshAccount(e, acc)}
-                                                    title={needsRepair ? "Repair Riot session" : acc.lastRefreshError ? "Retry renewal" : "Renew access"}
-                                                >
-                                                    {requiresSignIn ? "Sign in" : acc.lastRefreshError ? "Retry" : "Renew"}
-                                                </button>
-                                            ) : null}
-                                            <button
-                                                type="button"
-                                                className="settings-account-action-btn delete-btn"
-                                                onClick={() => onRequestDeleteAccount(acc.puuid)}
-                                                title="Remove account"
-                                            >
-                                                &times;
-                                            </button>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div> : <div className="settings-accounts-empty account-search-empty">
-                            <p>No matching accounts.</p>
-                            <button type="button" className="compact-dialog-button secondary" onClick={() => setQuery("")}>Clear search</button>
-                        </div>
-                    ) : (
-                        <div className="settings-accounts-empty">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                <circle cx="9" cy="7" r="4" />
-                            </svg>
-                            <p>No Riot accounts connected.</p>
-                            <span className="small text-muted">Add your account to fetch loadouts, daily shop offers, and more.</span>
-                        </div>
-                    )}
-
-                    <div className="account-manager-footer">
-                        <button
-                            type="button"
-                            onClick={handleCopyAuthDebug}
-                            title="Copy a sanitized account diagnostic without tokens or cookies"
-                        >
-                            {authDebugCopied ? "Copied" : "Copy diagnostics"}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
 }

@@ -17,8 +17,9 @@ func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !json.Valid(data) {
-		data = []byte("[]")
+	if data == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

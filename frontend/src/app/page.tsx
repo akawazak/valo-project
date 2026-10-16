@@ -3,40 +3,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Update } from '@tauri-apps/plugin-updater';
 import ArsenalView from '@/features/arsenal/ArsenalView';
+import LoadoutRestore from '@/features/arsenal/LoadoutRestore';
 import PresetList from '@/features/presets/PresetList';
 import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
+import { captureAccountRequest, getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { AppRequestError, LocalClientError } from '@/lib/errors';
 import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { getStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
 import { configureUiSounds, playUiSound } from '@/lib/uiSounds';
 import { isAndroidRuntime } from '@/lib/platform';
+import { queueLabel, useQueues } from '@/lib/gameMeta';
 
-const DISCORD_QUEUE_LABELS: Record<string, string> = {
-    competitive: "Competitive",
-    unrated: "Unrated",
-    swiftplay: "Swiftplay",
-    spikerush: "Spike Rush",
-    deathmatch: "Deathmatch",
-    teamdeathmatch: "Team Deathmatch",
-    hurm: "Team Deathmatch",
-    escalation: "Escalation",
-    ggteam: "Escalation",
-    onefa: "Replication",
-    premier: "Premier",
-    custom: "Custom Game",
-};
-
-function discordQueueLabel(queueId: string) {
-    const key = queueId.trim().toLowerCase();
-    if (!key) return "VALORANT";
-    return DISCORD_QUEUE_LABELS[key] || key.charAt(0).toUpperCase() + key.slice(1);
-}
 import { useData } from '@/context/DataContext';
+import SessionEndToast, { OPEN_RECAP_FLAG } from '@/features/session/SessionEndToast';
 import { usePresets, NamingMode, defaultPreset } from '@/hooks/usePresets';
 import { buildPresetApplyRequest, GameLoadoutMeta } from '@/lib/effectivePreset';
 import { useLoadout } from '@/hooks/useLoadout';
@@ -58,29 +41,19 @@ import { publishAppNotification, useAppNotifications } from '@/lib/appNotificati
 import type { AppTab } from '@/lib/appTabs';
 import MobileApp from '@/mobile/MobileAppV2';
 
-const CURRENT_RELEASE: ReleaseNotes = {
-    version: "0.5.29",
-    title: "What’s new",
-    summary: "A stability release for saved accounts, cached live-match context, and the shared desktop and Android experience.",
-    added: [
-        "A phone-oriented Android companion surface using the same supported remote-account data contracts as desktop.",
-        "Persistent account player-card previews, safer account diagnostics, and clearer session states.",
-        "Cached per-agent match evidence in live match, sourced from already stored completed matches.",
-    ],
-    improved: [
-        "Account Manager keeps its saved order while open, reveals the active account directly, and applies favorite sorting only after reopening.",
-        "Live match, profile, preset, spray, storefront, party, chat, and activity views handle incomplete Riot data more gracefully.",
-        "Rank progression and match analytics better distinguish cached history from live information.",
-    ],
-    fixed: [
-        "A selected remote account no longer gets replaced by a different local Riot Client account after refresh.",
-        "Account switching no longer silently promotes the chosen account to the first row.",
-        "Live party evidence reuses durable match cache data instead of repeated live-match-history requests.",
-        "Desktop startup and recovery paths now contain errors rather than leaving a framework error screen.",
-    ],
-};
+// Built from .github/release-notes/v{version}.md (see next.config.ts); null when this version has no notes.
+const CURRENT_RELEASE: ReleaseNotes | null = JSON.parse(process.env.VANTAVAULT_RELEASE_NOTES || "null");
 
 const RELEASE_NOTES_STORAGE_KEY = "vantavault:last-seen-release:v2";
+
+const EMPTY_ACCOUNT_DATA: {
+    owner: string;
+    presets: Preset[];
+    playerLoadout: Record<string, LoadoutItemV1>;
+    gameMeta: GameLoadoutMeta;
+    loadoutAvailable: boolean;
+    loadoutError: string;
+} = { owner: "", presets: [], playerLoadout: {}, gameMeta: { sprays: [], flexes: [], expressions: [] }, loadoutAvailable: false, loadoutError: "" };
 
 type DiscordMatchPhase = {
     phase: string;
@@ -128,6 +101,7 @@ export default function Home() {
 }
 
 function HomeApp() {
+    const queues = useQueues();
     const {
         agents,
         allAgents,
@@ -158,7 +132,12 @@ function HomeApp() {
 
 	const { theme, accentTheme, interfaceTheme, appearance, toggleTheme, setTheme, setAccentTheme, setInterfaceTheme, setAppearance } = useTheme();
 
-    const [initialData, setInitialData] = useState<{ presets: Preset[], playerLoadout: Record<string, LoadoutItemV1>, gameMeta: GameLoadoutMeta }>({ presets: [], playerLoadout: {}, gameMeta: { sprays: [], flexes: [], expressions: [] } });
+    const [initialData, setInitialData] = useState(EMPTY_ACCOUNT_DATA);
+    const accountOwner = activeAccount?.puuid || "";
+    const accountOwnerRef = useRef(accountOwner);
+    accountOwnerRef.current = accountOwner;
+    const initialRequestRef = useRef(0);
+    const scopedInitialData = initialData.owner === accountOwner ? initialData : EMPTY_ACCOUNT_DATA;
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
@@ -180,7 +159,7 @@ function HomeApp() {
     const [discordMatchPhase, setDiscordMatchPhase] = useState<DiscordMatchPhase>({ phase: "none", matchId: "", queueId: "", mapName: "", mapImage: "", agentName: "", agentImage: "", timeLeft: 0, partySize: 0, allyCount: 0, enemyCount: 0, allyScore: 0, enemyScore: 0, scoreAvailable: false });
     const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
     const [profileTarget, setProfileTarget] = useState<{ puuid: string; gameName: string; tagLine: string } | null>(null);
-    const autoOpenedOverlayKeyRef = useRef("");
+    const [pendingAccountDeletes, setPendingAccountDeletes] = useState<Array<{ puuid: string; name: string; deadline: number; committing?: boolean }>>([]);
 	const previousSoundPhaseRef = useRef<DiscordMatchPhase["phase"]>("none");
 
     const selectAppTab = useCallback((tab: AppTab) => {
@@ -237,53 +216,9 @@ function HomeApp() {
     }, [activeAccount?.puuid, isLocalClientActive, localPuuid, useLocalSso]);
 
     useEffect(() => {
-        const phase = discordMatchPhase.phase;
-        const activeAccountIsLocal = Boolean(
-            activeAccount?.puuid &&
-            localPuuid &&
-            activeAccount.puuid.toLowerCase() === localPuuid.toLowerCase()
-        );
-        if (
-            phase !== "pregame" ||
-            !useLocalSso ||
-            !isLocalClientActive ||
-            !activeAccountIsLocal
-        ) {
-            autoOpenedOverlayKeyRef.current = "";
-            return;
-        }
-        if (!(showLiveMatch ?? true)) return;
-
-        const overlayKey = [
-            phase,
-            discordMatchPhase.queueId,
-            discordMatchPhase.mapName,
-            discordMatchPhase.allyCount,
-            discordMatchPhase.enemyCount,
-        ].join("|");
-        if (overlayKey === autoOpenedOverlayKeyRef.current) return;
-        autoOpenedOverlayKeyRef.current = overlayKey;
-
-        void import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke("show_live_match_overlay"))
-            .catch(() => {});
-    }, [
-        discordMatchPhase.allyCount,
-        discordMatchPhase.enemyCount,
-        discordMatchPhase.mapName,
-        discordMatchPhase.phase,
-        discordMatchPhase.queueId,
-        activeAccount?.puuid,
-        isLocalClientActive,
-        localPuuid,
-        showLiveMatch,
-        useLocalSso,
-    ]);
-
-    useEffect(() => {
         let details = activeTab === "store" ? "Browsing Store" : activeTab === "profile" ? "Viewing Profiles" : "Building a Loadout";
         let activityState = "VantaVault desktop companion";
-        const queueName = discordQueueLabel(discordMatchPhase.queueId);
+        const queueName = queueLabel(discordMatchPhase.queueId, queues) || "VALORANT";
         if (discordMatchPhase.phase === "pregame") {
             details = `Agent Select · ${queueName}`;
             activityState = discordMatchPhase.mapName
@@ -318,7 +253,7 @@ function HomeApp() {
                 },
             }))
             .catch(() => {});
-    }, [activeTab, discordMatchPhase]);
+    }, [activeTab, discordMatchPhase, queues]);
     
     // Modals
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -376,8 +311,9 @@ function HomeApp() {
     const {
         showErrorModal, errorMessage, handleApplyLoadout, handleCloseErrorModal,
         showToast, toastMessage, handleCloseToast,
-        setShowErrorModal, setErrorMessage, setShowToast, setToastMessage
-    } = useLoadout();
+        setShowErrorModal, setErrorMessage, setShowToast, setToastMessage,
+        handleRestoreLoadout, restorePoint, isApplying
+    } = useLoadout(activeAccount);
 
     useEffect(() => {
         const onAppError = (event: Event) => {
@@ -398,18 +334,21 @@ function HomeApp() {
         handleSave, handleSavePresetName, handlePresetSelect, handlePresetDelete, handleConfirmDelete,
         handleCloseConfirmationModal, handleCancel, handleApplyComplete, handleApplyDraftComplete, handleOpenPresetNameModal, handleOpenRenameModal,
         handleDropdownVariant, handleClosePresetNameModal, handleTogglePreset,
-        handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange, handleFlexesChange,
+        handleAgentAssignment, handleItemChange, handleIdentityChange, handleSpraysChange, handleFlexesChange, handleExpressionsChange,
         handleImportPresetAction, handleApplySingleComplete, refreshFromGame, gameMeta,
-    } = usePresets(initialData.presets, initialData.playerLoadout, (error) => {
+    } = usePresets(scopedInitialData.presets, scopedInitialData.playerLoadout, (error) => {
         if (error instanceof LocalClientError) {
             setErrorMessage(error.message);
             setShowErrorModal(true);
         } else {
             console.warn("Preset operation failed", error instanceof Error ? error.message : String(error));
-            setErrorMessage("The preset operation could not be completed. Your current edit was kept.");
+            // Show what actually failed (with its VV- code) instead of a generic line.
+            const code = (error as { code?: string } | null)?.code;
+            const detail = error instanceof Error && error.message ? `${error.message}${code ? ` (${code})` : ""}` : "";
+            setErrorMessage(`The preset operation could not be completed. Your current edit was kept.${detail ? ` ${detail}` : ""}`);
             setShowErrorModal(true);
         }
-    }, initialData.gameMeta, dataRevision);
+    }, scopedInitialData.gameMeta, dataRevision, activeAccount);
 
     const previousMatchPhaseRef = useRef<DiscordMatchPhase["phase"]>("none");
     useEffect(() => {
@@ -432,6 +371,12 @@ function HomeApp() {
     const [importError, setImportError] = useState('');
 
     useEffect(() => {
+        setShowImportModal(false);
+        setImportCode('');
+        setImportError('');
+    }, [accountOwner]);
+
+    useEffect(() => {
         if (isAndroid) {
             setLaunchAtStartupState(false);
             return;
@@ -444,7 +389,7 @@ function HomeApp() {
     }, [isAndroid]);
 
     useEffect(() => {
-        if (appVersion !== CURRENT_RELEASE.version) return;
+        if (!CURRENT_RELEASE || appVersion !== CURRENT_RELEASE.version) return;
         try {
             if (localStorage.getItem(RELEASE_NOTES_STORAGE_KEY) !== appVersion) setShowReleaseNotes(true);
         } catch {
@@ -454,7 +399,7 @@ function HomeApp() {
 
     const dismissReleaseNotes = useCallback(() => {
         try {
-            localStorage.setItem(RELEASE_NOTES_STORAGE_KEY, CURRENT_RELEASE.version);
+            if (CURRENT_RELEASE) localStorage.setItem(RELEASE_NOTES_STORAGE_KEY, CURRENT_RELEASE.version);
         } catch { /* The modal can still close when storage is unavailable. */ }
         setShowReleaseNotes(false);
     }, []);
@@ -626,12 +571,22 @@ function HomeApp() {
     }, [isPortable, setErrorMessage, setShowErrorModal]);
 
     const loadInitialData = useCallback(async () => {
+        const owner = accountOwner ? { puuid: accountOwner, region: activeAccount?.region || "" } : undefined;
+        const ownerId = owner?.puuid || "";
+        const request = ++initialRequestRef.current;
+        const isCurrent = () => request === initialRequestRef.current && accountOwnerRef.current === ownerId
+            && (localStorage.getItem("riot_puuid") || "") === ownerId;
         try {
-            const [fetchedPresets, settings] = await Promise.all([getPresets(), getSettings()]);
+            const [fetchedPresets, settings] = await Promise.all([getPresets(owner), getSettings()]);
+            if (!isCurrent()) return;
             let playerLoadout: Record<string, LoadoutItemV1> = {};
             let gameMeta: GameLoadoutMeta = { sprays: [], flexes: [], expressions: [] };
+            let loadoutAvailable = false;
+            let loadoutError = "";
             try {
-                const full = await getPlayerLoadoutData();
+                const full = await getPlayerLoadoutData(owner);
+                if (!isCurrent()) return;
+                loadoutAvailable = true;
                 playerLoadout = full.loadout;
                 gameMeta = {
                     sprays: full.sprays || [],
@@ -640,9 +595,11 @@ function HomeApp() {
                     identity: full.identity,
                 };
             } catch (error) {
+                if (!isCurrent()) return;
                 if (!(error instanceof LocalClientError) && !(error instanceof AppRequestError)) throw error;
+                loadoutError = error.message;
             }
-            setInitialData({ playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [], gameMeta });
+            setInitialData({ owner: ownerId, playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [], gameMeta, loadoutAvailable, loadoutError });
             setDataRevision(r => r + 1);
             setAutoSelectAgent(settings.autoSelectAgent);
             setUseLocalSso(settings.useLocalSso);
@@ -676,8 +633,10 @@ function HomeApp() {
             localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
         } catch (error) {
+            if (!isCurrent()) return;
             if (error instanceof LocalClientError || error instanceof AppRequestError) {
-                setInitialData({ playerLoadout: {}, presets: [], gameMeta: { sprays: [], flexes: [], expressions: [] } });
+                setInitialData({ ...EMPTY_ACCOUNT_DATA, owner: ownerId, loadoutError: error.message });
+                setDataRevision(r => r + 1);
                 if (error instanceof AppRequestError) {
                     console.warn("Initial account data is temporarily unavailable", { code: error.code, status: error.status });
                     reportAppError(error.message);
@@ -690,16 +649,17 @@ function HomeApp() {
                 setIsLoading(false);
             }
         }
-	}, [setAccentTheme, setAppearance, setErrorMessage, setInterfaceTheme, setShowErrorModal, setTheme]);
+    }, [accountOwner, activeAccount?.region, setAccentTheme, setAppearance, setErrorMessage, setInterfaceTheme, setShowErrorModal, setTheme]);
 
     useEffect(() => {
-        if (isClientHealthy) {
+        if (isBackendOnline) {
             setLoadingMessage('Loading your VantaVault data...');
             loadInitialData();
         } else {
             setIsLoading(false);
         }
-    }, [activeAccount?.puuid, isClientHealthy, loadInitialData]);
+        return () => { initialRequestRef.current += 1; };
+    }, [isBackendOnline, isClientHealthy, storefrontRefreshKey, loadInitialData]);
 
     const prevSettingsRef = useRef<Settings | null>(null);
 
@@ -808,7 +768,7 @@ function HomeApp() {
     const handleApplyWeapon = async (weaponId: string) => {
         const item = currentLoadout[weaponId];
         if (!item) return false;
-        const applied = await handleApplyLoadout({ loadout: { [weaponId]: item } }, "weapon change");
+        const applied = await handleApplyLoadout({ loadout: { [weaponId]: item } }, weapons.find(weapon => weapon.uuid === weaponId)?.displayName || "weapon change");
         if (applied) handleApplySingleComplete(weaponId);
         return applied;
     };
@@ -820,23 +780,31 @@ function HomeApp() {
         return presets.find(p => p.uuid === preset.parentUuid)?.loadout;
     };
 
-    const handleExportPreset = (preset: Preset) => {
+    const handleExportPreset = async (preset: Preset) => {
+        const scope = captureAccountRequest(activeAccount);
+        if (!scope) return;
         try {
-            const code = exportPreset(preset);
-            navigator.clipboard.writeText(code);
+            const code = exportPreset(preset, presets);
+            await navigator.clipboard.writeText(code);
+            if (!scope.isCurrent()) return;
             setToastMessage(`Copied share code for "${preset.name}" to clipboard!`);
             setShowToast(true);
 			playUiSound("success");
         } catch (e) {
+            if (!scope.isCurrent()) return;
             console.warn("Preset export failed", e instanceof Error ? e.message : String(e));
-            alert('Failed to copy share code.');
+            setErrorMessage('The share code could not be copied. Check clipboard access and try again.');
+            setShowErrorModal(true);
         }
     };
 
     const handleImportSubmit = async () => {
         if (!importCode.trim()) return;
+        const scope = captureAccountRequest(activeAccount);
+        if (!scope) return;
         try {
-            await handleImportPresetAction(importCode.trim());
+            const imported = await handleImportPresetAction(importCode.trim());
+            if (!imported || !scope.isCurrent()) return;
             setShowImportModal(false);
             setImportCode('');
             setImportError('');
@@ -844,15 +812,31 @@ function HomeApp() {
             setShowToast(true);
 			playUiSound("success");
         } catch (err: unknown) {
+            if (!scope.isCurrent()) return;
             setImportError(err instanceof Error ? err.message : 'Invalid preset code.');
         }
     };
 
     const requestDeleteAccount = (puuid: string) => {
-        void handleDeleteAccount(puuid).catch(() => {
-            // DataContext reports the actionable cleanup error to the user.
-        });
+        const account = accounts.find(account => account.puuid === puuid);
+        if (!account) return;
+        cancelAccountRefresh(account);
+        setPendingAccountDeletes(current => current.some(item => item.puuid === puuid) ? current : [
+            ...current, { puuid, name: account.gameName, deadline: Date.now() + 5_000 },
+        ]);
     };
+
+    useEffect(() => {
+        const timers = pendingAccountDeletes.filter(item => !item.committing).map(item => window.setTimeout(() => {
+            setPendingAccountDeletes(current => current.map(entry => entry.puuid === item.puuid ? { ...entry, committing: true } : entry));
+            void handleDeleteAccount(item.puuid).catch(() => {
+                // DataContext reports persistence failures; the row reappears.
+            }).finally(() => {
+                setPendingAccountDeletes(current => current.filter(entry => entry.puuid !== item.puuid));
+            });
+        }, Math.max(0, item.deadline - Date.now())));
+        return () => timers.forEach(window.clearTimeout);
+    }, [pendingAccountDeletes, handleDeleteAccount]);
 
     const onSelectPresetToEdit = (preset: Preset) => {
         handlePresetSelect(preset);
@@ -884,6 +868,12 @@ function HomeApp() {
 
     return (
         <div className="app-container">
+            <SessionEndToast onOpenRecap={() => {
+                try { sessionStorage.setItem(OPEN_RECAP_FLAG, "1"); } catch { /* storage unavailable */ }
+                setProfileTarget(null);
+                setActiveTab("profile");
+                window.dispatchEvent(new Event("vv:open-session-recap"));
+            }} />
             <AppTopbar
                 activeTab={activeTab}
                 onTabChange={selectAppTab}
@@ -893,7 +883,7 @@ function HomeApp() {
                 isBackendOnline={isBackendOnline}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenAccounts={() => setIsAccountsOpen(true)}
-                playerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
+                playerCardId={gameMeta.identity?.playerCardId || scopedInitialData.gameMeta.identity?.playerCardId}
                 socialControl={(showPartyWidget ?? true) ? <LivePartyStatus showOfflineByDefault={showOfflineFriends ?? false} /> : null}
                 notificationControl={<NotificationCenter items={notifications.items} unreadCount={notifications.unreadCount} onRead={notifications.markRead} onReadAll={notifications.markAllRead} onClear={notifications.clear} onNavigate={selectAppTab} />}
             />
@@ -901,13 +891,16 @@ function HomeApp() {
             <div className="app-content-wrapper">
                 <main className="app-main-content" data-active-tab={activeTab}>
                     <div hidden={activeTab !== 'store'}>
-                        <StorePanels refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
+                        <StorePanels key={accountOwner || "guest"} refreshKey={storefrontRefreshKey} onConnectAccount={() => setIsAccountsOpen(true)} />
                     </div>
+                    {activeTab === 'skins' && restorePoint && <LoadoutRestore point={restorePoint} weapons={weapons} busy={isApplying} onRestore={async () => {
+                        if (await handleRestoreLoadout()) await refreshFromGame();
+                    }} />}
                     {activeTab === 'profile' ? (
                         <ProfilePanel
                             key={`${activeAccount?.puuid || "none"}:${profileTarget?.puuid || "own"}:${storefrontRefreshKey}`}
                             onConnectAccount={() => setIsAccountsOpen(true)}
-                            ownPlayerCardId={gameMeta.identity?.playerCardId || initialData.gameMeta.identity?.playerCardId}
+                            ownPlayerCardId={gameMeta.identity?.playerCardId || scopedInitialData.gameMeta.identity?.playerCardId}
                             requestedProfile={profileTarget}
                             onRequestedProfileChange={setProfileTarget}
                             autoSyncMatches={autoSyncMatches ?? true}
@@ -915,6 +908,7 @@ function HomeApp() {
                     ) : activeTab === 'skins' ? (
                         isWorkspaceOpen ? (
                             <ArsenalView
+                                key={accountOwner || "guest"}
                                 weapons={weapons}
                                 currentLoadout={currentLoadout}
                                 parent={getParent(activePreset)}
@@ -956,15 +950,21 @@ function HomeApp() {
                                 onUpdateSprays={handleSpraysChange}
                                 currentFlexes={activePreset?.flexes}
                                 onUpdateFlexes={handleFlexesChange}
+                                currentExpressions={activePreset?.expressions}
+                                onUpdateExpressions={handleExpressionsChange}
                                 onAgentAssignment={handleAgentAssignment}
                                 gameIdentity={gameMeta.identity}
                                 gameSprays={gameMeta.sprays}
                                 gameFlexes={gameMeta.flexes}
+                                gameExpressions={gameMeta.expressions}
                                 accountName={activeAccount ? `${activeAccount.gameName}#${activeAccount.tagLine}` : ""}
                                 accountLevel={gameMeta.identity?.accountLevel || profileIdentity.accountLevel || undefined}
                                 accountRank={profileIdentity.currentRank}
                                 accountRankTier={profileIdentity.currentTier}
                                 showUnownedCosmetics={showUnownedCosmetics ?? false}
+                                loadoutAvailable={scopedInitialData.loadoutAvailable}
+                                loadoutError={scopedInitialData.loadoutError}
+                                onRefresh={() => { void loadInitialData(); }}
                             />
                         ) : (
                             <PresetList
@@ -981,6 +981,7 @@ function HomeApp() {
                                 onExportPreset={handleExportPreset}
                                 onImportPresetClick={() => setShowImportModal(true)}
                                 onNewPreset={() => handleOpenPresetNameModal(NamingMode.New)}
+                                loadoutAvailable={scopedInitialData.loadoutAvailable}
                             />
                         )
                     ) : null}
@@ -999,7 +1000,15 @@ function HomeApp() {
             />
             <ErrorModal show={showErrorModal} onClose={handleCloseErrorModal} message={errorMessage} />
             <Toast show={showToast} onClose={handleCloseToast} message={toastMessage} />
-            {showReleaseNotes && <ReleaseNotesModal notes={CURRENT_RELEASE} onClose={dismissReleaseNotes} />}
+            <div className="account-removal-notices" aria-live="polite">
+                {pendingAccountDeletes.map(item => (
+                    <div className="account-removal-notice" key={item.puuid}>
+                        <span>{item.committing ? `Removing ${item.name}…` : `${item.name} removed`}</span>
+                        {!item.committing && <button type="button" onClick={() => setPendingAccountDeletes(current => current.filter(entry => entry.puuid !== item.puuid))}>Undo</button>}
+                    </div>
+                ))}
+            </div>
+            {showReleaseNotes && CURRENT_RELEASE && <ReleaseNotesModal notes={CURRENT_RELEASE} onClose={dismissReleaseNotes} />}
             <ConfirmationModal
                 show={showConfirmationModal}
                 onClose={handleCloseConfirmationModal}
@@ -1012,7 +1021,7 @@ function HomeApp() {
             <AccountManagerModal
                 isOpen={isAccountsOpen}
                 onClose={() => setIsAccountsOpen(false)}
-                accounts={accounts}
+                accounts={accounts.filter(account => !pendingAccountDeletes.some(item => item.puuid === account.puuid))}
                 activeAccount={activeAccount}
                 onSwitchAccount={handleSwitchAccount}
                 onRequestDeleteAccount={requestDeleteAccount}

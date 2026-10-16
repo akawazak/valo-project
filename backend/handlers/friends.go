@@ -110,6 +110,7 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 	historyAccount := selectedAccountPuuid(r)
 	returnSocial := func(response SocialStatusResponse) {
 		h.attachSocialHistory(historyAccount, &response)
+		h.scheduleFriendActivity(r, &response)
 		h.returnAny(w, response)
 	}
 	remoteAuth, hasRemoteAuth, err := getRemoteAuthHeaders(r)
@@ -143,6 +144,7 @@ func (h *Handler) GetSocialStatus(w http.ResponseWriter, r *http.Request) {
 			Error:  remoteResp.Error,
 		}
 		if remoteResp.Status == "ok" && remoteResp.RemoteStatus == "live" {
+			h.attachLocalLastOnline(remoteAuth.Puuid, &remoteResp)
 			returnSocial(remoteResp)
 			return
 		}
@@ -542,6 +544,47 @@ func (h *Handler) fetchLocalSocialStatus() (SocialStatusResponse, error) {
 	return result, nil
 }
 
+// Riot's XMPP roster carries no last-online time, but the local client's
+// friends list does. Reuse it when the local client is signed into the same
+// account, refreshing at most every few minutes.
+var localLastOnlineCache struct {
+	sync.Mutex
+	account   string
+	fetchedAt time.Time
+	values    map[string]int64
+}
+
+const localLastOnlineTTL = 5 * time.Minute
+
+func (h *Handler) attachLocalLastOnline(account string, response *SocialStatusResponse) {
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" || response == nil || len(response.Presences) == 0 {
+		return
+	}
+	localLastOnlineCache.Lock()
+	defer localLastOnlineCache.Unlock()
+	if localLastOnlineCache.account != account || time.Since(localLastOnlineCache.fetchedAt) > localLastOnlineTTL {
+		values := map[string]int64{}
+		if session, err := h.fetchLocalChatSession(); err == nil && strings.EqualFold(session.PUUID, account) {
+			if local, err := h.fetchLocalSocialStatus(); err == nil {
+				for _, presence := range local.Presences {
+					if presence.LastOnlineAt > 0 {
+						values[strings.ToLower(presence.Puuid)] = presence.LastOnlineAt
+					}
+				}
+			}
+		}
+		localLastOnlineCache.account = account
+		localLastOnlineCache.fetchedAt = time.Now()
+		localLastOnlineCache.values = values
+	}
+	for i := range response.Presences {
+		if at := localLastOnlineCache.values[strings.ToLower(response.Presences[i].Puuid)]; at > response.Presences[i].LastOnlineAt {
+			response.Presences[i].LastOnlineAt = at
+		}
+	}
+}
+
 func (h *Handler) fetchLocalChatSession() (localChatSessionResponse, error) {
 	port, password, err := readRiotLockfile()
 	if err != nil {
@@ -636,9 +679,13 @@ func buildLocalSocialResponse(friends localFriendsResponse, presences localPrese
 			continue
 		}
 		seenFriends[puuid] = struct{}{}
+		lastOnline := int64(0)
+		if f.LastOnlineTs != nil && *f.LastOnlineTs > 0 {
+			lastOnline = *f.LastOnlineTs
+		}
 		presence, ok := presencesByPuuid[puuid]
 		if !ok {
-			fallback := SocialPresence{Puuid: puuid, Name: friendDisplayName(f.GameName, f.GameTag, puuid), State: "offline"}
+			fallback := SocialPresence{Puuid: puuid, Name: friendDisplayName(f.GameName, f.GameTag, puuid), State: "offline", LastOnlineAt: lastOnline}
 			if f.ActivePlatform != nil && isDesktopPlatform(*f.ActivePlatform) {
 				fallback.Product = "riotclient"
 				fallback.Platform = *f.ActivePlatform
@@ -651,6 +698,7 @@ func buildLocalSocialResponse(friends localFriendsResponse, presences localPrese
 		normalized := normalizeChatPresence(presence, map[string]string{
 			puuid: friendDisplayName(f.GameName, f.GameTag, puuid),
 		})
+		normalized.LastOnlineAt = lastOnline
 		if socialPresenceIsActive(normalized) {
 			onlineCount++
 			if socialPresenceIsInGame(normalized) {

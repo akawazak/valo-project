@@ -3,17 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
+import ProfileLoading from "./ProfileLoading";
+import { isProfileSyncReady, loadProfileSnapshot } from "./profileSnapshot";
 import { useData } from "@/context/DataContext";
 import type { Weapon } from "@/lib/types";
 import {
-    getAgentStats,
-    getMapStats,
+    type AccountXPResponse,
+    type ProfileTeammateStat,
+    type ProfileQueueStat,
     getProfileMatchDetails,
     getProfileMatchHistory,
-    getProfileOverview,
     getProfileSeasonSummary,
     getProfileSyncStatus,
-    getRRHistory,
     postProfileSync,
     fetchCachedPublicJson,
     type ProfileAgentStatsResponse,
@@ -25,8 +26,15 @@ import {
     type ProfileSeasonSummary,
     type ProfileSyncStatus,
 } from "@/services/api";
+import { matchModeLabel, useGameModes, useQueues } from "@/lib/gameMeta";
 import RRHistoryChart from "./RRHistoryChart";
-import ProfileExtras, { type CareerView } from "./ProfileExtras";
+import ProfileBadges from "./ProfileBadges";
+import ProfileExtras, { type CareerView, type ProgressionSection } from "./ProfileExtras";
+import DuoChemistry from "./DuoChemistry";
+import { matchOutcome } from "./reviewStats";
+import { OPEN_RECAP_FLAG } from "@/features/session/SessionEndToast";
+import { FEATURE_FLAGS } from "@/lib/features";
+import { hasRoundBreakdown, roundOutcomes, sideStats, type MatchSide, type RoundOutcome, type SideStats } from "./matchBreakdown";
 import s from "./ProfilePanel.module.css";
 
 interface Props {
@@ -54,6 +62,8 @@ interface PublicAgent {
     fullPortrait?: string;
     role?: { displayName?: string; displayIcon?: string };
     abilities?: Array<{ slot?: string; displayName?: string; displayIcon?: string }>;
+    developerName?: string;
+    isPlayableCharacter?: boolean;
 }
 interface PublicMap {
     uuid?: string;
@@ -125,27 +135,7 @@ interface SeasonMeta {
     isAct: boolean;
 }
 const RANK_GROUPS = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"];
-const QUEUE_OPTIONS: Array<{ value: string; label: string }> = [
-    { value: "", label: "All queues" },
-    { value: "competitive", label: "Competitive" },
-    { value: "unrated", label: "Unrated" },
-    { value: "spikerush", label: "Spike Rush" },
-    { value: "deathmatch", label: "Deathmatch" },
-    { value: "teamdeathmatch", label: "Team Deathmatch" },
-    { value: "swiftplay", label: "Swiftplay" },
-    { value: "premier", label: "Premier" },
-    { value: "custom", label: "Custom" },
-];
-const QUEUE_LABEL: Record<string, string> = {
-    competitive: "Competitive",
-    unrated: "Unrated",
-    spikerush: "Spike Rush",
-    deathmatch: "Deathmatch",
-    teamdeathmatch: "Team Deathmatch",
-    swiftplay: "Swiftplay",
-    premier: "Premier",
-    custom: "Custom",
-};
+const RANK_COLORS = ["#9aa3a8", "#c58a5c", "#c9d4da", "#e8c15a", "#3fd0e0", "#c37cf2", "#3fd08a", "#e8566a"];
 const PAGE_SIZES = [10, 20, 50];
 const SEASON_QUEUES = [
     { value: "competitive", label: "Competitive" },
@@ -174,6 +164,11 @@ interface CachedProfileSnapshot {
     mapStats: ProfileMapStatsResponse | null;
     syncStatus: ProfileSyncStatus | null;
     identity: { playerCardId: string; playerTitleId: string } | null;
+    accountXP: AccountXPResponse | null;
+    playedQueues: ProfileQueueStat[];
+    teammates: ProfileTeammateStat[];
+    queue: string;
+    seasonQueue: string;
 }
 const profileSnapshotCache = new Map<string, CachedProfileSnapshot>();
 function tierLabel(tier: number, fallback?: string): string {
@@ -188,6 +183,13 @@ function tierLabel(tier: number, fallback?: string): string {
 function rankIconUrl(tier: number, tierAssets: Map<number, { smallIcon: string }>): string | null {
     return tierAssets.get(tier)?.smallIcon || FALLBACK_RANK_ICON;
 }
+/** Puts the chosen comparison target first; ProfileComparison opens on the first candidate. */
+function orderCandidates<T extends { puuid: string }>(target: string, candidates: T[]): T[] {
+    if (!target) return candidates;
+    const key = target.toLowerCase();
+    return [...candidates.filter((item) => item.puuid.toLowerCase() === key), ...candidates.filter((item) => item.puuid.toLowerCase() !== key)];
+}
+
 function seasonLabel(id: string, seasons: Record<string, SeasonMeta>): string {
     const key = (id || "").toLowerCase();
     const season = seasons[key];
@@ -235,8 +237,30 @@ function fmtRatio(n: number | undefined): string {
     return (n ?? 0).toFixed(2);
 }
 
+/** Riot round ceremonies worth calling out; CeremonyDefault and blanks are skipped. */
+const ROUND_CEREMONIES: Record<string, string> = {
+    CeremonyClutch: "Clutch",
+    CeremonyAce: "Ace",
+    CeremonyTeamAce: "Team ace",
+    CeremonyFlawless: "Flawless",
+    CeremonyThrifty: "Thrifty",
+    CeremonyCloser: "Closer",
+};
+
+/** 1 → "1ST", 2 → "2ND", 11 → "11TH". */
+function placeLabel(n: number): string {
+    const tens = n % 100;
+    const suffix = tens >= 11 && tens <= 13 ? "TH" : ({ 1: "ST", 2: "ND", 3: "RD" } as Record<number, string>)[n % 10] || "TH";
+    return `${n}${suffix}`;
+}
+
 function statCount(value: number, singular: string): string {
     return `${value} ${value === 1 ? singular : `${singular}s`}`;
+}
+
+/** True when a sync timestamp is within the last 15 minutes. */
+function isRecent(ms: number | undefined): boolean {
+    return Boolean(ms) && Date.now() - (ms ?? 0) < 15 * 60_000;
 }
 
 function fmtAgo(ms: number): string {
@@ -249,6 +273,61 @@ function fmtAgo(ms: number): string {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+}
+
+function fmtClock(ms: number): string {
+    if (!ms) return "--";
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return "--";
+    return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+// Match history is grouped by calendar day so a long list stays scannable.
+function dayStart(ms: number): number {
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return 0;
+    date.setHours(0, 0, 0, 0);
+    return date.getTime();
+}
+
+function dayHeadline(ms: number): string {
+    const key = dayStart(ms);
+    if (!key) return "Unknown date";
+    const today = dayStart(Date.now());
+    const diffDays = Math.round((today - key) / 86_400_000);
+    const date = new Date(key);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays > 1 && diffDays < 7) return date.toLocaleDateString(undefined, { weekday: "long" });
+    const sameYear = date.getFullYear() === new Date(today).getFullYear();
+    return date.toLocaleDateString(undefined, sameYear
+        ? { month: "short", day: "numeric" }
+        : { month: "short", day: "numeric", year: "numeric" });
+}
+
+function dayAgo(ms: number): string {
+    const key = dayStart(ms);
+    if (!key) return "";
+    const diffDays = Math.round((dayStart(Date.now()) - key) / 86_400_000);
+    if (diffDays <= 1) return "";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return "";
+}
+
+// Fixed game-identity hues per agent role. These deliberately ignore the active
+// accent theme so the Duelist/Initiator/etc. colour language stays learnable.
+const AGENT_ROLE_TONES: Record<string, string> = {
+    duelist: "agentRoleDuelist",
+    initiator: "agentRoleInitiator",
+    controller: "agentRoleController",
+    sentinel: "agentRoleSentinel",
+    flex: "agentRoleFlex",
+};
+
+function agentRoleTone(role: string | undefined): keyof typeof s {
+    const key = (role || "flex").trim().toLowerCase();
+    const tone = AGENT_ROLE_TONES[key] || AGENT_ROLE_TONES.flex;
+    return s[tone] as unknown as keyof typeof s;
 }
 
 function kdColor(kd: number | undefined): string {
@@ -278,15 +357,7 @@ function acsColor(acs: number | undefined): string {
     if (v >= 120) return s.statAvg;
     return s.statPoor;
 }
-function adrColor(adr: number | undefined): string {
-    if (!Number.isFinite(adr ?? NaN)) return "";
-    const v = adr ?? 0;
-    if (v >= 180) return s.statElite;
-    if (v >= 145) return s.statGreat;
-    if (v >= 115) return s.statGood;
-    if (v >= 90) return s.statAvg;
-    return s.statPoor;
-}
+
 
 function cleanError(err: unknown): string {
     const raw = err instanceof Error ? err.message : String(err || "");
@@ -312,15 +383,19 @@ async function loadAgentMap(): Promise<Record<string, AgentMeta>> {
     if (agentPromise) return agentPromise;
     agentPromise = (async () => {
         try {
-            const d = await fetchCachedPublicJson<{ data?: PublicAgent[] }>("https://valorant-api.com/v1/agents?isPlayableCharacter=true");
+            // Unfiltered so Gauntlet's non-playable draft agent resolves; other
+            // non-playable entries (duplicates, test agents) are skipped.
+            const d = await fetchCachedPublicJson<{ data?: PublicAgent[] }>("https://valorant-api.com/v1/agents");
             const m: Record<string, AgentMeta> = {};
             for (const a of d?.data ?? []) {
                 if (!a.uuid) continue;
+                const draftAgent = a.developerName === "AbilityDraftAgent";
+                if (a.isPlayableCharacter === false && !draftAgent) continue;
                 m[a.uuid.toLowerCase()] = {
-                    name: a.displayName,
+                    name: draftAgent ? "Draft agent" : a.displayName,
                     icon: a.displayIcon || a.killfeedPortrait || "",
                     full: a.fullPortrait || "",
-                    role: a.role?.displayName || "Unknown",
+                    role: draftAgent ? "" : a.role?.displayName || "Unknown",
                     roleIcon: a.role?.displayIcon || "",
                     abilities: Object.fromEntries((a.abilities || []).flatMap((ability) => {
                         const slot = ability.slot?.trim().toLowerCase();
@@ -432,10 +507,44 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [total, setTotal] = useState(0);
     const [pageSize, setPageSize] = useState(20);
     const [queue, setQueue] = useState("");
+    const [playedQueues, setPlayedQueues] = useState<ProfileQueueStat[]>([]);
+    const [teammates, setTeammates] = useState<{ puuid: string; list: ProfileTeammateStat[] }>({ puuid: "", list: [] });
+    const [matesOpen, setMatesOpen] = useState(false);
+    // Account XP is only available for the signed-in account, so it is never shown on other profiles.
+    const [accountXP, setAccountXP] = useState<{ puuid: string; data: AccountXPResponse } | null>(null);
+    const gameModes = useGameModes();
+    const queueNames = useQueues();
+    const queueOptions = useMemo(() => {
+        const options = playedQueues.map((entry) => ({
+            value: entry.queueID,
+            label: matchModeLabel(gameModes, entry.queueID, entry.gameMode, queueNames),
+        }));
+        if (queue && !options.some((option) => option.value === queue)) {
+            options.push({ value: queue, label: matchModeLabel(gameModes, queue, "", queueNames) });
+        }
+        return options;
+    }, [gameModes, playedQueues, queue, queueNames]);
     const [agentStats, setAgentStats] = useState<ProfileAgentStatsResponse | null>(null);
     const [mapStats, setMapStats] = useState<ProfileMapStatsResponse | null>(null);
     const [performanceView, setPerformanceView] = useState<"agents" | "maps">("agents");
     const [careerView, setCareerView] = useState<CareerView | null>(null);
+    const [progressionSection, setProgressionSection] = useState<ProgressionSection>("missions");
+    const [compareTarget, setCompareTarget] = useState("");
+    const [duosOpen, setDuosOpen] = useState(false);
+    // Match the match-history day button opened Session recap from, so the recap starts on that day.
+    const [recapFocus, setRecapFocus] = useState("");
+    const openProgression = (section: ProgressionSection) => { setProgressionSection(section); setCareerView("progression"); };
+    // The app shell asks for a recap after a play session ends (SessionEndToast).
+    useEffect(() => {
+        const open = () => {
+            try { sessionStorage.removeItem(OPEN_RECAP_FLAG); } catch { /* storage unavailable */ }
+            setRecapFocus("");
+            setCareerView("sessions");
+        };
+        try { if (sessionStorage.getItem(OPEN_RECAP_FLAG)) open(); } catch { /* storage unavailable */ }
+        window.addEventListener("vv:open-session-recap", open);
+        return () => window.removeEventListener("vv:open-session-recap", open);
+    }, []);
     const [agentRole, setAgentRole] = useState("Duelist");
     const [mapMode, setMapMode] = useState("Standard maps");
     const [syncStatus, setSyncStatus] = useState<ProfileSyncStatus | null>(null);
@@ -446,12 +555,17 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [maps, setMaps] = useState<Record<string, MapMeta>>({});
     const [tierAssets, setTierAssets] = useState<Map<number, { smallIcon: string }>>(new Map());
     const [seasons, setSeasons] = useState<Record<string, SeasonMeta>>({});
+    const [profileAssetsReady, setProfileAssetsReady] = useState(false);
+    const [profileArtReadyFor, setProfileArtReadyFor] = useState("");
     const [loading, setLoading] = useState(false);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [historyLoaded, setHistoryLoaded] = useState(false);
     const [overviewLoadedFor, setOverviewLoadedFor] = useState("");
+    const [identityLoadedFor, setIdentityLoadedFor] = useState("");
     const [historyLoadedFor, setHistoryLoadedFor] = useState("");
     const [committedProfilePuuid, setCommittedProfilePuuid] = useState("");
+    const [initialSyncReadyFor, setInitialSyncReadyFor] = useState("");
+    const [initialSyncError, setInitialSyncError] = useState("");
     const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState("");
     const [toast, setToast] = useState<string | null>(null);
@@ -461,18 +575,19 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const playerCards = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), {
         wide: card.wideArt || "",
         icon: card.displayIcon || "",
+        portrait: card.largeArt || card.displayIcon || "",
         name: card.displayName || "",
     }])), [playerCardAssets]);
     const playerCardImages = useMemo(() => Object.fromEntries(playerCardAssets.map((card) => [card.uuid.toLowerCase(), card.wideArt || card.displayIcon || ""])), [playerCardAssets]);
     const rewardAssets = useMemo(() => {
-        const assets: Record<string, { name: string; image: string; type: string; owned: boolean }> = {};
+        const assets: Record<string, { name: string; image: string; hero?: string; type: string; owned: boolean }> = {};
         const ownedLevels = new Set(ownedLevelIDs.map((id) => id.toLowerCase()));
         const ownedBuddies = new Set(ownedBuddyIDs.map((item) => item.levelId.toLowerCase()));
         const ownedSprays = new Set(ownedSprayIDs.map((id) => id.toLowerCase()));
         const ownedCards = new Set(ownedCardIDs.map((id) => id.toLowerCase()));
         const ownedTitles = new Set(ownedTitleIDs.map((id) => id.toLowerCase()));
         const ownedAgents = new Set(ownedAgentIDs.map((id) => id.toLowerCase()));
-        playerCardAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon || item.smallArt, type: "Player Card", owned: ownedCards.has(item.uuid.toLowerCase()) }; });
+        playerCardAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon || item.smallArt, hero: item.largeArt, type: "Player Card", owned: ownedCards.has(item.uuid.toLowerCase()) }; });
         playerTitleAssets.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.titleText || item.displayName, image: "", type: "Title", owned: ownedTitles.has(item.uuid.toLowerCase()) }; });
         sprays.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.fullTransparentIcon || item.fullIcon || item.displayIcon, type: "Spray", owned: ownedSprays.has(item.uuid.toLowerCase()) }; });
         flexes.forEach((item) => { assets[item.uuid.toLowerCase()] = { name: item.displayName, image: item.displayIcon, type: "Flex", owned: false }; });
@@ -487,39 +602,41 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     ])), [playerTitleAssets]);
 
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const profileStageRef = useRef<HTMLDivElement | null>(null);
     const autoSyncPuuidRef = useRef("");
     const historyRequestRef = useRef(0);
-    const rrHistoryRequestRef = useRef(0);
     const refreshRequestRef = useRef(0);
+    const seasonSummaryKeyRef = useRef("");
+    const seasonQueueRef = useRef(seasonQueue);
+    seasonQueueRef.current = seasonQueue;
+    const queueRef = useRef(queue);
+    queueRef.current = queue;
+    const loadedOverviewQueueRef = useRef("");
+    const loadedHistoryQueueRef = useRef("");
     const currentPuuidRef = useRef(puuid);
     currentPuuidRef.current = puuid;
-    const currentSeasonIdRef = useRef(overview?.currentSeasonId || "");
-    currentSeasonIdRef.current = overview?.currentSeasonId || "";
+    useEffect(() => {
+        currentPuuidRef.current = puuid;
+        return () => { currentPuuidRef.current = ""; };
+    }, [puuid]);
     const viewProfile = useCallback((profile: { puuid: string; gameName: string; tagLine: string }) => {
         onRequestedProfileChange(profile.puuid === ownPuuid ? null : profile);
         window.scrollTo({ top: 0, behavior: "smooth" });
     }, [onRequestedProfileChange, ownPuuid]);
-    const setPerformanceRail = useCallback((rail: HTMLDivElement | null) => {
-        if (!rail) return;
-        const handleWheel = (event: WheelEvent) => {
-            if (rail.scrollWidth <= rail.clientWidth) return;
-            const delta = Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-            if (!delta) return;
-            event.preventDefault();
-            rail.scrollLeft += delta;
-        };
-        rail.addEventListener("wheel", handleWheel, { passive: false });
-        return () => rail.removeEventListener("wheel", handleWheel);
-    }, []);
 
     useEffect(() => {
         let cancelled = false;
+        let pendingAssets = 2;
+        const assetsSettled = () => {
+            pendingAssets -= 1;
+            if (!cancelled && pendingAssets === 0) setProfileAssetsReady(true);
+        };
         Promise.all([loadAgentMap(), loadMaps(), loadTierAssets()]).then(([agentMap, mapMap, tiers]) => {
             if (cancelled) return;
             setAgents(agentMap);
             setMaps(mapMap);
             setTierAssets(tiers);
-        });
+        }).finally(assetsSettled);
 fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/seasons")
             .then((d) => {
                 if (cancelled) return;
@@ -549,7 +666,8 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 }
                 setSeasons(next);
             })
-            .catch((e) => console.warn("Failed to load season metadata", e));
+            .catch((e) => console.warn("Failed to load season metadata", e))
+            .finally(assetsSettled);
         return () => {
             cancelled = true;
         };
@@ -562,6 +680,39 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, []);
 
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
+    useEffect(() => {
+        profileStageRef.current?.closest<HTMLElement>(".app-main-content")?.scrollTo({ top: 0, behavior: "auto" });
+    }, [puuid]);
+    const historyGroups = useMemo(() => {
+        const groups: Array<{
+            key: number;
+            headline: string;
+            ago: string;
+            matches: ProfileMatchSummary[];
+            wins: number;
+            losses: number;
+            roundsWon: number;
+            roundsLost: number;
+        }> = [];
+        for (const match of history) {
+            const key = dayStart(match.gameStartMillis);
+            let group = groups[groups.length - 1];
+            if (!group || group.key !== key) {
+                group = { key, headline: dayHeadline(match.gameStartMillis), ago: dayAgo(match.gameStartMillis), matches: [], wins: 0, losses: 0, roundsWon: 0, roundsLost: 0 };
+                groups.push(group);
+            }
+            group.matches.push(match);
+            const blueSide = match.localPlayer.teamId.toLowerCase() === "blue";
+            const ownRounds = blueSide ? match.blueRoundsWon : match.redRoundsWon;
+            const enemyRounds = blueSide ? match.redRoundsWon : match.blueRoundsWon;
+            if (ownRounds + enemyRounds <= 0) continue;
+            if (match.win) group.wins += 1;
+            else group.losses += 1;
+            group.roundsWon += ownRounds;
+            group.roundsLost += enemyRounds;
+        }
+        return groups;
+    }, [history]);
     const loadHistory = useCallback(async () => {
         const request = ++historyRequestRef.current;
         const targetPuuid = puuid;
@@ -572,6 +723,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             return;
         }
         setHistoryLoading(true);
+        setHistoryLoadedFor("");
         try {
             const matches = await getProfileMatchHistory(0, pageSize, queue || undefined, opts);
             if (request !== historyRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
@@ -579,30 +731,13 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             setTotal(matches.total || 0);
             setHistoryLoaded(true);
             setHistoryLoadedFor(targetPuuid);
+            loadedHistoryQueueRef.current = queue;
         } catch (err) {
             if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setError(cleanError(err));
         } finally {
             if (request === historyRequestRef.current && currentPuuidRef.current === targetPuuid) setHistoryLoading(false);
         }
     }, [opts, pageSize, puuid, queue]);
-
-    const loadRRHistory = useCallback(async (seasonId?: string) => {
-        const request = ++rrHistoryRequestRef.current;
-        const targetPuuid = puuid;
-        if (!targetPuuid) {
-            setRRHistory(null);
-            return;
-        }
-        try {
-            const rr = await getRRHistory(seasonId, opts);
-            if (request !== rrHistoryRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
-            setRRHistory(rr);
-        } catch (err) {
-            if (request === rrHistoryRequestRef.current && currentPuuidRef.current === targetPuuid && !viewedProfile) {
-                setError(cleanError(err));
-            }
-        }
-    }, [opts, puuid, viewedProfile]);
 
     const refresh = useCallback(async (refreshLive: boolean) => {
         const request = ++refreshRequestRef.current;
@@ -619,34 +754,38 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             return;
         }
         setLoading(true);
+        setOverviewLoadedFor("");
         setError("");
         try {
-            const st = await getProfileSyncStatus(opts).catch(() => null);
+            const targetSeasonQueue = seasonQueueRef.current;
+            const snapshot = await loadProfileSnapshot(opts, queue, targetSeasonQueue, refreshLive, !viewedProfile, (ov) => {
+                if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
+                setOverview(ov);
+                setIdentity({ playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" });
+                setIdentityLoadedFor(targetPuuid);
+            });
+            const { overview: ov, agents: ag, maps: mp, played, teammates: mates, status: st } = snapshot;
             if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
             setSyncStatus(st);
-            if (st?.errorKind === "rate_limited") {
-                setRateLimitUntil(st.retryAt || Date.now() + 30_000);
-            }
-
-            const [ov, ag, mp] = await Promise.all([
-                getProfileOverview(opts, !refreshLive),
-                getAgentStats(queue || undefined, opts),
-                getMapStats(queue || undefined, opts),
-            ]);
-            if (request !== refreshRequestRef.current || currentPuuidRef.current !== targetPuuid) return;
+            if (st?.errorKind === "rate_limited") setRateLimitUntil(st.retryAt || Date.now() + 30_000);
+            if (played) setPlayedQueues(played.queues);
+            if (mates) setTeammates({ puuid: targetPuuid, list: mates.teammates });
             setOverview(ov);
-            setSeasonSummary(ov.seasonSummary);
+            setSeasonSummary(snapshot.seasonSummary);
+            setRRHistory(snapshot.rrHistory);
+            setAccountXP(snapshot.accountXP ? { puuid: targetPuuid, data: snapshot.accountXP } : null);
+            seasonSummaryKeyRef.current = `${targetPuuid}:${ov.currentSeasonId || ""}:${targetSeasonQueue}`;
+            loadedOverviewQueueRef.current = queue;
             setAgentStats(ag);
             setMapStats(mp);
             const nextIdentity = { playerCardId: ov.playerCardId || "", playerTitleId: ov.playerTitleId || "" };
             setIdentity(nextIdentity);
             setOverviewLoadedFor(targetPuuid);
-            if (st?.lastError && st.errorKind !== "rate_limited" && !viewedProfile) setError(cleanError(st.lastError));
+            if (snapshot.unavailable.length) setError(`Some profile data is unavailable: ${snapshot.unavailable.join(", ")}.`);
+            else if (st?.lastError && st.errorKind !== "rate_limited" && !viewedProfile) setError(cleanError(st.lastError));
         } catch (err) {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
-                if (!viewedProfile || !/404|not found/i.test(String(err))) {
-                    setError(cleanError(err));
-                }
+                setError(cleanError(err));
             }
         } finally {
             if (request === refreshRequestRef.current && currentPuuidRef.current === targetPuuid) {
@@ -656,21 +795,31 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, [opts, puuid, queue, viewedProfile]);
 
     useEffect(() => {
-        const cached = puuid ? profileSnapshotCache.get(puuid.toLowerCase()) : undefined;
-        rrHistoryRequestRef.current += 1;
+        const candidate = puuid ? profileSnapshotCache.get(puuid.toLowerCase()) : undefined;
+        const cached = candidate?.queue === queueRef.current && candidate.seasonQueue === seasonQueueRef.current
+            && candidate.agentStats && candidate.mapStats && candidate.rrHistory ? candidate : undefined;
         setOverview(cached?.overview ?? null);
         setSeasonSummary(cached?.seasonSummary ?? null);
         setRRHistory(cached?.rrHistory ?? null);
         setHistory(cached?.history ?? []);
         setTotal(cached?.total ?? 0);
         setHistoryLoaded(Boolean(cached));
+        setPlayedQueues(cached?.playedQueues ?? []);
+        setTeammates({ puuid, list: cached?.teammates ?? [] });
         setAgentStats(cached?.agentStats ?? null);
         setMapStats(cached?.mapStats ?? null);
         setSyncStatus(cached?.syncStatus ?? null);
         setIdentity(cached?.identity ?? null);
+        setAccountXP(cached?.accountXP ? { puuid, data: cached.accountXP } : null);
+        seasonSummaryKeyRef.current = cached ? `${puuid}:${cached.overview.currentSeasonId || ""}:${cached.seasonQueue}` : "";
+        loadedOverviewQueueRef.current = cached?.queue ?? "";
+        loadedHistoryQueueRef.current = cached?.queue ?? "";
         setOverviewLoadedFor(cached && puuid ? puuid : "");
+        setIdentityLoadedFor(cached && puuid ? puuid : "");
         setHistoryLoadedFor(cached && puuid ? puuid : "");
-        setCommittedProfilePuuid(cached && puuid ? puuid : "");
+        setCommittedProfilePuuid("");
+        setInitialSyncReadyFor("");
+        setInitialSyncError("");
         setDetails({});
         setExpanded(new Set());
         setLoadingDetails(new Set());
@@ -682,7 +831,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, [puuid, viewedProfile]);
 
     useEffect(() => {
-        void refresh(!viewedProfile);
+        void refresh(true);
     }, [refresh, viewedProfile]);
 
     useEffect(() => {
@@ -693,20 +842,16 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, [loadHistory]);
 
     useEffect(() => {
-        const currentSeasonId = overview?.currentSeasonId;
-        if (!puuid) {
-            setRRHistory(null);
-            return;
-        }
-        void loadRRHistory(currentSeasonId || undefined);
-    }, [loadRRHistory, overview?.currentSeasonId, puuid]);
-
-    useEffect(() => {
-        if (!puuid) return;
+        if (!puuid || committedProfilePuuid !== puuid) return;
+        const summaryKey = `${puuid}:${overview?.currentSeasonId || ""}:${seasonQueue}`;
+        if (seasonSummaryKeyRef.current === summaryKey) return;
         let cancelled = false;
         getProfileSeasonSummary(seasonQueue, opts, overview?.currentSeasonId)
             .then((response) => {
-                if (!cancelled) setSeasonSummary(response.summary);
+                if (!cancelled) {
+                    setSeasonSummary(response.summary);
+                    seasonSummaryKeyRef.current = summaryKey;
+                }
             })
             .catch((err) => {
                 if (!cancelled && !viewedProfile && !/404|page not found/i.test(String(err))) {
@@ -716,16 +861,17 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         return () => {
             cancelled = true;
         };
-    }, [opts, overview?.currentSeasonId, puuid, seasonQueue, viewedProfile]);
+    }, [committedProfilePuuid, opts, overview?.currentSeasonId, puuid, seasonQueue, viewedProfile]);
 
     const runSync = useCallback(
         async (manual: boolean) => {
             if (!puuid) return;
             const targetPuuid = puuid;
             setSyncing(true);
+            setInitialSyncError("");
             setError("");
             try {
-                await postProfileSync(opts);
+                if (!syncStatus?.inFlight) await postProfileSync(opts);
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (manual) showToast("Sync started.");
                 let finalStatus: ProfileSyncStatus | null = null;
@@ -756,6 +902,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 }
                 if (currentPuuidRef.current !== targetPuuid) return;
                 if (finalStatus?.lastError) {
+                    setInitialSyncError(cleanError(finalStatus.lastError));
                     if (finalStatus.errorKind === "rate_limited") {
                         setRateLimitUntil(finalStatus.retryAt || Date.now() + 30_000);
                         return;
@@ -767,19 +914,20 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 await Promise.all([
                     refresh(true),
                     loadHistory(),
-                    loadRRHistory(currentSeasonIdRef.current || undefined),
                 ]);
             } catch (err) {
                 if (currentPuuidRef.current === targetPuuid) {
+                    setInitialSyncError(cleanError(err));
                     if (manual || viewedProfile) setError(cleanError(err));
                 }
             } finally {
                 if (currentPuuidRef.current === targetPuuid) {
                     setSyncing(false);
+                    setInitialSyncReadyFor(targetPuuid);
                 }
             }
         },
-        [loadHistory, loadRRHistory, opts, puuid, refresh, showToast, syncStatus?.totalMatches, viewedProfile],
+        [loadHistory, opts, puuid, refresh, showToast, syncStatus?.inFlight, syncStatus?.totalMatches, viewedProfile],
     );
 
     useEffect(() => {
@@ -798,10 +946,15 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, [rateLimitUntil, runSync]);
 
     // An explicitly opened profile gets one stale-aware background refresh.
-    // Live-roster and party overlays still pass autoSyncMatches=false, so a
-    // match screen cannot fan out history calls for every visible player.
+    // The profile component only mounts after a player click, so live rosters
+    // do not fan out history calls for every visible player.
     useEffect(() => {
-        if (!autoSyncMatches || !puuid || syncing) return;
+        if (!puuid || syncing || initialSyncReadyFor === puuid) return;
+        if (loading || overviewLoadedFor !== puuid) return;
+        if (!autoSyncMatches && !syncStatus?.inFlight) {
+            setInitialSyncReadyFor(puuid);
+            return;
+        }
         if (!syncStatus) {
             if (autoSyncPuuidRef.current !== puuid) {
                 autoSyncPuuidRef.current = puuid;
@@ -814,24 +967,60 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             void runSync(false);
             return;
         }
-        if (syncStatus.errorKind === "rate_limited" && (syncStatus.retryAt || 0) > Date.now()) return;
+        if (syncStatus.errorKind === "rate_limited" && (syncStatus.retryAt || 0) > Date.now()) {
+            setInitialSyncError("Profile sync is temporarily rate limited. It will retry when Riot allows it.");
+            setInitialSyncReadyFor(puuid);
+            return;
+        }
         const staleAfter = (viewedProfile ? 60 : 20) * 60 * 1000;
-        if (syncStatus.lastSyncedAt && Date.now() - syncStatus.lastSyncedAt < staleAfter) return;
+        if (syncStatus.lastSyncedAt && Date.now() - syncStatus.lastSyncedAt < staleAfter) {
+            setInitialSyncReadyFor(puuid);
+            return;
+        }
         const attemptKey = `${puuid}:${syncStatus.lastSyncedAt || 0}`;
         if (autoSyncPuuidRef.current === attemptKey) return;
         autoSyncPuuidRef.current = attemptKey;
         void runSync(false);
-    }, [autoSyncMatches, puuid, runSync, syncStatus, syncing, viewedProfile]);
+    }, [autoSyncMatches, initialSyncReadyFor, loading, overviewLoadedFor, puuid, runSync, syncStatus, syncing, viewedProfile]);
+
+    useEffect(() => {
+        if (!puuid || identityLoadedFor !== puuid || !profileAssetsReady || !overview) return;
+        let cancelled = false;
+        const targetPuuid = puuid;
+        const cardId = overview.playerCardId || (!viewedProfile ? ownPlayerCardId : "");
+        const card = cardId ? playerCards[cardId.toLowerCase()] : undefined;
+        const agentId = overview.seasonSummary?.topAgentCharacterId;
+        const agent = agentId ? agents[agentId.toLowerCase()] : undefined;
+        const tier = overview.currentRank?.competitiveTier || 0;
+        const urls = [...new Set([card?.wide || agent?.full, card?.icon || agent?.icon, card?.portrait, tier > 0 ? rankIconUrl(tier, tierAssets) : undefined].filter((url): url is string => Boolean(url)))];
+        const cleanups: Array<() => void> = [];
+        Promise.all(urls.map((url) => new Promise<void>((resolve) => {
+            const image = new window.Image();
+            const finish = () => { clearTimeout(timeout); image.onload = null; image.onerror = null; resolve(); };
+            const timeout = window.setTimeout(finish, 6000);
+            image.onload = () => { void image.decode().catch(() => undefined).then(finish); };
+            image.onerror = finish;
+            image.src = url;
+            cleanups.push(() => { clearTimeout(timeout); image.onload = null; image.onerror = null; });
+        }))).then(() => { if (!cancelled && currentPuuidRef.current === targetPuuid) setProfileArtReadyFor(targetPuuid); });
+        return () => { cancelled = true; cleanups.forEach((cleanup) => cleanup()); };
+    }, [agents, identityLoadedFor, overview, ownPlayerCardId, playerCards, profileAssetsReady, puuid, tierAssets, viewedProfile]);
 
     const profileSnapshotCandidate = Boolean(puuid)
         && overviewLoadedFor === puuid
         && historyLoadedFor === puuid
         && Boolean(overview)
-        && historyLoaded;
+        && historyLoaded
+        && profileAssetsReady
+        && profileArtReadyFor === puuid
+        && !loading && !historyLoading
+        && isProfileSyncReady(puuid, initialSyncReadyFor, syncing, syncStatus, initialSyncError);
 
     useEffect(() => {
         if (!puuid || !profileSnapshotCandidate || !overview) return;
         setCommittedProfilePuuid(puuid);
+        if (loadedOverviewQueueRef.current !== queue || loadedHistoryQueueRef.current !== queue
+            || seasonSummaryKeyRef.current !== `${puuid}:${overview.currentSeasonId || ""}:${seasonQueue}`) return;
         profileSnapshotCache.set(puuid.toLowerCase(), {
             overview,
             seasonSummary,
@@ -842,8 +1031,13 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
             mapStats,
             syncStatus,
             identity,
+            accountXP: accountXP?.puuid === puuid ? accountXP.data : null,
+            playedQueues,
+            teammates: teammates.puuid === puuid ? teammates.list : [],
+            queue,
+            seasonQueue,
         });
-    }, [agentStats, history, identity, mapStats, overview, profileSnapshotCandidate, puuid, rrHistory, seasonSummary, syncStatus, total]);
+    }, [accountXP, agentStats, history, identity, mapStats, overview, playedQueues, profileSnapshotCandidate, puuid, queue, rrHistory, seasonQueue, seasonSummary, syncStatus, teammates, total]);
 
     const toggleDetails = useCallback(
         async (matchId: string) => {
@@ -921,6 +1115,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     const agentNames = useMemo(() => Object.fromEntries(Object.entries(agents).map(([id, meta]) => [id, meta.name])), [agents]);
     const mapNames = useMemo(() => Object.fromEntries(Object.entries(maps).map(([id, meta]) => [id, meta.name])), [maps]);
     const agentVisuals = useMemo(() => Object.fromEntries(Object.entries(agents).map(([id, meta]) => [id, meta.full || meta.icon])), [agents]);
+    const agentIcons = useMemo(() => Object.fromEntries(Object.entries(agents).map(([id, meta]) => [id, meta.icon])), [agents]);
     const mapVisuals = useMemo(() => Object.fromEntries(Object.entries(maps).map(([id, meta]) => [id, meta.splash])), [maps]);
     const selectedAgentGroup = agentPerformanceGroups.find((group) => group.label === agentRole) || agentPerformanceGroups[0];
     const selectedMapGroup = mapPerformanceGroups.find((group) => group.label === mapMode) || mapPerformanceGroups[0];
@@ -928,8 +1123,12 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     const playerCardId = identity?.playerCardId || (!viewedProfile ? ownPlayerCardId : "");
     const cardData = playerCardId ? playerCards[playerCardId.toLowerCase()] : null;
     const titleText = identity?.playerTitleId ? playerTitles[identity.playerTitleId.toLowerCase()] : "";
-    const profileSnapshotFailed = Boolean(error) && !loading && !historyLoading;
+    const profileSnapshotFailed = Boolean(initialSyncError || error) && !loading && !historyLoading && !syncing
+        && (Boolean(initialSyncError) || overviewLoadedFor !== puuid || historyLoadedFor !== puuid);
     const showProfileFacade = Boolean(puuid) && committedProfilePuuid !== puuid;
+    const overviewReady = overviewLoadedFor === puuid;
+    const matchesReady = historyLoadedFor === puuid && historyLoaded;
+    const loadingCardId = (identityLoadedFor === puuid ? identity?.playerCardId : "") || (!viewedProfile ? ownPlayerCardId : "");
 
     if (!activeAccount) {
         return (
@@ -948,65 +1147,46 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
         );
     }
 
-    if (showProfileFacade) {
-        const overviewReady = overviewLoadedFor === puuid;
-        const matchesReady = historyLoadedFor === puuid && historyLoaded;
-        const profileLoadMessage = matchesReady
-            ? "Finishing profile..."
-            : overviewReady
-                ? "Loading recent matches..."
-                : "Loading rank and identity...";
-        return (
-            <div className={s.profileFacade} role="status" aria-live="polite">
-                {viewedProfile && (
-                    <button type="button" className={s.profileFacadeBack} onClick={() => onRequestedProfileChange(null)}>
-                        ← Back to my profile
-                    </button>
-                )}
-                <div className={s.profileFacadeContent}>
-                    {profileSnapshotFailed ? (
-                        <>
-                            <span className={s.profileLoadKicker}>PROFILE UNAVAILABLE</span>
-                            <strong>Couldn&apos;t load this profile</strong>
-                            <small>{error}</small>
-                                <button type="button" className={s.profileLoadRetry} onClick={() => { void refresh(true); void loadHistory(); }}>
-                                Try again
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            <span className={s.profileLoadKicker}>PROFILE</span>
-                            <strong>{viewedProfile?.gameName || activeAccount.gameName || "Player"}</strong>
-                            <small>{profileLoadMessage}</small>
-                            <div className={s.profileLoadTrack} aria-hidden="true">
-                                <span className={overviewReady ? s.profileLoadTrackComplete : s.profileLoadTrackActive} />
-                                <span className={matchesReady ? s.profileLoadTrackComplete : overviewReady ? s.profileLoadTrackActive : ""} />
-                            </div>
-                            <div className={s.profileLoadSteps} aria-hidden="true">
-                                <span className={overviewReady ? s.profileLoadStepComplete : s.profileLoadStepActive}>Rank &amp; identity</span>
-                                <span className={matchesReady ? s.profileLoadStepComplete : overviewReady ? s.profileLoadStepActive : ""}>Recent matches</span>
-                            </div>
-                        </>
-                    )}
-                </div>
-            </div>
-        );
-    }
-
     const heroBg = cardData?.wide || identityTopAgentMeta?.full;
     const viewedGameName = overview?.gameName || viewedProfile?.gameName || activeAccount?.gameName || "Unknown";
     const viewedTagLine = overview?.tagLine || viewedProfile?.tagLine || activeAccount?.tagLine || "";
 
-    const stats: Array<{ label: string; value: string; accent?: boolean }> = [
-        { label: "Rank", value: currentRankLabel, accent: true },
-        { label: "Rating", value: currentTier >= 27 ? "MAX" : `${currentRR} RR` },
-        { label: "Peak", value: peakRankLabel },
-        { label: "Win Rate", value: fmtPct(identitySummary?.winrate) },
-        { label: "K/D", value: fmtRatio(identitySummary?.avgKda) },
-        { label: "Matches", value: String(identitySummary?.matches ?? 0) },
-    ];
+    // Account levels take 5,000 AP each; Progress.XP is the AP earned toward the next level.
+    const ownAccountXP = !viewedProfile && accountXP?.puuid === puuid ? accountXP.data : null;
+    const levelAP = ownAccountXP ? Math.max(0, Math.min(5000, ownAccountXP.Progress.XP || 0)) : 0;
+    const frequentTeammates = teammates.puuid === puuid ? teammates.list : [];
+    const recentForm = (() => {
+        const decided = history.filter((match) => { const outcome = matchOutcome(match); return outcome === "win" || outcome === "loss"; }).slice(0, 10);
+        if (decided.length < 3) return null;
+        const wins = decided.filter((match) => matchOutcome(match) === "win").length;
+        const snapshots = new Map((rrHistory?.snapshots ?? []).map((item) => [item.matchId, item.rrEarned]));
+        const ranked = decided.filter((match) => snapshots.has(match.matchId));
+        return { games: decided.length, wins, losses: decided.length - wins, rr: ranked.length ? ranked.reduce((sum, match) => sum + (snapshots.get(match.matchId) || 0), 0) : null };
+    })();
+    const knownComparisonIds = new Set([activeAccount.puuid, ...frequentTeammates.map(mate => mate.subject)].map(subject => subject.toLowerCase()));
+    // The chart skips unranked games, so the subtitle counts the same set.
+    const rankedSnapshotCount = rrHistory?.snapshots?.filter((snapshot) => snapshot.tierAfter > 0).length ?? 0;
+    // Tiers below Immortal cap at 100 RR, so they get a progress bar to the next tier.
+    const showRRProgress = currentTier >= 3 && currentTier < 24;
+    const rankColor = currentTier >= 27 ? "#ffe9a8" : RANK_COLORS[Math.floor((currentTier - 3) / 3)] ?? "var(--accent)";
+    const lastDelta = overview?.lastDeltas?.[0];
+    const lastTierShift = lastDelta?.tierBefore && lastDelta.tierAfter && lastDelta.tierAfter !== lastDelta.tierBefore
+        ? lastDelta.tierAfter > lastDelta.tierBefore ? "Promoted" : "Demoted"
+        : "";
+    const actPeakTier = (() => {
+        const id = overview?.currentSeasonId?.toLowerCase();
+        if (!id) return 0;
+        return overview?.rankActs?.find((act) => act.seasonId?.toLowerCase() === id)?.peakRank ?? 0;
+    })();
+    const seasonQueueLabel = SEASON_QUEUES.find((option) => option.value === seasonQueue)?.label ?? "Competitive";
+    const seasonMatches = summary?.matches ?? 0;
+    const seasonWins = Math.min(summary?.wins ?? 0, seasonMatches);
+    const seasonKd = summary && Number.isFinite(summary.avgKda) ? summary.avgKda : 0;
+    const seasonHs = summary && Number.isFinite(summary.avgHsPct) ? summary.avgHsPct : 0;
 
     return (
+        <div className={s.profileStage} ref={profileStageRef}>
+        <div className={s.profileUnderlay} inert={showProfileFacade} aria-hidden={showProfileFacade || undefined}>
         <div className={s.shell}>
             {toast && <div className={s.toast}>{toast}</div>}
 
@@ -1052,68 +1232,122 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                             <span className={s.railTag}>#{viewedTagLine}</span>
                         </div>
                         {titleText && <div className={s.railTitle}>{titleText}</div>}
-                        <div className={s.railSubline}>
-                            {episodeActLabel && <span>{episodeActLabel}</span>}
+                        <div className={s.railChips}>
+                            {currentTier > 0 ? (
+                                <span className={s.railChip} style={{ "--chip-color": rankColor } as CSSProperties}>
+                                    <Image src={currentRankIcon || FALLBACK_RANK_ICON} alt="" width={18} height={18} unoptimized />
+                                    {currentRankLabel}
+                                </span>
+                            ) : null}
+                            <span className={s.railChip}>{episodeActLabel || "Player profile"}</span>
                         </div>
-                        <div className={s.railSynced}>{fmtAgo(syncStatus?.lastSyncedAt || 0)} synced</div>
+                        <ProfileBadges puuid={puuid} region={region} queue={queue} matches={history} />
 
-                        {currentRankIcon && (
-                            <div className={s.railRank}>
-                                <Image
-                                    src={currentRankIcon}
-                                    alt={currentRankLabel}
-                                    width={88}
-                                    height={88}
-                                    className={s.railRankIcon}
-                                    loading="eager"
-                                    unoptimized
-                                />
-                                <div className={s.railRankName}>{currentRankLabel}</div>
-                                <div className={s.railRankRr}>
-                                    {currentTier >= 27 ? "MAX" : `${currentRR} RR`}
-                                    {lastRRDelta != null && currentTier < 27 && (
-                                        <span className={`${s.railRankDelta} ${lastRRDelta > 0 ? s.deltaUp : s.deltaDown}`}>
-                                            {lastRRDelta > 0 ? "▲" : "▼"} {Math.abs(lastRRDelta)}
-                                        </span>
-                                    )}
+                        {ownAccountXP ? (
+                            <div className={s.railLevelProgress} title={`${levelAP.toLocaleString()} of 5,000 AP toward level ${ownAccountXP.Progress.Level + 1}`}>
+                                <div className={s.railLevelHead}>
+                                    <span>Level {ownAccountXP.Progress.Level}</span>
+                                    <small>{levelAP.toLocaleString()} / 5,000 AP</small>
+                                </div>
+                                <div className={s.railLevelBar} role="progressbar" aria-label="Account level progress" aria-valuemin={0} aria-valuemax={5000} aria-valuenow={levelAP}>
+                                    <span style={{ width: `${(levelAP / 5000) * 100}%` }} />
                                 </div>
                             </div>
-                        )}
+                        ) : null}
 
-                        <div className={s.railStats}>
-                            {stats.slice(2).map((stat) => (
-                                <div key={stat.label} className={s.railStat}>
-                                    <span className={s.railStatLabel}>{stat.label}</span>
-                                    <span className={s.railStatValue}>{stat.value}</span>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* ── Command bar (compact, in rail) ── */}
-                        <div className={s.railCommand}>
-                            <select
-                                className={s.select}
-                                value={queue}
-                                onChange={(e) => setQueue(e.target.value)}
-                                aria-label="Queue filter"
-                            >
-                                {QUEUE_OPTIONS.map((opt) => (
-                                    <option key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <div className={s.railCommandBtns}>
-                                <button className={s.ghostBtn} onClick={() => void refresh(true)} disabled={isBusy}>
-                                    Refresh
+                        <nav className={s.railNav} aria-label="Career tools">
+                            {/* Compare lives on other players' profiles (them vs you); on yours it is reached from Played with. */}
+                            {viewedProfile ? (
+                                <button type="button" onClick={() => setCareerView("comparison")} aria-haspopup="dialog">
+                                    <i className={s.railNavIcon} data-tone="compare">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18" /><path d="M4 8h5M4 12h5M4 16h5" /><path d="M15 8h5M15 12h5M15 16h5" /></svg>
+                                    </i>
+                                    <span className={s.railNavText}><strong>Compare with you</strong><small>Side by side with your profile</small></span>
+                                    <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                                 </button>
-                                <button className={s.primaryBtn} onClick={() => runSync(true)} disabled={isBusy}>
-                                    {isBusy ? "…" : "Sync"}
-                                </button>
-                            </div>
-                            <button className={s.railProgressButton} type="button" onClick={() => setCareerView("progression")}>
-                                <span aria-hidden="true">◇</span> Open XP Center
+                            ) : null}
+                            <button type="button" onClick={() => setCareerView("analytics")} aria-haspopup="dialog">
+                                <i className={s.railNavIcon} data-tone="insights">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18" /><path d="M7 15l4-4 3 3 5-6" /></svg>
+                                </i>
+                                <span className={s.railNavText}><strong>Insights</strong><small>{recentForm ? `Last ${recentForm.games}: ${recentForm.wins}W ${recentForm.losses}L${recentForm.rr !== null ? ` · ${recentForm.rr > 0 ? "+" : ""}${recentForm.rr} RR` : ""}` : "Trends from your matches"}</small></span>
+                                <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                             </button>
+                            <div className={s.railNavGroup}>
+                                <button type="button" onClick={() => openProgression("missions")} aria-haspopup="dialog">
+                                    <i className={s.railNavIcon} data-tone="pass">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z" /><path d="M14 7v12" /></svg>
+                                    </i>
+                                    <span className={s.railNavText}><strong>Battle Pass &amp; XP</strong><small>Missions, pass tiers and contracts</small></span>
+                                    <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                                </button>
+                                <div className={s.railNavQuick} role="group" aria-label="Open a Battle Pass &amp; XP section">
+                                    <button type="button" onClick={() => openProgression("missions")}>Missions</button>
+                                    <button type="button" onClick={() => openProgression("battlepass")}>Battle Pass</button>
+                                    <button type="button" onClick={() => openProgression("custom-contracts")}>Contracts</button>
+                                </div>
+                            </div>
+                            {!viewedProfile && FEATURE_FLAGS.accolades() ? (
+                                <button type="button" onClick={() => setCareerView("accolades")} aria-haspopup="dialog">
+                                    <i className={s.railNavIcon} data-tone="accolades">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 20.2 7.2v9.6L12 21.5l-8.2-4.7V7.2z" /><path d="m12 8 1.2 2.6 2.8.3-2.1 1.9.6 2.8L12 14.1l-2.5 1.5.6-2.8L8 10.9l2.8-.3z" /></svg>
+                                    </i>
+                                    <span className={s.railNavText}><strong>Accolades</strong><small>Your personal bests</small></span>
+                                    <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                                </button>
+                            ) : null}
+                            <button type="button" onClick={() => setCareerView("leaderboard")}>
+                                <i className={s.railNavIcon} data-tone="leaderboard">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 21h8" /><path d="M12 17v4" /><path d="M7 4h10v5a5 5 0 0 1-10 0z" /><path d="M17 5h3v2a3 3 0 0 1-3 3" /><path d="M7 5H4v2a3 3 0 0 0 3 3" /></svg>
+                                </i>
+                                <span className={s.railNavText}><strong>Leaderboard</strong><small>Top players in your region</small></span>
+                                <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                            </button>
+                            {frequentTeammates.length ? (
+                                <button type="button" onClick={() => (viewedProfile ? setMatesOpen(true) : setDuosOpen(true))} aria-haspopup="dialog">
+                                    <span className={s.railNavFaces} aria-hidden="true">
+                                        {frequentTeammates.slice(0, 3).map((mate) => {
+                                            const icon = agents[mate.characterId?.toLowerCase?.() || ""]?.icon;
+                                            return icon ? <img key={mate.subject} src={icon} alt="" /> : <i key={mate.subject} />;
+                                        })}
+                                    </span>
+                                    <span className={s.railNavText}>
+                                        <strong>{viewedProfile ? "Played with" : "Duos"}</strong>
+                                        <small>{frequentTeammates.slice(0, 2).map((mate) => mate.gameName || "Hidden").join(", ")}{frequentTeammates.length > 2 ? ` +${frequentTeammates.length - 2}` : ""}</small>
+                                    </span>
+                                    <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                                </button>
+                            ) : null}
+                        </nav>
+
+                        {/* Rank requests and match sync use separate Riot data paths. */}
+                        <div className={s.railSync}>
+                            <div className={s.railSyncRow}>
+                                <span className={s.railSyncDot} data-state={loading ? "busy" : isRecent(overview?.lastLiveRankRefreshedAt) ? "fresh" : "stale"} aria-hidden="true" />
+                                <span className={s.railSyncCopy}>
+                                    <small>Rank</small>
+                                    <strong>{overview?.rankSource === "live" && overview.lastLiveRankRefreshedAt
+                                        ? `Updated ${fmtAgo(overview.lastLiveRankRefreshedAt)}`
+                                        : overview?.rankSource === "cache" ? "Showing saved rank" : "No live rank yet"}</strong>
+                                </span>
+                                <button type="button" className={s.railSyncBtn} onClick={() => void refresh(true)} disabled={isBusy}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></svg>
+                                    {loading ? "Refreshing…" : "Refresh"}
+                                </button>
+                            </div>
+                            <div className={s.railSyncRow}>
+                                <span className={s.railSyncDot} data-state={syncing || syncStatus?.inFlight ? "busy" : isRecent(syncStatus?.lastSyncedAt || overview?.lastCacheSyncedAt) ? "fresh" : "stale"} aria-hidden="true" />
+                                <span className={s.railSyncCopy}>
+                                    <small>Matches</small>
+                                    <strong>{syncStatus?.lastSyncedAt || overview?.lastCacheSyncedAt
+                                        ? `Synced ${fmtAgo(syncStatus?.lastSyncedAt || overview?.lastCacheSyncedAt || 0)}`
+                                        : "Not synced yet"}</strong>
+                                </span>
+                                <button type="button" className={`${s.railSyncBtn} ${s.railSyncBtnPrimary}`} onClick={() => runSync(true)} disabled={isBusy}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9" /><path d="M20 4v5h-5" /><path d="M20 12a8 8 0 0 1-14 5.3L4 15" /><path d="M4 20v-5h5" /></svg>
+                                    {syncing || syncStatus?.inFlight ? "Syncing…" : "Sync"}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </aside>
@@ -1123,92 +1357,174 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     {/* ── Tabs ── */}
                     <div className={s.body}>
                         <>
-                                <div className={s.overviewTop}>
-                                    <Panel
-                                        title="Season Averages"
-                                        subtitle={episodeActLabel || "Current act"}
-                                        headerRight={
-                                            <div className={s.seasonHeaderActions}>
-                                                <div className={s.seasonQueueTabs} role="group" aria-label="Season average mode">
-                                                    {SEASON_QUEUES.map((option) => (
-                                                        <button
-                                                            type="button"
-                                                            key={option.value}
-                                                            className={seasonQueue === option.value ? s.seasonQueueTabActive : ""}
-                                                            onClick={() => setSeasonQueue(option.value)}
-                                                        >
-                                                            {option.label}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                                <div className={s.profileTools}>
-                                                    <button type="button" onClick={() => setCareerView("analytics")}><span aria-hidden="true">↗</span> Insights</button>
-                                                    <button type="button" onClick={() => setCareerView("progression")}><span aria-hidden="true">◇</span> Battle Pass</button>
-                                                    <button type="button" onClick={() => setCareerView("leaderboard")}><span aria-hidden="true">#</span> Leaderboard</button>
-                                                </div>
-                                            </div>
-                                        }
-                                    >
-                                        <div className={s.metricGrid}>
-                                            <Metric label="Win Rate" value={fmtPct(summary?.winrate)} tone={s.metricAccent} />
-                                            <Metric label="K/D Ratio" value={fmtRatio(summary?.avgKda)} tone={kdColor(summary?.avgKda)} />
-                                            <Metric label="Headshot %" value={fmtPct(summary?.avgHsPct)} tone={hsColor(summary?.avgHsPct)} />
-                                            <Metric label="Matches" value={String(summary?.matches ?? 0)} />
-                                            <Metric label="Top Agent" value={topAgentMeta?.name || summary?.topAgent || "—"} />
-                                            <Metric label="Peak Rank" value={peakRankLabel} />
-                                        </div>
-                                    </Panel>
-
-                                    <Panel title="Career Peak" subtitle="Highest verified competitive tier">
-                                        <div className={s.peakCard}>
-                                            <div className={s.peakEmblem}>
-                                                <Image
-                                                    src={rankIconUrl(peakTier, tierAssets) || FALLBACK_RANK_ICON}
-                                                    alt=""
-                                                    width={78}
-                                                    height={78}
-                                                    loading="eager"
-                                                    unoptimized
-                                                />
-                                            </div>
-                                            <div className={s.peakCopy}>
-                                                <span className={s.peakEyebrow}>Personal best</span>
-                                                <strong>{peakRankLabel}</strong>
-                                                <span>
-                                                    {overview?.peakRank?.reachedAt
-                                                        ? `Reached ${fmtPeakDate(overview.peakRank.reachedAt)}`
-                                                        : "Peak date unavailable from verified RR updates"}
-                                                </span>
-                                            </div>
-                                            <div className={s.peakAct}>
-                                                <span>Recorded in</span>
-                                                <strong>
-                                                    {overview?.peakRank?.seasonId
-                                                        ? seasonLabel(overview.peakRank.seasonId, seasons)
-                                                        : "Career history"}
-                                                </strong>
-                                            </div>
-                                        </div>
-                                    </Panel>
+                                <div className={s.profileIntro}>
+                                    <div>
+                                        <h1>{viewedProfile ? `${viewedGameName}'s performance` : "Your performance"}</h1>
+                                    </div>
+                                    <div className={`${s.seasonQueueTabs} ${s.introQueueTabs}`} role="group" aria-label="Season stats mode">
+                                        {SEASON_QUEUES.map((option) => (
+                                            <button
+                                                type="button"
+                                                key={option.value}
+                                                aria-pressed={seasonQueue === option.value}
+                                                className={seasonQueue === option.value ? s.seasonQueueTabActive : ""}
+                                                onClick={() => setSeasonQueue(option.value)}
+                                            >
+                                                {option.label}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
 
-                                <Panel
+                                <section className={s.rankHero} aria-label="Rank" style={{ "--rank-color": rankColor } as CSSProperties}>
+                                    <div className={s.rankHeroCurrent}>
+                                        <Image
+                                            src={currentRankIcon || FALLBACK_RANK_ICON}
+                                            alt=""
+                                            width={96}
+                                            height={96}
+                                            className={s.rankHeroIcon}
+                                            loading="eager"
+                                            unoptimized
+                                        />
+                                        <div className={s.rankHeroCopy}>
+                                            <span className={s.rankHeroLabel}>Current rank</span>
+                                            <div className={s.rankHeroTitle}>
+                                                <strong>{currentRankLabel}</strong>
+                                                {lastRRDelta != null && currentTier < 27 && (
+                                                    <span className={`${s.rankHeroDelta} ${lastRRDelta > 0 ? s.rankHeroDeltaUp : s.rankHeroDeltaDown}`}>
+                                                        {lastRRDelta > 0 ? "▲" : "▼"} {Math.abs(lastRRDelta)} RR{lastTierShift ? ` · ${lastTierShift}` : ""}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {showRRProgress ? (
+                                                <>
+                                                    <div className={s.rankHeroRR}>
+                                                        <span><b>{currentRR}</b> / 100 RR</span>
+                                                        <span>{Math.max(0, 100 - currentRR)} RR to {tierLabel(currentTier + 1)}</span>
+                                                    </div>
+                                                    <div
+                                                        className={s.rankHeroBar}
+                                                        role="progressbar"
+                                                        aria-label="Ranked rating"
+                                                        aria-valuemin={0}
+                                                        aria-valuemax={100}
+                                                        aria-valuenow={currentRR}
+                                                    >
+                                                        <span style={{ width: `${Math.min(100, Math.max(0, currentRR))}%` }} />
+                                                    </div>
+                                                </>
+                                            ) : currentTier >= 24 ? (
+                                                <div className={s.rankHeroRR}><span><b>{currentRR}</b> RR</span></div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                    <div className={s.rankHeroSide}>
+                                        <span className={s.rankHeroLabel}>Act peak</span>
+                                        <div className={s.rankHeroMini}>
+                                            <Image
+                                                src={rankIconUrl(actPeakTier, tierAssets) || FALLBACK_RANK_ICON}
+                                                alt=""
+                                                width={64}
+                                                height={64}
+                                                loading="eager"
+                                                unoptimized
+                                            />
+                                            <div>
+                                                <strong>{actPeakTier ? tierLabel(actPeakTier) : "—"}</strong>
+                                                <small>{episodeActLabel || "This act"}</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className={s.rankHeroSide}>
+                                        <span className={s.rankHeroLabel}>Career best</span>
+                                        <div className={s.rankHeroMini}>
+                                            <Image
+                                                src={rankIconUrl(peakTier, tierAssets) || FALLBACK_RANK_ICON}
+                                                alt=""
+                                                width={64}
+                                                height={64}
+                                                loading="eager"
+                                                unoptimized
+                                            />
+                                            <div>
+                                                <strong>{peakRankLabel}</strong>
+                                                <small>
+                                                    {[
+                                                        overview?.peakRank?.reachedAt ? fmtPeakDate(overview.peakRank.reachedAt) : "",
+                                                        overview?.peakRank?.seasonId ? seasonLabel(overview.peakRank.seasonId, seasons) : "",
+                                                    ].filter(Boolean).join(" · ") || "Career history"}
+                                                </small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className={s.statTiles} aria-label={`${seasonQueueLabel} stats this act`}>
+                                    <div className={s.statTile}>
+                                        <span className={s.statTileLabel}>Win rate</span>
+                                        <strong className={s.statTileValue}>{fmtPct(summary?.winrate)}</strong>
+                                        <div className={s.statTileSplit} aria-hidden="true">
+                                            {seasonMatches > 0 ? (
+                                                <>
+                                                    <span className={s.statTileWin} style={{ flexGrow: seasonWins }} />
+                                                    <span className={s.statTileLoss} style={{ flexGrow: seasonMatches - seasonWins }} />
+                                                </>
+                                            ) : <span className={s.statTileEmpty} />}
+                                        </div>
+                                        <small>{seasonWins} W · {seasonMatches - seasonWins} L</small>
+                                    </div>
+                                    <div className={s.statTile}>
+                                        <span className={s.statTileLabel}>K/D ratio</span>
+                                        <strong className={`${s.statTileValue} ${kdColor(summary?.avgKda)}`}>{fmtRatio(summary?.avgKda)}</strong>
+                                        <div className={s.statTileMeter} aria-hidden="true">
+                                            <span style={{ width: `${Math.min(100, (seasonKd / 2) * 100)}%` }} />
+                                            <i />
+                                        </div>
+                                        <small>{seasonKd >= 1 ? "Above" : "Below"} 1.0 break-even</small>
+                                    </div>
+                                    <div className={s.statTile}>
+                                        <span className={s.statTileLabel}>Headshot %</span>
+                                        <strong className={`${s.statTileValue} ${hsColor(summary?.avgHsPct)}`}>{fmtPct(summary?.avgHsPct)}</strong>
+                                        <div className={s.statTileMeter} aria-hidden="true">
+                                            <span style={{ width: `${Math.min(100, Math.max(0, seasonHs))}%` }} />
+                                        </div>
+                                        <small>Of all hits</small>
+                                    </div>
+                                    <div className={s.statTile}>
+                                        <span className={s.statTileLabel}>Matches</span>
+                                        <strong className={s.statTileValue}>{seasonMatches}</strong>
+                                        <small className={s.statTileFoot}>{seasonQueueLabel} this act</small>
+                                    </div>
+                                    <div className={`${s.statTile} ${s.statTileAgent}`}>
+                                        {topAgentMeta?.icon ? (
+                                            <img src={topAgentMeta.icon} alt="" className={s.statTileAgentIcon} />
+                                        ) : <span className={s.statTileAgentIcon} />}
+                                        <div>
+                                            <span className={s.statTileLabel}>Most played</span>
+                                            <strong>{topAgentMeta?.name || summary?.topAgent || "—"}</strong>
+                                            {topAgentMeta?.role && <small>{topAgentMeta.role}</small>}
+                                        </div>
+                                    </div>
+                                </section>
+                                {seasonMatches > 0 && seasonMatches < 5 && (
+                                    <p className={s.sampleNote}>Early sample: these averages may change as more matches are saved.</p>
+                                )}
+
+                                {/* A graph needs at least two ranked games; with fewer it would be an empty frame. */}
+                                {rankedSnapshotCount >= 2 && <Panel
                                     title="RR Progression"
-                                    subtitle={
-                                        rrHistory?.snapshots?.length
-                                            ? rrHistory.source === "tier"
-                                                ? `${rrHistory.snapshots.length} ranked tier checkpoints · exact RR unavailable`
-                                                : `${rrHistory.snapshots.length} ranked games tracked`
-                                            : `${episodeActLabel || "Current act"} has no cached ranked progression`
-                                    }
+                                    subtitle={rrHistory?.source === "tier"
+                                        ? `${rankedSnapshotCount} ranked tier checkpoints · exact RR unavailable`
+                                        : `${rankedSnapshotCount} ranked games tracked`}
                                 >
                                     <RRHistoryChart
                                         snapshots={rrHistory?.snapshots ?? []}
                                         source={rrHistory?.source}
-                                        height={250}
+                                        height={220}
                                         loading={isBusy}
                                     />
-                                </Panel>
+                                </Panel>}
 
                                 <Panel
                                     title="Performance"
@@ -1251,11 +1567,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                             </div>
                                             {selectedAgentGroup && (
                                                 <section className={s.performanceGroup} key={selectedAgentGroup.label}>
-                                                    <h3>
-                                                        {selectedAgentGroup.roleIcon && <img src={selectedAgentGroup.roleIcon} alt="" aria-hidden="true" />}
-                                                        {selectedAgentGroup.label}
-                                                    </h3>
-                                                    <div ref={setPerformanceRail} className={s.agentPerformanceRail}>
+                                                    <div className={s.agentPerformanceRail} tabIndex={0} role="region" aria-label={`${selectedAgentGroup.label} performance, scroll horizontally for more agents`}>
                                                         {selectedAgentGroup.items.map(({ agent, meta }) => (
                                                             <div key={agent.characterId} className={s.agentPerformanceCard}>
                                                                 {meta?.icon ? (
@@ -1292,7 +1604,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                         {selectedMapGroup && (
                                             <section className={s.performanceGroup} key={selectedMapGroup.label}>
                                                 <h3>{selectedMapGroup.label}<span>{selectedMapGroup.items.length}</span></h3>
-                                                <div ref={setPerformanceRail} className={s.mapStrip}>
+                                                <div className={s.mapStrip} tabIndex={0} role="region" aria-label="Map performance, scroll horizontally for more maps">
                                                     {selectedMapGroup.items.map(({ stat: mStat, meta: mMeta }) => (
                                                         <div
                                                             key={mStat.mapID}
@@ -1325,18 +1637,31 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                     title="Match History"
                                     subtitle={`${total} cached matches`}
                                     headerRight={
-                                        <select
-                                            className={`${s.select} ${s.pageSizeSelect}`}
-                                            value={pageSize}
-                                            onChange={(e) => setPageSize(Number(e.target.value))}
-                                            aria-label="Matches per page"
-                                        >
-                                            {PAGE_SIZES.map((size) => (
-                                                <option key={size} value={size}>
-                                                    {size}
-                                                </option>
-                                            ))}
-                                        </select>
+                                        <div className={s.historyFilters}>
+                                            <select
+                                                className={`${s.select} ${s.historyQueueSelect}`}
+                                                value={queue}
+                                                onChange={(e) => setQueue(e.target.value)}
+                                                aria-label="Show matches from"
+                                            >
+                                                <option value="">All queues</option>
+                                                {queueOptions.map((opt) => (
+                                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                className={`${s.select} ${s.pageSizeSelect}`}
+                                                value={pageSize}
+                                                onChange={(e) => setPageSize(Number(e.target.value))}
+                                                aria-label="Matches per page"
+                                            >
+                                                {PAGE_SIZES.map((size) => (
+                                                    <option key={size} value={size}>
+                                                        {size} per page
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     }
                                 >
                                     {history.length === 0 && (historyLoading || syncStatus?.inFlight || syncing) ? (
@@ -1353,22 +1678,47 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                         </div>
                                     ) : (
                                         <div className={s.matchList}>
-                                            {history.map((match) => (
-                                                <MatchRow
-                                                    key={match.matchId}
-                                                    match={match}
-                                                    detail={details[match.matchId]}
-                                                    expanded={expanded.has(match.matchId)}
-                                                    loading={loadingDetails.has(match.matchId)}
-                                                    agents={agents}
-                                                    maps={maps}
-                                                    weapons={weapons}
-                                                    tierAssets={tierAssets}
-                                                    profilePuuid={puuid}
-                                                    region={region}
-                                                    onToggle={() => toggleDetails(match.matchId)}
-                                                    onViewProfile={viewProfile}
-                                                />
+                                            {historyGroups.map((group) => (
+                                                <section className={s.matchDayGroup} key={`day-${group.key}`}>
+                                                    <header className={s.matchDayHeader}>
+                                                        <span className={s.matchDayDot} data-tone={group.wins > group.losses ? "win" : group.losses > group.wins ? "loss" : "even"} aria-hidden="true" />
+                                                        <h3 className={s.matchDayTitle}>{group.headline}</h3>
+                                                        {group.ago ? <span className={s.matchDayAgo}>{group.ago}</span> : null}
+                                                        <span className={s.matchDayRule} aria-hidden="true" />
+                                                        <span className={s.matchDayRecord} data-mixed={group.wins > 0 && group.losses > 0 ? "true" : undefined}>
+                                                            {group.wins > 0 ? <b className={s.winText}>{group.wins}W</b> : null}
+                                                            {group.losses > 0 ? <b className={s.lossText}>{group.losses}L</b> : null}
+                                                        </span>
+                                                        <small className={s.matchDayRounds}>
+                                                            {group.roundsWon + group.roundsLost > 0
+                                                                ? `${group.roundsWon}–${group.roundsLost} rounds`
+                                                                : `${group.matches.length} ${group.matches.length === 1 ? "match" : "matches"}`}
+                                                        </small>
+                                                        {!viewedProfile ? <button type="button" className={s.matchDayRecap} onClick={() => { setRecapFocus(group.matches[0]?.matchId || ""); setCareerView("sessions"); }} aria-haspopup="dialog">
+                                                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 7v5l3 2" /></svg>
+                                                            Session recap
+                                                        </button> : null}
+                                                    </header>
+                                                    <div className={s.matchDayList}>
+                                                        {group.matches.map((match) => (
+                                                            <MatchRow
+                                                                key={match.matchId}
+                                                                match={match}
+                                                                detail={details[match.matchId]}
+                                                                expanded={expanded.has(match.matchId)}
+                                                                loading={loadingDetails.has(match.matchId)}
+                                                                agents={agents}
+                                                                maps={maps}
+                                                                weapons={weapons}
+                                                                tierAssets={tierAssets}
+                                                                profilePuuid={puuid}
+                                                                region={region}
+                                                                onToggle={() => toggleDetails(match.matchId)}
+                                                                onViewProfile={viewProfile}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </section>
                                             ))}
                                         </div>
                                     )}
@@ -1377,9 +1727,35 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     </div>
                 </main>
             </div>
+            {matesOpen && frequentTeammates.length ? (
+                <TeammatesDialog
+                    teammates={frequentTeammates}
+                    agents={agents}
+                    onClose={() => setMatesOpen(false)}
+                    onView={(profile) => { setMatesOpen(false); viewProfile(profile); }}
+                    onCompare={(mate) => { setMatesOpen(false); setCompareTarget(mate); setCareerView("comparison"); }}
+                />
+            ) : null}
+            {duosOpen ? (
+                <DuoChemistry
+                    you={{ name: viewedGameName || "You", tag: activeAccount.tagLine, cardId: playerCardId || undefined }}
+                    region={region}
+                    agents={agents}
+                    mapNames={mapNames}
+                    mapVisuals={mapVisuals}
+                    onClose={() => setDuosOpen(false)}
+                    onViewProfile={(profile) => { setDuosOpen(false); viewProfile(profile); }}
+                    onCompare={(mate) => { setDuosOpen(false); setCompareTarget(mate); setCareerView("comparison"); }}
+                />
+            ) : null}
             <ProfileExtras
+                queue={queue}
+                queueLabel={queue ? queueOptions.find((option) => option.value === queue)?.label || queue : "All queues"}
                 view={careerView}
-                onClose={() => setCareerView(null)}
+                onClose={() => { setCareerView(null); setCompareTarget(""); setRecapFocus(""); }}
+                recapFocus={recapFocus}
+                selfPuuid={activeAccount.puuid}
+                initialSection={progressionSection}
                 puuid={puuid}
                 region={region}
                 seasonId={overview?.currentSeasonId}
@@ -1395,7 +1771,34 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                 rankActs={overview?.rankActs ?? []}
                 seasonNames={Object.fromEntries(Object.entries(seasons).map(([key, value]) => [key, value.name]))}
                 onViewProfile={viewProfile}
+                identityCard={viewedProfile ? undefined : { name: viewedGameName, cardId: playerCardId || "", titleText, portrait: playerCardId ? playerCards[playerCardId.toLowerCase()]?.portrait : undefined }}
+                reviewPlayer={{ puuid, gameName: overview?.gameName || (viewedProfile ? viewedProfile.gameName || "Player" : activeAccount.gameName || "You"), tagLine: overview?.tagLine || (viewedProfile ? viewedProfile.tagLine || "" : activeAccount.tagLine || "") }}
+                rankIcons={Object.fromEntries([...tierAssets].map(([tier, art]) => [tier, art.smallIcon]))}
+                agentIcons={agentIcons}
+                comparisonCandidates={orderCandidates(compareTarget, [...new Map([
+                    { puuid: activeAccount.puuid, gameName: activeAccount.gameName || "You", tagLine: activeAccount.tagLine || "" },
+                    ...frequentTeammates.map(mate => ({ puuid: mate.subject, gameName: mate.gameName, tagLine: mate.tagLine })),
+                    ...[...profileSnapshotCache.values()].filter(cached => !knownComparisonIds.has(cached.overview.puuid.toLowerCase())).map(cached => ({ puuid: cached.overview.puuid, gameName: cached.overview.gameName || "Player", tagLine: cached.overview.tagLine || "" })),
+                ].filter(player => player.puuid && player.puuid.toLowerCase() !== puuid.toLowerCase()).map(player => [player.puuid.toLowerCase(), player])).values()])}
             />
+        </div>
+        </div>
+        {showProfileFacade && (
+            <ProfileLoading
+                gameName={(viewedProfile ? viewedProfile.gameName : activeAccount.gameName) || "Player"}
+                tagLine={viewedProfile?.tagLine || (!viewedProfile ? activeAccount.tagLine : "")}
+                cardArt={loadingCardId ? playerCards[loadingCardId.toLowerCase()]?.portrait : undefined}
+                overviewReady={overviewReady && !loading}
+                matchesReady={matchesReady && !historyLoading && isProfileSyncReady(puuid, initialSyncReadyFor, syncing, syncStatus, initialSyncError)}
+                artReady={profileArtReadyFor === puuid}
+                error={profileSnapshotFailed ? initialSyncError || error : undefined}
+                onBack={viewedProfile ? () => onRequestedProfileChange(null) : undefined}
+                onRetry={() => {
+                    if (initialSyncError) void runSync(true);
+                    else { void refresh(true); void loadHistory(); }
+                }}
+            />
+        )}
         </div>
     );
 }
@@ -1424,23 +1827,6 @@ function Panel({
             </header>
             <div className={s.panelBody}>{children}</div>
         </section>
-    );
-}
-
-function Metric({
-    label,
-    value,
-    tone = "",
-}: {
-    label: string;
-    value: string;
-    tone?: string;
-}) {
-    return (
-        <div className={s.metric}>
-            <span className={s.metricLabel}>{label}</span>
-            <span className={`${s.metricValue} ${tone}`}>{value}</span>
-        </div>
     );
 }
 
@@ -1587,10 +1973,10 @@ function MapDuelMarker({
     }, [avoidPoint, point.left, point.top]);
     return (
         <span
-            className={`${s.mapDuelMarker} ${dead ? s.mapDuelMarkerDead : s.mapDuelMarkerKiller} ${local ? s.mapDuelMarkerLocal : ""}`}
+            className={`${s.mapDuelMarker} ${dead ? s.mapDuelMarkerDead : ""} ${local ? s.mapDuelMarkerLocal : ""}`}
             style={{ left: `${point.left * 100}%`, top: `${point.top * 100}%` }}
-            title={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
-            aria-label={`${playerName}${dead ? " was eliminated" : " got the elimination"}`}
+            title={`${playerName}${dead ? local ? " were eliminated" : " was eliminated" : " got the elimination"}`}
+            aria-label={`${playerName}${dead ? local ? " were eliminated" : " was eliminated" : " got the elimination"}`}
         >
             {!dead && finisher?.icon ? <MapDuelFinisher key={finisher.icon} finisher={finisher} offset={weaponOffset} /> : null}
             <span className={s.mapDuelPortrait}>
@@ -1636,15 +2022,74 @@ function MatchRow({
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const [activeMatchTab, setActiveMatchTab] = useState<"scoreboard" | "rounds" | "map">("scoreboard");
+    const [reviewFight, setReviewFight] = useState<MatchKillEvent | null>(null);
     const [loadedAnalytics, setLoadedAnalytics] = useState<ProfileMatchDetails | null>(null);
     const [analyticsLoading, setAnalyticsLoading] = useState(false);
     const [analyticsError, setAnalyticsError] = useState("");
+    const [rankDetails, setRankDetails] = useState<ProfileMatchDetails | null>(null);
+    const [ranksLoading, setRanksLoading] = useState(false);
+    const [ranksError, setRanksError] = useState("");
+    const dialogRef = useRef<HTMLElement>(null);
+
+    useEffect(() => {
+        if (!expanded) return;
+        const previousFocus = document.activeElement as HTMLElement | null;
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
+        dialogRef.current?.focus();
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            if (previousFocus?.isConnected) previousFocus.focus();
+        };
+    }, [expanded]);
+    useEffect(() => {
+        if (expanded) dialogRef.current?.querySelector<HTMLButtonElement>('nav[aria-label="Match detail views"] button[aria-current="page"]')?.focus();
+    }, [activeMatchTab, expanded]);
+    const loadRanks = async () => {
+        if (ranksLoading) return;
+        if (rankDetails?.rankRetryAt && Date.now() < rankDetails.rankRetryAt) {
+            setRanksError(`Try again after ${new Date(rankDetails.rankRetryAt).toLocaleTimeString()}.`);
+            return;
+        }
+        setRanksLoading(true);
+        setRanksError("");
+        try {
+            const result = await getProfileMatchDetails(match.matchId, { puuid: profilePuuid, region, ranks: true });
+            setRankDetails(result);
+            setRanksError(result.rankError || "");
+        } catch {
+            setRanksError("Could not load ranks. Try again.");
+        } finally {
+            setRanksLoading(false);
+        }
+    };
+    const gameModes = useGameModes();
+    const queueNames = useQueues();
     const agentMeta = agents[match.localPlayer.characterId?.toLowerCase?.() || ""];
     const mapMeta = maps[match.mapID?.toLowerCase?.() || ""];
-    const agentName = agentMeta?.name || match.localPlayer.characterId?.slice(0, 8) || "Agent";
+    // Ability-draft modes (Gauntlet) give every player a placeholder agent ID.
+    const draftMode = /abilitydraft/i.test(match.queueID || "") || /abilitydraft/i.test(match.gameMode || "");
+    const agentName = agentMeta?.name || (draftMode ? "Drafted kit" : "Unknown agent");
     const mapName = mapMeta?.name || match.mapID?.slice(0, 8) || "Map";
-    const resultClass = match.win ? s.winText : s.lossText;
-    const queueName = QUEUE_LABEL[match.queueID] || match.queueID || "Queue";
+    // Modes without rounds (e.g. Deathmatch) have no team result or per-round
+    // stats, so the row shows neither instead of a fake loss and inflated ACS.
+    const roundBased = match.blueRoundsWon + match.redRoundsWon > 0 && match.localPlayer.roundsPlayed > 0;
+    // Deathmatch is ranked by kills across every player instead of a team score.
+    const placement = !roundBased ? match.placement ?? 0 : 0;
+    // Gauntlet duos have no team score, but Riot reports each duo's final standing.
+    const duoPlace = !roundBased && !placement ? match.teamPlacement ?? 0 : 0;
+    const standing = placement || duoPlace;
+    const standingOf = placement ? match.playerCount : match.teamCount;
+    const ffaWin = standing === 1;
+    const decided = roundBased || (!standing && (match.teamCount ?? 0) > 0);
+    const resultClass = standing ? (ffaWin ? s.winText : s.neutralText) : !decided ? s.neutralText : match.win ? s.winText : s.lossText;
+    const rowResultClass = ffaWin ? s.matchRowWin : !decided ? "" : match.win ? s.matchRowWin : s.matchRowLoss;
+    // Some team-less modes still play real rounds (Gauntlet), so per-round stats hold.
+    const perRoundStats = roundBased || (match.localPlayer.roundsPlayed > 1 && match.localPlayer.damageDealt > 0);
+    const resultLabel = standing ? (ffaWin ? "WON" : "PLACED") : !decided ? "PLAYED" : match.win ? "WIN" : "LOSS";
+    const killsPerMinute = match.gameLengthMillis > 0 ? match.localPlayer.kills / (match.gameLengthMillis / 60_000) : 0;
+    const killGap = placement && match.bestOtherKills !== undefined ? match.localPlayer.kills - match.bestOtherKills : null;
+    const queueName = matchModeLabel(gameModes, match.queueID, match.gameMode, queueNames);
 
     const matchTier = match.tierAfter ?? 0;
     const matchRRIcon = rankIconUrl(matchTier, tierAssets);
@@ -1658,6 +2103,7 @@ function MatchRow({
     const unusualCompletion = !/^completed$/i.test(completionState);
 
     const openAnalyticsTab = useCallback(async (tab: "rounds" | "map") => {
+        if (tab === "map") setReviewFight(null);
         setActiveMatchTab(tab);
         if ((detail?.rounds?.length || 0) > 0 || loadedAnalytics !== null || analyticsLoading) return;
         setAnalyticsLoading(true);
@@ -1672,8 +2118,17 @@ function MatchRow({
         }
     }, [analyticsLoading, detail?.rounds?.length, loadedAnalytics, match.matchId, profilePuuid, region]);
 
+    const [scoreSide, setScoreSide] = useState<MatchSide>("all");
+    const breakdownDetail = loadedAnalytics ?? detail;
+    const roundOutcomeList = useMemo(
+        () => (breakdownDetail && roundBased ? roundOutcomes(breakdownDetail, match.localPlayer.teamId, match.queueID) : []),
+        [breakdownDetail, match.localPlayer.teamId, match.queueID, roundBased],
+    );
+    const canSplitSides = Boolean(breakdownDetail && roundBased && hasRoundBreakdown(breakdownDetail));
     const kda = match.localPlayer.kda;
     const hsPct = match.localPlayer.hsPct;
+    // Some modes (e.g. Deathmatch) report no hit locations at all.
+    const hasShotData = match.localPlayer.headshots + match.localPlayer.bodyshots + match.localPlayer.legshots > 0;
     const adr = Math.round(match.localPlayer.adr || 0);
     const acs = Math.round(match.localPlayer.acs || 0);
     const kdaText = `${match.localPlayer.kills}/${match.localPlayer.deaths}/${match.localPlayer.assists}`;
@@ -1703,39 +2158,66 @@ function MatchRow({
     const partyOverflow = partyMembers.length - partyPreview.length;
 
     return (
-        <div className={`${s.matchWrap} ${expanded ? s.matchWrapExpanded : ""}`}>
-            <button type="button" className={`${s.matchRow} ${match.win ? s.matchRowWin : s.matchRowLoss}`} onClick={() => {
+        <div
+            className={`${s.matchWrap} ${rowResultClass} ${expanded ? s.matchWrapExpanded : ""}`}
+            data-result={ffaWin ? "win" : !decided ? "neutral" : match.win ? "win" : "loss"}
+            data-loading={loading ? "true" : undefined}
+        >
+            <button type="button" className={s.matchRow} onClick={() => {
                 if (!expanded) setActiveMatchTab("scoreboard");
                 onToggle();
             }} aria-expanded={expanded}>
+                <span className={s.matchRowSheen} aria-hidden="true" />
                 <div className={s.matchResultBlock}>
-                    <div className={s.matchResultTop}>
-                        <span className={`${s.matchResultText} ${resultClass}`}>{match.win ? "WIN" : "LOSS"}</span>
-                        <span className={s.matchScore}>
+                    <span className={s.matchResultChip}>
+                        {decided ? (
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                {match.win ? <path d="M5 12l5 5 9-10" /> : <><path d="M7 7l10 10" /><path d="M17 7L7 17" /></>}
+                            </svg>
+                        ) : null}
+                        <span className={resultClass}>{resultLabel}</span>
+                    </span>
+                    {roundBased ? (
+                        <span className={s.matchScore} aria-label={`${ownRounds} to ${enemyRounds}`}>
                             <b className={match.win ? s.winText : s.lossText}>{ownRounds}</b>
                             <i>:</i>
                             <b>{enemyRounds}</b>
                         </span>
-                    </div>
+                    ) : standing ? (
+                        <span className={s.matchScore} aria-label={`Placed ${placeLabel(standing).toLowerCase()} of ${standingOf}`} title={`${placeLabel(standing)} of ${standingOf} ${placement ? "players" : "teams"}`}>
+                            <b className={ffaWin ? s.winText : undefined}>{standing}</b>
+                            <i>/</i>
+                            <b>{standingOf}</b>
+                        </span>
+                    ) : (
+                        <span className={s.matchScoreStandin}>{match.localPlayer.roundsPlayed > 1 ? `${match.localPlayer.roundsPlayed} rounds` : "No score"}</span>
+                    )}
                     <span className={s.matchResultMeta}>
                         {queueName} · {fmtLength(match.gameLengthMillis)}
                     </span>
-                    <div className={s.matchDateRow}>
-                        <span className={s.matchDateChip}>{fmtDate(match.gameStartMillis)}</span>
-                        <span className={s.matchAgoChip}>{fmtAgo(match.gameStartMillis)}</span>
-                    </div>
                 </div>
 
                 <div className={s.matchMain}>
                     <div className={s.matchAgent}>
-                        {agentMeta?.icon ? (
-                            <Image src={agentMeta.icon} alt={agentName} width={56} height={56} unoptimized className={s.matchAgentIcon} />
-                        ) : (
-                            <div className={`${s.matchAgentIcon} ${s.matchAgentPlaceholder}`} />
-                        )}
+                        <span className={`${s.matchAgentPortrait} ${agentRoleTone(agentMeta?.role)}`}>
+                            {agentMeta?.icon ? (
+                                <Image src={agentMeta.icon} alt={agentName} width={56} height={56} unoptimized className={s.matchAgentIcon} />
+                            ) : (
+                                <span className={`${s.matchAgentIcon} ${s.matchAgentPlaceholder}`} aria-hidden="true">
+                                    <svg viewBox="0 0 24 24"><path d="M12 3l8 4.5-8 4.5-8-4.5z" /><path d="M4 12l8 4.5 8-4.5" /><path d="M4 16.5L12 21l8-4.5" /></svg>
+                                </span>
+                            )}
+                            {agentMeta?.roleIcon ? (
+                                <Image src={agentMeta.roleIcon} alt="" width={18} height={18} unoptimized className={s.matchAgentRole} />
+                            ) : null}
+                        </span>
                         <div className={s.matchAgentMeta}>
                             <div className={s.matchAgentName}>{agentName}</div>
-                            <div className={s.matchMapName}>{mapName}</div>
+                            {agentMeta?.role || draftMode ? (
+                                <span className={s.matchAgentKicker}>
+                                    {agentMeta?.role || "Ability draft"}
+                                </span>
+                            ) : null}
                             <div className={s.matchPartyInline} title={partyNames || "No queued teammates detected"}>
                                 <span className={s.matchPartyBadge}>{partyLabel}</span>
                                 {partyPreview.length > 0 && (
@@ -1768,78 +2250,113 @@ function MatchRow({
                         <div className={s.matchStat}>
                             <span className={s.matchStatKicker}>KDA</span>
                             <strong className={s.matchStatValue}>{kdaText}</strong>
-                            <span className={`${s.matchStatSub} ${kdColor(kda)}`}>{fmtRatio(kda)}</span>
+                            <span className={s.matchStatSub}>{fmtRatio(kda)} K/D</span>
+                        </div>
+                        {placement ? <>
+                        <div className={s.matchStat}>
+                            <span className={s.matchStatKicker}>KILLS/MIN</span>
+                            <strong className={s.matchStatValue}>{killsPerMinute ? killsPerMinute.toFixed(1) : "—"}</strong>
+                            <span className={s.matchStatSub}>per minute</span>
                         </div>
                         <div className={s.matchStat}>
+                            <span className={s.matchStatKicker}>{ffaWin ? "LEAD" : "TO 1ST"}</span>
+                            <strong className={`${s.matchStatValue} ${ffaWin ? s.winText : ""}`}>{killGap === null ? "—" : `${killGap > 0 ? "+" : killGap < 0 ? "−" : ""}${Math.abs(killGap)}`}</strong>
+                            <span className={s.matchStatSub}>{ffaWin ? "kills over 2nd" : "kills behind"}</span>
+                        </div>
+                        <div className={s.matchStat}>
+                            <span className={s.matchStatKicker}>SCORE</span>
+                            <strong className={s.matchStatValue}>{match.localPlayer.score.toLocaleString()}</strong>
+                            <span className={s.matchStatSub}>Riot DM score</span>
+                        </div>
+                        </> : <>
+                        <div className={s.matchStat}>
                             <span className={s.matchStatKicker}>HS%</span>
-                            <strong className={`${s.matchStatValue} ${hsColor(hsPct)}`}>{fmtPct(hsPct)}</strong>
+                            <strong className={s.matchStatValue}>{hasShotData ? fmtPct(hsPct) : "—"}</strong>
                             <span className={s.matchStatSub}>accuracy</span>
                         </div>
                         <div className={s.matchStat}>
                             <span className={s.matchStatKicker}>ADR</span>
-                            <strong className={`${s.matchStatValue} ${adrColor(adr)}`}>{adr}</strong>
+                            <strong className={s.matchStatValue}>{perRoundStats ? adr : "—"}</strong>
                             <span className={s.matchStatSub}>dmg/rd</span>
                         </div>
                         <div className={s.matchStat}>
                             <span className={s.matchStatKicker}>ACS</span>
-                            <strong className={`${s.matchStatValue} ${acsColor(acs)}`}>{acs}</strong>
+                            <strong className={`${s.matchStatValue} ${perRoundStats && acsColor(acs) === s.statElite ? s.statElite : ""}`}>{perRoundStats ? acs : "—"}</strong>
                             <span className={s.matchStatSub}>score/rd</span>
                         </div>
+                        </>}
                     </div>
                 </div>
 
-                <div className={s.matchVisual}>
-                    {mapMeta?.splash ? (
-                        <div className={s.matchMapCard} style={{ backgroundImage: `url(${mapMeta.splash})` }}>
-                            <div className={s.matchMapOverlay} />
-                            <div className={s.matchMapCaption}>
-                                <span>{mapName}</span>
-                                <small>{queueName}</small>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className={s.matchMapCardEmpty}>
-                            <span>{mapName}</span>
-                        </div>
-                    )}
-
-                    {matchTier > 0 ? (
-                        <div className={s.matchRankCell}>
-                            <div className={s.matchRankRow}>
-                                {matchRRIcon && (
-                                    <Image src={matchRRIcon} alt={matchRRLabel} width={24} height={24} unoptimized className={s.matchRankIcon} />
-                                )}
-                                <span className={s.matchRankName}>{matchRRLabel}</span>
-                            </div>
-                            <div className={`${s.matchRrBadge} ${rrEarned > 0 ? s.rrGain : rrEarned < 0 ? s.rrLoss : s.rrNeutral}`}>
-                                {rrSign}
-                                {rrEarned}
-                            </div>
-                            {(match.performanceBonus || match.afkPenalty) ? <div className={s.matchRrReceipt}>
-                                {match.performanceBonus ? <span data-tone="good">+{match.performanceBonus} performance</span> : null}
-                                {match.afkPenalty ? <span data-tone="danger">{match.afkPenalty > 0 ? "-" : ""}{Math.abs(match.afkPenalty)} AFK</span> : null}
-                            </div> : null}
-                        </div>
-                    ) : match.isRanked ? (
-                        <div className={s.matchTimeCell}>
-                            <span className={s.matchTime}>No RR change cached</span>
-                        </div>
-                    ) : null}
+                {/* Map tile also carries the time, rank and RR so the row has no empty end column. */}
+                <div
+                    className={s.matchMapTile}
+                    style={mapMeta?.splash ? { backgroundImage: `url(${mapMeta.splash})` } : undefined}
+                >
+                    <strong className={s.matchTileMap}>{mapName}</strong>
+                    <span className={s.matchTileSide}>
+                        <span className={s.matchTileTime}>{fmtClock(match.gameStartMillis)}</span>
+                        {matchTier > 0 ? (
+                            <>
+                                <span className={s.matchTileRank} title={matchRRLabel}>
+                                    {matchRRIcon && (
+                                        <Image src={matchRRIcon} alt="" width={22} height={22} unoptimized className={s.matchRankIcon} />
+                                    )}
+                                    <span className={s.matchTileRankName}>{matchRRLabel}</span>
+                                </span>
+                                <span className={s.matchTileRrRow}>
+                                    {match.performanceBonus ? <span className={s.matchTileBonus} data-tone="good">+{match.performanceBonus} perf</span> : null}
+                                    {match.afkPenalty ? <span className={s.matchTileBonus} data-tone="danger">{match.afkPenalty > 0 ? "-" : ""}{Math.abs(match.afkPenalty)} AFK</span> : null}
+                                    <span className={`${s.matchTileRr} ${rrEarned > 0 ? s.rrGain : rrEarned < 0 ? s.rrLoss : s.rrNeutral}`}>
+                                        {rrSign}
+                                        {rrEarned}
+                                        <em>RR</em>
+                                    </span>
+                                </span>
+                            </>
+                        ) : match.isRanked ? (
+                            <span className={s.matchTileRankName}>No RR cached</span>
+                        ) : null}
+                    </span>
+                    <span className={s.matchChevron} aria-hidden="true">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 6l6 6-6 6" />
+                        </svg>
+                    </span>
                 </div>
-
-                <span className={s.matchChevron} aria-hidden="true">
-                    {expanded ? "⌃" : loading ? "…" : "›"}
-                </span>
             </button>
 
             {expanded && createPortal(
                 <div className={s.matchModalBackdrop} role="presentation" onMouseDown={onToggle}>
                     <section
+                        ref={dialogRef}
                         className={`${s.matchModal} ${match.win ? s.matchModalWin : s.matchModalLoss}`}
                         role="dialog"
                         aria-modal="true"
                         aria-label={`${mapName} match details`}
+                        tabIndex={-1}
                         onMouseDown={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onToggle();
+                            }
+                            if (event.key !== "Tab") return;
+                            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+                                'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+                            )).filter((element) => element.getClientRects().length > 0);
+                            const first = controls[0];
+                            const last = controls[controls.length - 1];
+                            if (!first || !last) { event.preventDefault(); return; }
+                            if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
+                                event.preventDefault();
+                                last.focus();
+                            } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) {
+                                event.preventDefault();
+                                first.focus();
+                            }
+                        }}
                     >
                         <header
                             className={s.matchModalHeader}
@@ -1847,48 +2364,121 @@ function MatchRow({
                         >
                             <div className={s.matchModalHeaderShade} />
                             <div className={s.matchModalHeading}>
-                                <span className={`${s.matchModalResult} ${resultClass}`}>{match.win ? "Victory" : "Defeat"}</span>
-                                <h2>{mapName}</h2>
-                                <p>{queueName} · {fmtLength(match.gameLengthMillis)} · {fmtDate(match.gameStartMillis)}</p>
-                                {unusualCompletion ? <span className={s.matchCompletionBadge}>{completionState}</span> : null}
+                                <div className={s.matchModalTitle}>
+                                    <h2>{mapName}</h2>
+                                    <span className={s.matchResultTag} data-result={!roundBased ? "neutral" : match.win ? "win" : "loss"}>
+                                        {roundBased ? (
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                                {match.win ? <path d="M5 12l5 5 9-10" /> : <><path d="M7 7l10 10" /><path d="M17 7L7 17" /></>}
+                                            </svg>
+                                        ) : null}
+                                        {!roundBased ? "Completed" : match.win ? "Victory" : "Defeat"}
+                                    </span>
+                                </div>
+                                <div className={s.matchMetaTags}>
+                                    <span>
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M13 3L4 14h7l-1 7 9-11h-7z" /></svg>
+                                        {queueName}
+                                    </span>
+                                    <span>
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+                                        {fmtLength(match.gameLengthMillis)}
+                                    </span>
+                                    <span>
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg>
+                                        {fmtDate(match.gameStartMillis)}
+                                    </span>
+                                    {unusualCompletion ? <span className={s.matchMetaWarn}>{completionState}</span> : null}
+                                    {!unusualCompletion && detail?.matchInfo.earlyCompletion ? <span className={s.matchMetaWarn} title="Riot marked this match as ended early">Ended early</span> : null}
+                                    {detailedLocalPlayer?.partyRRPenalty ? <span className={s.matchMetaWarn} title="Riot applied a party-size RR penalty to your party in this match">Party RR penalty {detailedLocalPlayer.partyRRPenalty}</span> : null}
+                                </div>
                             </div>
-                            <div className={s.matchModalScore}>
-                                <strong className={match.win ? s.winText : s.lossText}>{ownRounds}</strong>
-                                <span>-</span>
-                                <strong>{enemyRounds}</strong>
-                            </div>
+                            {roundBased ? (
+                                <div className={s.matchScorePlates} aria-label={`Score ${ownRounds} to ${enemyRounds}`}>
+                                    <span data-team="ally"><strong>{ownRounds}</strong><small>Your team</small></span>
+                                    <i aria-hidden="true">:</i>
+                                    <span data-team="enemy"><strong>{enemyRounds}</strong><small>Enemy</small></span>
+                                </div>
+                            ) : null}
                             <button type="button" className={s.matchModalClose} onClick={onToggle} aria-label="Close match details">×</button>
                         </header>
                         <nav className={s.matchDetailTabs} aria-label="Match detail views">
                             <button
                                 type="button"
-                                className={activeMatchTab === "rounds" ? s.matchDetailTabActive : ""}
-                                onClick={() => void openAnalyticsTab("rounds")}
-                            >
-                                Round review
-                            </button>
-                            <button
-                                type="button"
                                 className={activeMatchTab === "scoreboard" ? s.matchDetailTabActive : ""}
+                                aria-current={activeMatchTab === "scoreboard" ? "page" : undefined}
                                 onClick={() => setActiveMatchTab("scoreboard")}
                             >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
                                 Scoreboard
                             </button>
                             <button
                                 type="button"
+                                className={activeMatchTab === "rounds" ? s.matchDetailTabActive : ""}
+                                aria-current={activeMatchTab === "rounds" ? "page" : undefined}
+                                onClick={() => void openAnalyticsTab("rounds")}
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>
+                                Round review
+                            </button>
+                            <button
+                                type="button"
                                 className={activeMatchTab === "map" ? s.matchDetailTabActive : ""}
+                                aria-current={activeMatchTab === "map" ? "page" : undefined}
                                 onClick={() => void openAnalyticsTab("map")}
                             >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z" /><path d="M9 4v14M15 6v14" /></svg>
                                 Map
                             </button>
+                            {activeMatchTab === "scoreboard" && canSplitSides ? (
+                                <div className={s.matchSideFilter} role="group" aria-label="Scoreboard side">
+                                    {(["all", "attack", "defense"] as const).map((option) => (
+                                        <button
+                                            type="button"
+                                            key={option}
+                                            aria-pressed={scoreSide === option}
+                                            onClick={() => setScoreSide(option)}
+                                        >
+                                            {option === "all" ? "All" : option === "attack" ? "Attack" : "Defense"}
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
+                            {activeMatchTab === "scoreboard" && detail?.players.some(player => player.competitiveTier <= 0) && (
+                                <button
+                                    type="button"
+                                    className={s.loadRanksButton}
+                                    data-loaded={!!rankDetails && !rankDetails.rankError}
+                                    onClick={() => void loadRanks()}
+                                    disabled={ranksLoading || (!!rankDetails && !rankDetails.rankError)}
+                                    title={rankDetails && !rankDetails.rankError ? "Missing match ranks supplemented with current ranks. A dash means no rank was returned." : "Look up current competitive ranks for players whose match rank is missing"}
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                                        <path d="m12 3 7 3v6c0 4-7 9-7 9s-7-5-7-9V6l7-3Z" />
+                                        <path d="m8.5 11.5 2.5 2.5 4.5-5" />
+                                    </svg>
+                                    <span aria-live="polite">{ranksLoading ? "Loading ranks…" : rankDetails && !rankDetails.rankError ? "Ranks loaded" : "Load ranks"}</span>
+                                </button>
+                            )}
                         </nav>
+                        {activeMatchTab === "scoreboard" && ranksError && (
+                            <p className={s.rankLookupStatus} role="status">
+                                {ranksError}
+                            </p>
+                        )}
                         <div className={s.matchModalBody}>
+                            {activeMatchTab === "scoreboard" && roundOutcomeList.length ? (
+                                <RoundHistory rounds={roundOutcomeList} ownRounds={ownRounds} enemyRounds={enemyRounds} />
+                            ) : null}
                             {loading ? (
                                 <div className={s.placeholder}>Loading scoreboard…</div>
                             ) : detail ? (
                                 activeMatchTab === "scoreboard" ? (
                                     <Scoreboard
-                                        detail={detail}
+                                        detail={rankDetails ?? detail}
+                                        breakdown={loadedAnalytics ?? detail}
+                                        side={canSplitSides ? scoreSide : "all"}
+                                        queueId={match.queueID}
                                         partyMembers={partyMembers}
                                         agents={agents}
                                         tierAssets={tierAssets}
@@ -1900,6 +2490,8 @@ function MatchRow({
                                         map={mapMeta}
                                         agents={agents}
                                         weapons={weapons}
+                                        initialRoundNum={reviewFight?.roundNum}
+                                        onInspectFight={(event) => { setReviewFight(event); setActiveMatchTab("map"); }}
                                     />
                                 ) : (
                                     <MatchMapAnalytics
@@ -1910,6 +2502,8 @@ function MatchRow({
                                         weapons={weapons}
                                         loading={analyticsLoading}
                                         error={analyticsError}
+                                        initialFight={reviewFight}
+                                        onBackToRound={reviewFight ? () => setActiveMatchTab("rounds") : undefined}
                                     />
                                 )
                             ) : (
@@ -1924,22 +2518,26 @@ function MatchRow({
     );
 }
 
-function RoundReview({
+export function RoundReview({
     detail,
     map,
     agents,
     weapons,
+    initialRoundNum,
+    onInspectFight,
 }: {
     detail: ProfileMatchDetails;
     map?: MapMeta;
     agents: Record<string, AgentMeta>;
     weapons: Weapon[];
+    initialRoundNum?: number;
+    onInspectFight?: (event: MatchKillEvent) => void;
 }) {
     const rounds = useMemo(() => detail.rounds || [], [detail.rounds]);
     const local = detail.players.find((player) => player.isLocal);
     const localSubject = local?.subject.toLowerCase() || "";
     const localTeam = local?.teamId.toLowerCase() || "";
-    const [selectedRoundNum, setSelectedRoundNum] = useState(rounds[0]?.roundNum ?? 0);
+    const [selectedRoundNum, setSelectedRoundNum] = useState(initialRoundNum ?? rounds[0]?.roundNum ?? 0);
     const weaponById = useMemo(() => new Map(weapons.map((weapon) => [weapon.uuid.toLowerCase(), weapon])), [weapons]);
     const selectedRound = rounds.find((round) => round.roundNum === selectedRoundNum) || rounds[0];
     const selectedStat = selectedRound?.playerStats?.find((stat) => stat.subject.toLowerCase() === localSubject);
@@ -1953,7 +2551,6 @@ function RoundReview({
     const weapon = selectedStat?.economy.weapon ? weaponById.get(selectedStat.economy.weapon.toLowerCase()) : undefined;
     const hasDetailedRounds = rounds.some((round) => (round.playerStats?.length || 0) > 0);
     const selectedEvents = [...localKills, ...localDeaths];
-    const selectedAltFireEvents = selectedEvents.filter((event) => event.secondaryFire);
     const canPlot = Boolean(map?.displayIcon && typeof map.xMultiplier === "number" && typeof map.yMultiplier === "number" && typeof map.xScalarToAdd === "number" && typeof map.yScalarToAdd === "number");
     const plot = (x: number, y: number) => ({
         left: Math.max(0, Math.min(1, y * map!.xMultiplier! + map!.xScalarToAdd!)) * 100,
@@ -2070,7 +2667,8 @@ function RoundReview({
         return notes.slice(0, 6);
     }, [roundFacts]);
     const reviewInsights = useMemo(() => {
-        const insights: Array<{ id: string; tone: "good" | "danger" | "neutral"; label: string; value: string; evidence: string; tip: string }> = [];
+        const insights: Array<{ id: string; tone: "good" | "danger" | "neutral"; label: string; value: string; evidence: string; tip: string; ratio?: number; ring: string }> = [];
+        const lostRounds = roundFacts.filter((fact) => fact.stat && !fact.won).length;
         const openingFacts = roundFacts.filter((fact) => fact.openingResult !== "none");
         const openingWon = openingFacts.filter((fact) => fact.openingResult === "won");
         const openingConverted = openingWon.filter((fact) => fact.won).length;
@@ -2081,6 +2679,8 @@ function RoundReview({
                 tone: duelRate >= 55 ? "good" : duelRate < 40 ? "danger" : "neutral",
                 label: "Opening duels",
                 value: `${openingWon.length}/${openingFacts.length} won`,
+                ratio: openingWon.length / openingFacts.length,
+                ring: `${duelRate}%`,
                 evidence: `${openingConverted}/${openingWon.length} opening advantages converted into round wins.`,
                 tip: duelRate >= 55 ? "Keep choosing first contact when the setup gives you support." : "Take first contact closer to a teammate or after utility creates the advantage.",
             });
@@ -2091,7 +2691,9 @@ function RoundReview({
                 id: "trade-spacing",
                 tone: tradeRate >= 55 ? "good" : tradeRate < 35 ? "danger" : "neutral",
                 label: "Trade spacing",
-                value: `${tradeRate}% traded`,
+                value: `${tradedDeaths} of ${allLocalDeaths.length} traded`,
+                ratio: tradedDeaths / allLocalDeaths.length,
+                ring: `${tradeRate}%`,
                 evidence: `${tradedDeaths}/${allLocalDeaths.length} deaths were answered by a teammate within five seconds.`,
                 tip: tradeRate >= 55 ? "Your spacing created reliable return kills; preserve it." : "Play within a teammate’s trade path instead of giving isolated fights.",
             });
@@ -2104,6 +2706,8 @@ function RoundReview({
                 tone: converted === multiKillRounds.length ? "good" : converted / multiKillRounds.length < 0.6 ? "danger" : "neutral",
                 label: "Multi-kill conversion",
                 value: `${converted}/${multiKillRounds.length} rounds`,
+                ratio: converted / multiKillRounds.length,
+                ring: `${converted}/${multiKillRounds.length}`,
                 evidence: `${multiKillRounds.length} rounds contained at least two of your kills.`,
                 tip: converted === multiKillRounds.length ? "Your high-impact rounds consistently converted." : "After a multi-kill, reset around the objective instead of offering another isolated duel.",
             });
@@ -2115,6 +2719,8 @@ function RoundReview({
                 tone: "danger",
                 label: "Low-damage losses",
                 value: `${lowDamageLosses.length} rounds`,
+                ratio: lostRounds ? lowDamageLosses.length / lostRounds : undefined,
+                ring: lostRounds ? `${lowDamageLosses.length}/${lostRounds}` : String(lowDamageLosses.length),
                 evidence: `Below 100 recorded damage in rounds ${lowDamageLosses.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
                 tip: "Use safer utility-assisted contact or reposition early enough to contribute before the round closes.",
             });
@@ -2126,6 +2732,8 @@ function RoundReview({
                 tone: "neutral",
                 label: "Economy pressure",
                 value: `${weakBuyLosses.length} disadvantaged losses`,
+                ratio: lostRounds ? weakBuyLosses.length / lostRounds : undefined,
+                ring: String(weakBuyLosses.length),
                 evidence: `Your team entered those rounds at least 3,000 loadout value behind.`,
                 tip: "Treat these as lower-probability rounds: coordinate the buy, preserve weapons, and avoid judging aim from the result alone.",
             });
@@ -2138,6 +2746,8 @@ function RoundReview({
                 tone: converted / objectiveRounds.length >= 0.6 ? "good" : "neutral",
                 label: "Objective work",
                 value: `${converted}/${objectiveRounds.length} converted`,
+                ratio: converted / objectiveRounds.length,
+                ring: `${converted}/${objectiveRounds.length}`,
                 evidence: objectiveRounds.map((fact) => `R${fact.round.roundNum + 1} ${fact.localObjective}`).join(" · "),
                 tip: converted / objectiveRounds.length >= 0.6 ? "Your plant/defuse involvement produced round value." : "After the objective action, prioritize the safest post-plant or retake position.",
             });
@@ -2148,8 +2758,27 @@ function RoundReview({
                 tone: "neutral",
                 label: "Utility record",
                 value: totalAbilityCasts ? `${totalAbilityCasts} casts` : `${totalAbilityEffects} effects`,
+                ring: String(totalAbilityCasts || totalAbilityEffects),
                 evidence: abilityUsage.length ? abilityUsage.map((ability) => `${ability.name} ${ability.count}`).join(" · ") : `${totalAbilityEffects} round effects preserved.`,
                 tip: "Use this as a factual usage count; the payload does not prove whether each cast had good timing.",
+            });
+        }
+        const behavior = local?.behavior;
+        if (behavior && (behavior.friendlyFireOutgoing > 0 || behavior.afkRounds > 0 || behavior.stayedInSpawnRounds > 0)) {
+            const parts = [
+                behavior.friendlyFireOutgoing ? `${behavior.friendlyFireOutgoing} friendly fire dealt` : "",
+                behavior.friendlyFireIncoming ? `${behavior.friendlyFireIncoming} taken` : "",
+                behavior.afkRounds ? `${behavior.afkRounds} AFK round${behavior.afkRounds === 1 ? "" : "s"}` : "",
+                behavior.stayedInSpawnRounds ? `${behavior.stayedInSpawnRounds} round${behavior.stayedInSpawnRounds === 1 ? "" : "s"} in spawn` : "",
+            ].filter(Boolean);
+            insights.push({
+                id: "riot-behavior",
+                tone: behavior.afkRounds || behavior.friendlyFireOutgoing >= 100 ? "danger" : "neutral",
+                label: "Riot behavior",
+                value: behavior.friendlyFireOutgoing ? `${behavior.friendlyFireOutgoing} team damage` : behavior.afkRounds ? `${behavior.afkRounds} AFK` : `${behavior.stayedInSpawnRounds} in spawn`,
+                evidence: parts.join(" · "),
+                tip: behavior.friendlyFireOutgoing ? "Watch utility and spray lines around teammates; Riot tracks team damage." : "Riot reported idle or spawn time this match; check for connection or input issues.",
+                ring: behavior.friendlyFireOutgoing ? "FF" : "!",
             });
         }
         const flaggedFacts = roundFacts.filter((fact) => fact.stat && (fact.stat.wasAfk || fact.stat.wasPenalized || fact.stat.stayedInSpawn));
@@ -2159,16 +2788,89 @@ function RoundReview({
                 tone: "danger",
                 label: "Riot status flags",
                 value: `${flaggedFacts.length} rounds`,
+                ratio: flaggedFacts.length / roundFacts.length,
+                ring: String(flaggedFacts.length),
                 evidence: `AFK, penalty, or spawn state was reported in rounds ${flaggedFacts.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
                 tip: "This is Riot-reported state, not an intent judgment; review connection or interruption issues if it was unexpected.",
             });
         }
         return insights;
-    }, [abilityUsage, allLocalDeaths.length, roundFacts, totalAbilityCasts, totalAbilityEffects, tradedDeaths]);
+    }, [abilityUsage, allLocalDeaths.length, local?.behavior, roundFacts, totalAbilityCasts, totalAbilityEffects, tradedDeaths]);
+    const teamOf = (subject?: string) => playerBySubject.get(subject?.toLowerCase() || "")?.teamId.toLowerCase() || "";
+    const roundFeed = useMemo(() => {
+        if (!selectedRound) return [];
+        const sideOf = (subject?: string) => playerBySubject.get(subject?.toLowerCase() || "")?.teamId.toLowerCase() || "";
+        const events = [...selectedKills].sort((a, b) => a.roundTime - b.roundTime || a.gameTime - b.gameTime);
+        const enemyKills = new Map<string, number>();
+        const feed: Array<{
+            id: string;
+            time: number;
+            kind: "kill" | "plant" | "defuse";
+            actor: string;
+            target?: string;
+            text?: string;
+            tag?: "Opening" | "Trade" | "Ace" | "Alt fire";
+            means?: string;
+            ally: boolean;
+            you: boolean;
+        }> = events.map((event, index) => {
+            const killer = event.killer.toLowerCase();
+            const victim = event.victim.toLowerCase();
+            if (sideOf(killer) !== sideOf(victim)) enemyKills.set(killer, (enemyKills.get(killer) || 0) + 1);
+            const damageItem = event.damageItem?.trim().toLowerCase() || "";
+            const killerAgent = agents[playerBySubject.get(killer)?.characterId.toLowerCase() || ""];
+            const abilitySlot = riotAbilitySlotKey(event.damageType?.toLowerCase() || "", damageItem);
+            const ability = abilitySlot ? killerAgent?.abilities?.[abilitySlot] : undefined;
+            const usedWeapon = damageItem ? weaponById.get(damageItem) : undefined;
+            const traded = events.slice(0, index).some((prior) => (
+                event.roundTime >= prior.roundTime
+                && event.roundTime - prior.roundTime <= 5_000
+                && victim === prior.killer.toLowerCase()
+                && sideOf(killer) === sideOf(prior.victim)
+            ));
+            return {
+                id: fightEventKey(event),
+                time: event.roundTime || event.gameTime,
+                kind: "kill",
+                actor: killer,
+                target: victim,
+                tag: enemyKills.get(killer) === 5 ? "Ace" : index === 0 ? "Opening" : traded ? "Trade" : event.secondaryFire ? "Alt fire" : undefined,
+                means: ability?.name || usedWeapon?.displayName,
+                ally: sideOf(killer) === localTeam,
+                you: killer === localSubject || victim === localSubject,
+            };
+        });
+        if (selectedRound.bombPlanter) {
+            const planter = selectedRound.bombPlanter.toLowerCase();
+            feed.push({ id: "plant", time: selectedRound.plantRoundTime || 0, kind: "plant", actor: planter, text: `planted the spike${selectedRound.plantSite ? ` on ${selectedRound.plantSite}` : ""}`, ally: sideOf(planter) === localTeam, you: planter === localSubject });
+        }
+        if (selectedRound.bombDefuser) {
+            const defuser = selectedRound.bombDefuser.toLowerCase();
+            feed.push({ id: "defuse", time: selectedRound.defuseRoundTime || 0, kind: "defuse", actor: defuser, text: "defused the spike", ally: sideOf(defuser) === localTeam, you: defuser === localSubject });
+        }
+        // Stable sort keeps a plant after kills recorded on the same second.
+        return feed.sort((a, b) => a.time - b.time);
+    }, [agents, localSubject, localTeam, playerBySubject, selectedKills, selectedRound, weaponById]);
+    const ace = roundFeed.find((item) => item.tag === "Ace");
+    const ceremony = selectedRound ? ROUND_CEREMONIES[selectedRound.roundCeremony || ""] : undefined;
+    // Riot credits a clutch to the winning team; the clutcher is its last survivor.
+    const clutcher = (() => {
+        if (ceremony !== "Clutch" || !selectedRound?.winningTeam) return undefined;
+        const winners = detail.players.filter((player) => player.teamId.toLowerCase() === selectedRound.winningTeam.toLowerCase());
+        const survivors = winners.filter((player) => !selectedKills.some((event) => event.victim.toLowerCase() === player.subject.toLowerCase()));
+        return survivors.length === 1 ? survivors[0].subject.toLowerCase() : undefined;
+    })();
+    const playerName = (subject?: string) => !subject ? "Unknown player" : subject === localSubject ? "You" : playerBySubject.get(subject)?.gameName || "Player";
+    const agentIcon = (subject?: string) => agents[playerBySubject.get(subject || "")?.characterId.toLowerCase() || ""]?.icon;
     const selectedSignals = selectedFact ? [
         selectedFact.openingResult === "won" ? { tone: "good", label: "Opening kill" } : selectedFact.openingResult === "lost" ? { tone: "danger", label: "First death" } : null,
         selectedFact.kills.length >= 2 ? { tone: "good", label: `${selectedFact.kills.length}K multi-kill` } : null,
         selectedFact.traded ? { tone: "good", label: "Death traded" } : selectedFact.deaths.length ? { tone: "danger", label: "Untraded death" } : null,
+        ace ? { tone: "objective", label: ace.actor === localSubject ? "Your ace" : `${teamOf(ace.actor) === localTeam ? "Ace" : "Enemy ace"} · ${playerName(ace.actor)}` } : null,
+        ceremony && !(ceremony === "Ace" && ace) ? {
+            tone: roundWon ? "good" : "danger",
+            label: clutcher === localSubject ? "Your clutch" : `${roundWon ? "" : "Enemy "}${roundWon ? ceremony : ceremony.toLowerCase()}${clutcher ? ` · ${playerName(clutcher)}` : ""}`,
+        } : null,
         selectedFact.localObjective ? { tone: "objective", label: selectedFact.localObjective } : null,
         selectedFact.enemyLoadout - selectedFact.allyLoadout >= 3_000 ? { tone: "neutral", label: "Lower team buy" } : selectedFact.allyLoadout - selectedFact.enemyLoadout >= 3_000 ? { tone: "good", label: "Stronger team buy" } : null,
     ].filter((signal): signal is { tone: string; label: string } => Boolean(signal)) : [];
@@ -2177,170 +2879,182 @@ function RoundReview({
         if (selectedFact.openingResult === "won" && !selectedFact.won) return "You created the opening advantage, but the team did not convert it. After first blood, reduce unnecessary re-peeks and play the objective edge.";
         if (selectedFact.openingResult === "lost" && !selectedFact.traded) return "You were first death and the kill was not traded within five seconds. Take the same contact only with closer trade support or earlier utility.";
         if (selectedFact.kills.length >= 2 && !selectedFact.won) return "Your multi-kill did not convert. The next decision after gaining numbers mattered more than finding another duel.";
-        if (!selectedFact.won && selectedFact.stat && selectedFact.damage < 100) return "This was a low-damage loss. Look for earlier safe contribution through utility, crossfire positioning, or a supported first fight.";
+        if (!selectedFact.won && selectedFact.stat && selectedFact.damage < 100) return "Low-damage loss. Look for earlier, safer contribution — utility, a crossfire, or a supported first fight.";
         if (selectedFact.won && selectedFact.enemyLoadout - selectedFact.allyLoadout >= 3_000) return "Your team won against a stronger enemy loadout—one of the match’s clearest high-value rounds.";
         if (selectedFact.won && selectedFact.deaths.length === 0) return "You survived a converted round. Preserve the weapon and repeat the positioning that kept your impact available late.";
-        return `${selectedFact.damage} damage, ${selectedFact.kills.length} kills, ${selectedFact.assists.length} assists, and ${selectedFact.deaths.length ? "a death" : "survival"} were recorded.`;
+        return `${selectedFact.stat ? `${selectedFact.damage} damage` : "Damage unavailable"}, ${selectedFact.kills.length} kills, ${selectedFact.assists.length} assists, and ${selectedFact.deaths.length ? "a death" : "survival"} were recorded.`;
     })();
-    const objectiveLines = [
-        selectedRound?.bombPlanter ? `${selectedRound.bombPlanter.toLowerCase() === localSubject ? "You planted" : "Spike planted"}${selectedRound.plantSite ? ` at ${selectedRound.plantSite}` : ""}${selectedRound.plantRoundTime ? ` · ${fmtLength(selectedRound.plantRoundTime)}` : ""}` : "",
-        selectedRound?.bombDefuser ? `${selectedRound.bombDefuser.toLowerCase() === localSubject ? "You defused" : "Spike defused"}${selectedRound.defuseRoundTime ? ` · ${fmtLength(selectedRound.defuseRoundTime)}` : ""}` : "",
-    ].filter(Boolean);
-    const roundTimeline = useMemo(() => {
-        if (!selectedRound) return [];
-        const timeline: Array<{
-            id: string;
-            time: number;
-            order: number;
-            kind: "economy" | "kill" | "plant" | "defuse" | "result";
-            label: string;
-            detail: string;
-            icon?: string;
-            local?: boolean;
-        }> = [];
-        const nameOf = (subject?: string) => {
-            if (!subject) return "Unknown player";
-            if (subject.toLowerCase() === localSubject) return "You";
-            const player = playerBySubject.get(subject.toLowerCase());
-            return player?.gameName || "Player";
-        };
-        const playerTeam = (subject?: string) => playerBySubject.get(subject?.toLowerCase() || "")?.teamId.toLowerCase() || "";
-        const stats = selectedRound.playerStats || [];
-        const allyValue = stats.filter((stat) => playerTeam(stat.subject) === localTeam).reduce((sum, stat) => sum + (stat.economy.loadoutValue || 0), 0);
-        const enemyValue = stats.filter((stat) => playerTeam(stat.subject) && playerTeam(stat.subject) !== localTeam).reduce((sum, stat) => sum + (stat.economy.loadoutValue || 0), 0);
-        if (stats.length) timeline.push({ id: "buy", time: 0, order: 0, kind: "economy", label: "Round loadouts", detail: `Your team ${allyValue.toLocaleString()} · Enemy ${enemyValue.toLocaleString()}` });
-
-        const events = [...selectedKills].sort((a, b) => a.roundTime - b.roundTime || a.gameTime - b.gameTime);
-        events.forEach((event, index) => {
-            const damageItem = event.damageItem?.trim().toLowerCase() || "";
-            const killer = playerBySubject.get(event.killer.toLowerCase());
-            const killerAgent = agents[killer?.characterId.toLowerCase() || ""];
-            const abilitySlot = riotAbilitySlotKey(event.damageType?.toLowerCase() || "", damageItem);
-            const ability = abilitySlot ? killerAgent?.abilities?.[abilitySlot] : undefined;
-            const usedWeapon = damageItem ? weaponById.get(damageItem) : undefined;
-            const prior = events.slice(0, index).reverse().find((candidate) => (
-                event.roundTime >= candidate.roundTime
-                && event.roundTime - candidate.roundTime <= 5_000
-                && event.victim.toLowerCase() === candidate.killer.toLowerCase()
-                && playerTeam(event.killer) === playerTeam(candidate.victim)
-            ));
-            const isOpening = index === 0;
-            const isTrade = Boolean(prior);
-            timeline.push({
-                id: fightEventKey(event),
-                time: event.roundTime || event.gameTime,
-                order: 2 + index,
-                kind: "kill",
-                label: isOpening ? "Opening duel" : isTrade ? "Trade" : "Elimination",
-                detail: `${nameOf(event.killer)} eliminated ${nameOf(event.victim)}${ability?.name ? ` · ${ability.name}` : usedWeapon?.displayName ? ` · ${usedWeapon.displayName}` : ""}`,
-                icon: ability?.icon || usedWeapon?.displayIcon,
-                local: event.killer.toLowerCase() === localSubject || event.victim.toLowerCase() === localSubject,
-            });
-        });
-        if (selectedRound.bombPlanter) timeline.push({ id: "plant", time: selectedRound.plantRoundTime || 0, order: 90, kind: "plant", label: `Spike planted${selectedRound.plantSite ? ` · ${selectedRound.plantSite}` : ""}`, detail: nameOf(selectedRound.bombPlanter) });
-        if (selectedRound.bombDefuser) timeline.push({ id: "defuse", time: selectedRound.defuseRoundTime || 0, order: 95, kind: "defuse", label: "Spike defused", detail: nameOf(selectedRound.bombDefuser) });
-        timeline.push({ id: "result", time: Math.max(...timeline.map((item) => item.time), 0) + 1, order: 100, kind: "result", label: roundWon ? "Round won" : "Round lost", detail: selectedRound.roundResult || selectedRound.roundCeremony || "Round completed", local: true });
-        return timeline.sort((a, b) => a.time - b.time || a.order - b.order);
-    }, [agents, localSubject, localTeam, playerBySubject, roundWon, selectedKills, selectedRound, weaponById]);
 
     if (!rounds.length) return <div className={s.mapAnalyticsEmpty}><strong>Round evidence is not cached yet.</strong><span>Open this view while connected to refresh the match details.</span></div>;
 
-    return <section className={s.roundReview}>
-        <header className={s.roundReviewHeader}>
-            <div><span>Round evidence</span><strong>Read the match one decision at a time</strong></div>
-            <small>{hasDetailedRounds ? "Riot match receipt" : "Objective timeline available · detailed buys require a refresh"}</small>
-        </header>
-        <div className={s.roundFilmstrip} role="list" aria-label="Round momentum and score">
-            {roundFacts.map((fact) => {
-                const phaseStart = fact.round.roundNum === 12 ? "half" : fact.round.roundNum === 24 ? "overtime" : undefined;
-                return <button key={fact.round.roundNum} type="button" role="listitem" data-result={fact.won ? "win" : "loss"} data-active={fact.round.roundNum === selectedRound?.roundNum} data-phase-start={phaseStart} onClick={() => setSelectedRoundNum(fact.round.roundNum)} title={`Round ${fact.round.roundNum + 1}: ${fact.won ? "won" : "lost"}, score ${fact.yourScore}-${fact.enemyScore}`}>
-                    {phaseStart ? <em>{phaseStart === "half" ? "2H" : "OT"}</em> : null}
-                    <small>R{fact.round.roundNum + 1}</small>
-                    <strong>{fact.yourScore}<i>:</i>{fact.enemyScore}</strong>
-                    <span>{fact.kills.length ? `${fact.kills.length}K` : fact.deaths.length ? "D" : fact.damage ? `${fact.damage} dmg` : "—"}</span>
-                    <b aria-label="Round signals">{fact.openingResult === "won" ? "+1" : fact.openingResult === "lost" ? "−1" : ""}{fact.localObjective ? ` · ${fact.localObjective.startsWith("Plant") ? "P" : "D"}` : ""}</b>
-                </button>;
-            })}
+    const round = selectedRound!;
+    const roundIndex = rounds.findIndex((entry) => entry.roundNum === round.roundNum);
+    const stepRound = (delta: number) => {
+        const next = rounds[roundIndex + delta];
+        if (next) setSelectedRoundNum(next.roundNum);
+    };
+    const outcome = (round.roundResult || round.roundCeremony || "").replace(/bomb/gi, "Spike");
+    const outcomeTime = round.bombDefuser && round.defuseRoundTime ? ` at ${fmtLength(round.defuseRoundTime)}` : "";
+    const allyLoadout = selectedFact?.allyLoadout || 0;
+    const enemyLoadout = selectedFact?.enemyLoadout || 0;
+    const loadoutScale = Math.max(allyLoadout, enemyLoadout, 1) / 0.92;
+    const loadoutDiff = allyLoadout - enemyLoadout;
+    const spikeMarker = (kind: "plant" | "defuse", location?: { x: number; y: number }, time?: number) => {
+        if (!canPlot || !location || (!location.x && !location.y)) return null;
+        const p = plot(location.x, location.y);
+        return <i className={s.rvSpike} data-event={kind} title={`Spike ${kind === "plant" ? "planted" : "defused"}${time ? ` at ${fmtLength(time)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>{kind === "plant" ? "P" : "D"}</i>;
+    };
+    const calloutAt = (x: number, y: number) => {
+        let nearest: MapMeta["callouts"][number] | undefined;
+        let best = Infinity;
+        for (const callout of map?.callouts || []) {
+            const distance = (callout.x - x) ** 2 + (callout.y - y) ** 2;
+            if (distance < best) { best = distance; nearest = callout; }
+        }
+        return nearest ? mapCalloutLabel(nearest) : "";
+    };
+    const placesOf = (events: MatchKillEvent[]) => [...new Set(events.map((event) => calloutAt(event.victimX, event.victimY)).filter(Boolean))].join(", ");
+    const killPlaces = placesOf(localKills);
+    const deathPlace = placesOf(localDeaths);
+    const plantPlace = round.plantLocation && (round.plantLocation.x || round.plantLocation.y) ? calloutAt(round.plantLocation.x, round.plantLocation.y) : "";
+    const avatar = (subject: string, ally: boolean) => {
+        const icon = agentIcon(subject);
+        return <span className={s.rvAvatar} data-side={ally ? "ally" : "enemy"} data-you={subject === localSubject || undefined}>{icon ? <Image src={icon} alt="" width={24} height={24} unoptimized /> : null}</span>;
+    };
+
+    return <section className={s.rv}>
+        <div className={s.rvPicker}>
+            <div className={s.rvRounds} role="group" aria-label="Rounds">
+                {roundFacts.map((fact) => {
+                    const phaseStart = fact.round.roundNum === 12 ? "half" : fact.round.roundNum === 24 ? "overtime" : undefined;
+                    const note = fact.kills.length
+                        ? `${fact.kills.length} kill${fact.kills.length === 1 ? "" : "s"}`
+                        : fact.deaths.length ? "Died" : fact.stat ? "Survived" : "";
+                    const first = fact.openingResult === "won" ? " · first blood" : fact.openingResult === "lost" ? " · first" : "";
+                    const factCeremony = ROUND_CEREMONIES[fact.round.roundCeremony || ""];
+                    return <button key={fact.round.roundNum} type="button" aria-pressed={fact.round.roundNum === round.roundNum} data-result={fact.won ? "win" : "loss"} data-active={fact.round.roundNum === round.roundNum || undefined} data-phase-start={phaseStart} onClick={() => setSelectedRoundNum(fact.round.roundNum)} title={`Round ${fact.round.roundNum + 1}: ${fact.won ? "won" : "lost"}, score ${fact.yourScore}–${fact.enemyScore}`}>
+                        <b>R{fact.round.roundNum + 1}</b>
+                        <span>{fact.yourScore}–{fact.enemyScore}</span>
+                        <small>{factCeremony ? <em data-won={fact.won || undefined}>{factCeremony}</em> : null}{factCeremony && (note || first) ? " · " : ""}{note}{factCeremony ? "" : first}</small>
+                    </button>;
+                })}
+            </div>
+            <div className={s.rvStep}>
+                <span>Round {roundIndex + 1} of {rounds.length}</span>
+                <button type="button" aria-label="Previous round" disabled={roundIndex <= 0} onClick={() => stepRound(-1)}>‹</button>
+                <button type="button" aria-label="Next round" disabled={roundIndex >= rounds.length - 1} onClick={() => stepRound(1)}>›</button>
+            </div>
         </div>
-        <div className={s.roundEvidenceGrid}>
-            <div className={s.roundMapStage}>
-                <header><span>Round {selectedRound!.roundNum + 1}</span><strong>{selectedRound!.plantSite ? `${selectedRound!.plantSite} site` : selectedRound!.roundResult || "Round positions"}</strong></header>
-                <div className={s.roundMapCanvas}>
-                    {map?.displayIcon ? <Image src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="680px" unoptimized /> : null}
+        {!hasDetailedRounds ? <p className={s.rvNote}>Objective timeline only — buys and damage need a refresh while connected.</p> : null}
+
+        <div className={s.rvBody}>
+            <figure className={s.rvMap}>
+                <div className={s.rvMapCanvas} data-result={roundWon ? "win" : "loss"}>
+                    {map?.displayIcon ? <Image src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="320px" unoptimized /> : null}
+                    {round.plantSite ? <b className={s.rvMapSite} aria-hidden="true">{round.plantSite}</b> : null}
+                    <span className={s.rvMapLabel}><strong>{map?.name || "Map"}</strong>{round.plantSite ? <small>{round.plantSite} site</small> : null}</span>
+                    {canPlot && map!.callouts.map((callout, index) => {
+                        const { left, top } = mapCalloutPlotPosition(map!, callout);
+                        return <span key={`${callout.superRegion}-${callout.name}-${index}`} className={s.rvCallout} style={{ left: `${left * 100}%`, top: `${top * 100}%` }} aria-hidden="true">{mapCalloutLabel(callout)}</span>;
+                    })}
                     {canPlot && selectedEvents.map((event) => {
                         const position = plot(event.victimX, event.victimY);
                         const isKill = event.killer.toLowerCase() === localSubject;
-                        return <span key={fightEventKey(event)} className={isKill ? s.roundMapKill : s.roundMapDeath} style={{ left: `${position.left}%`, top: `${position.top}%` }} title={isKill ? "Your kill" : "Your death"}>{isKill ? "+" : "×"}</span>;
+                        return onInspectFight ? <button key={fightEventKey(event)} type="button" className={s.rvMarker} data-kind={isKill ? "kill" : "death"} style={{ left: `${position.left}%`, top: `${position.top}%` }} onClick={() => onInspectFight(event)} aria-label={`Inspect your ${isKill ? "kill" : "death"} at ${fmtLength(event.roundTime)} on the map`}>{isKill ? "+" : "×"}</button> : <span key={fightEventKey(event)} className={s.rvMarker} data-kind={isKill ? "kill" : "death"} style={{ left: `${position.left}%`, top: `${position.top}%` }} title={isKill ? "Your kill" : "Your death"}>{isKill ? "+" : "×"}</span>;
                     })}
-                    {canPlot && selectedRound!.plantLocation && (selectedRound!.plantLocation.x || selectedRound!.plantLocation.y) ? (() => { const p = plot(selectedRound!.plantLocation!.x, selectedRound!.plantLocation!.y); return <i className={s.roundSpikeMarker} data-event="plant" title={`Spike planted${selectedRound!.plantRoundTime ? ` at ${fmtLength(selectedRound!.plantRoundTime)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>P</i>; })() : null}
-                    {canPlot && selectedRound!.defuseLocation && (selectedRound!.defuseLocation.x || selectedRound!.defuseLocation.y) ? (() => { const p = plot(selectedRound!.defuseLocation!.x, selectedRound!.defuseLocation!.y); return <i className={s.roundSpikeMarker} data-event="defuse" title={`Spike defused${selectedRound!.defuseRoundTime ? ` at ${fmtLength(selectedRound!.defuseRoundTime)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>D</i>; })() : null}
+                    {spikeMarker("plant", round.plantLocation, round.plantRoundTime)}
+                    {spikeMarker("defuse", round.defuseLocation, round.defuseRoundTime)}
                 </div>
-                <footer>{selectedEvents.length ? `${selectedEvents.length} fight${selectedEvents.length === 1 ? "" : "s"} involving you` : "No kill or death for you this round"}<span>{selectedRound!.bombPlanter ? "P plant" : ""}{selectedRound!.bombPlanter && selectedRound!.bombDefuser ? " · " : ""}{selectedRound!.bombDefuser ? "D defuse" : ""}</span></footer>
+                <figcaption>
+                    {localKills.length ? <span><i data-kind="kill" />Your kill{localKills.length === 1 ? "" : "s"}{killPlaces ? <b>{killPlaces}</b> : null}</span> : null}
+                    {localDeaths.length ? <span><i data-kind="death" />Your death{deathPlace ? <b>{deathPlace}</b> : null}</span> : null}
+                    {round.bombPlanter ? <span><i data-kind="plant" />Plant{plantPlace ? <b>{plantPlace}</b> : null}</span> : null}
+                    {round.bombDefuser ? <span><i data-kind="defuse" />Defuse</span> : null}
+                    {!selectedEvents.length && !round.bombPlanter ? <span>No fights involving you</span> : null}
+                </figcaption>
+            </figure>
+
+            <div className={s.rvStory}>
+                <header className={s.rvTitle}>
+                    <span aria-hidden="true">{String(round.roundNum + 1).padStart(2, "0")}</span>
+                    <div>
+                        <p><strong>{roundWon ? "Round won" : "Round lost"}</strong>{outcome ? <small>{outcome}{outcomeTime}</small> : null}</p>
+                        {selectedSignals.length ? <div className={s.rvChips}>{selectedSignals.map((signal) => <span key={signal.label} data-tone={signal.tone}><i />{signal.label}</span>)}</div> : null}
+                    </div>
+                </header>
+                {roundFeed.length ? <ol className={s.rvFeed} aria-label={`Round ${round.roundNum + 1} events`}>
+                    {roundFeed.map((item) => <li key={item.id} data-kind={item.kind} data-side={item.ally ? "ally" : "enemy"} data-tag={item.tag} data-you={item.you || undefined}>
+                        <time>{item.time ? fmtLength(item.time) : "0:00"}</time>
+                        <i aria-hidden="true" />
+                        <span className={s.rvWho}>
+                            {avatar(item.actor, item.ally)}
+                            <strong>{playerName(item.actor)}</strong>
+                            {item.target ? <>
+                                <em aria-label="eliminated">→</em>
+                                <span className={s.rvVictim} data-you={item.target === localSubject || undefined}>{avatar(item.target, !item.ally)}{playerName(item.target)}</span>
+                            </> : <span className={s.rvVictim}>{item.text}</span>}
+                        </span>
+                        <span className={s.rvTag}>{item.tag ? <em>{item.tag}</em> : null}{item.kind === "kill" ? item.means : "Spike"}{item.kind === "kill" && onInspectFight ? <button type="button" className={s.rvInspect} aria-label={`Inspect ${playerName(item.actor)} eliminating ${playerName(item.target)} at ${fmtLength(item.time)} on the map`} onClick={() => { const event = selectedKills.find(event => fightEventKey(event) === item.id); if (event) onInspectFight(event); }}>Map ↗</button> : null}</span>
+                    </li>)}
+                </ol> : <p className={s.rvNote}>No kills or objective actions were recorded for this round.</p>}
             </div>
-            <aside className={s.roundReceipt}>
-                <div className={s.roundReceiptResult} data-result={roundWon ? "win" : "loss"}><span>{roundWon ? "Round won" : "Round lost"}</span><strong>{selectedRound!.roundResult || selectedRound!.roundCeremony || "Elimination"}</strong></div>
-                {selectedSignals.length ? <div className={s.roundSignals}>{selectedSignals.map((signal) => <span key={signal.label} data-tone={signal.tone}>{signal.label}</span>)}</div> : null}
-                <div className={s.roundReceiptPlayer}>
-                    {local && agents[local.characterId.toLowerCase()]?.icon ? <Image src={agents[local.characterId.toLowerCase()].icon} alt="" width={44} height={44} unoptimized /> : null}
-                    <div><span>Your impact</span><strong>{localKills.length}K · {localDeaths.length}D · {localAssists.length}A</strong></div>
-                    <b>{damageDone}<small> dmg</small></b>
-                </div>
-                <dl className={s.roundReceiptStats}>
-                    <div><dt>Loadout</dt><dd>{selectedStat?.economy.loadoutValue?.toLocaleString() || "—"}</dd></div>
-                    <div><dt>Spent</dt><dd>{selectedStat?.economy.spent?.toLocaleString() || "—"}</dd></div>
-                    <div><dt>Credits left</dt><dd>{selectedStat?.economy.remaining?.toLocaleString() || "—"}</dd></div>
-                    <div><dt>Headshots</dt><dd>{headshots || "—"}</dd></div>
-                    <div><dt>Team loadout</dt><dd>{selectedFact?.allyLoadout ? selectedFact.allyLoadout.toLocaleString() : "—"}</dd></div>
-                    <div><dt>Enemy loadout</dt><dd>{selectedFact?.enemyLoadout ? selectedFact.enemyLoadout.toLocaleString() : "—"}</dd></div>
-                </dl>
-                <div className={s.roundLoadout}>
-                    <span>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={112} height={34} unoptimized /> : null}</span>
-                    <p><small>Primary</small><strong>{weapon?.displayName || (selectedStat?.economy.weapon ? "Weapon recorded" : "No weapon recorded")}</strong></p>
-                    <em>{selectedStat?.economy.armor ? "Armor equipped" : "No armor"}</em>
-                </div>
-                <div className={s.roundObjectiveLine}>
-                    <span>Objective timeline</span>
-                    <strong>{objectiveLines.length ? objectiveLines.map((line) => <small key={line}>{line}</small>) : "No objective action recorded"}</strong>
-                    {selectedAltFireEvents.length ? <em>{selectedAltFireEvents.length} fight{selectedAltFireEvents.length === 1 ? "" : "s"} recorded with secondary fire.</em> : null}
-                </div>
-                <div className={s.roundRead} data-tone={roundWon ? "good" : "danger"}>
-                    <span>Round read</span>
+
+            <aside className={s.rvPanel} data-result={roundWon ? "win" : "loss"}>
+                <section>
+                    <h4>Your round</h4>
+                    <dl className={s.rvKda}>
+                        <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
+                        <div data-bad={localDeaths.length > 0 || undefined}><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
+                        <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
+                        <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div>
+                    </dl>
+                </section>
+                {allyLoadout || enemyLoadout || selectedStat ? <section className={s.rvEconomy}>
+                    <h4>Economy{allyLoadout && enemyLoadout && loadoutDiff ? <small data-tone={loadoutDiff > 0 ? "good" : "danger"}>{loadoutDiff > 0 ? "+" : "−"}{Math.abs(loadoutDiff).toLocaleString()}</small> : null}</h4>
+                    <div className={s.rvBar} data-side="ally"><p><span>Your team</span><b>{allyLoadout ? allyLoadout.toLocaleString() : "—"}</b></p><i><span style={{ width: `${(allyLoadout / loadoutScale) * 100}%` }} /></i></div>
+                    <div className={s.rvBar} data-side="enemy"><p><span>Enemy</span><b>{enemyLoadout ? enemyLoadout.toLocaleString() : "—"}</b></p><i><span style={{ width: `${(enemyLoadout / loadoutScale) * 100}%` }} /></i></div>
+                    {selectedStat ? <div className={s.rvGun}>
+                        <span>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={96} height={28} unoptimized /> : null}</span>
+                        <p>
+                            <strong>{weapon?.displayName || (selectedStat.economy.weapon ? "Weapon recorded" : "No weapon")}</strong>{selectedStat.economy.armor ? " · armor" : " · no armor"}
+                            <small>{(selectedStat.economy.spent || 0).toLocaleString()} spent · {(selectedStat.economy.remaining || 0).toLocaleString()} left{headshots ? ` · ${headshots} HS` : ""}</small>
+                        </p>
+                    </div> : null}
+                </section> : null}
+                <section className={s.rvTakeaway}>
+                    <h4>Takeaway</h4>
                     <p>{selectedRoundRead}</p>
-                </div>
+                </section>
             </aside>
         </div>
-        <section className={s.roundTimeline} aria-label={`Round ${selectedRound!.roundNum + 1} event timeline`}>
-            <header><div><span>Round timeline</span><strong>What happened, in order</strong></div><small>{roundTimeline.length} recorded events</small></header>
-            <div className={s.roundTimelineRail}>
-                {roundTimeline.map((event, index) => <article key={event.id} data-kind={event.kind} data-local={event.local || undefined}>
-                    <time>{event.time ? fmtLength(event.time) : "START"}</time>
-                    <i><span>{index + 1}</span></i>
-                    <div>{event.icon ? <Image src={event.icon} alt="" width={38} height={22} unoptimized /> : null}<span><strong>{event.label}</strong><small>{event.detail}</small></span></div>
-                </article>)}
-            </div>
-        </section>
-        {turningPoints.length ? <section className={s.matchTurningPoints}>
-            <header><div><span>Turning points</span><strong>Rounds that changed the match story</strong></div><small>{turningPoints.length} evidence-backed moments</small></header>
-            <div>{turningPoints.map((point) => <button key={`${point.roundNum}-${point.title}`} type="button" data-tone={point.tone} onClick={() => setSelectedRoundNum(point.roundNum)}>
-                <i>{point.tone === "good" ? "↑" : point.tone === "danger" ? "↓" : "•"}</i><span><strong>{point.title}</strong><small>{point.detail}</small></span>
+
+        {turningPoints.length ? <section className={s.rvTurning}>
+            <header><h4>Turning points</h4><small>{turningPoints.length} moments that changed the match</small></header>
+            <div>{turningPoints.map((point) => <button key={`${point.roundNum}-${point.title}`} type="button" data-tone={point.tone} data-active={point.roundNum === round.roundNum || undefined} onClick={() => setSelectedRoundNum(point.roundNum)}>
+                <i />
+                <span><strong>{point.title}</strong><small>{point.detail}</small></span>
             </button>)}</div>
         </section> : null}
-        <section className={s.matchDebrief}>
-            <header><div><span>Match review</span><strong>What to keep and what to change</strong></div><small>Rules use only recorded round evidence</small></header>
-            <div className={s.matchDebriefGrid}>
-                {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone}>
-                    <div><span>{insight.tone === "good" ? "Worked" : insight.tone === "danger" ? "Needs attention" : "Context"}</span><b>{insight.label}</b></div>
+
+        <section className={s.rvReview}>
+            <header><h4>Match review</h4><small>From recorded round data</small></header>
+            {reviewInsights.length ? <div className={s.rvReviewGrid}>
+                {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={insight.evidence}>
+                    <svg viewBox="0 0 40 40" aria-hidden="true">
+                        <circle cx="20" cy="20" r="16" />
+                        {insight.ratio !== undefined ? <circle cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.round(insight.ratio * 100)} 100`} transform="rotate(-90 20 20)" /> : null}
+                        <text x="20" y="20" dominantBaseline="central" textAnchor="middle">{insight.ring}</text>
+                    </svg>
+                    <span>{insight.label}</span>
                     <strong>{insight.value}</strong>
-                    <p>{insight.evidence}</p>
-                    <footer><i>→</i><span>{insight.tip}</span></footer>
+                    <p>{insight.tip}</p>
                 </article>)}
-                {!reviewInsights.length ? <div className={s.matchDebriefEmpty}>This match does not contain enough detailed round evidence for reliable tips yet.</div> : null}
-            </div>
+            </div> : <p className={s.rvNote}>This match does not contain enough detailed round evidence for reliable tips yet.</p>}
         </section>
     </section>;
 }
 
-function MatchMapAnalytics({
+export function MatchMapAnalytics({
     detail,
     kills,
     map,
@@ -2348,6 +3062,8 @@ function MatchMapAnalytics({
     weapons,
     loading,
     error,
+    initialFight,
+    onBackToRound,
 }: {
     detail: ProfileMatchDetails;
     kills: MatchKillEvent[];
@@ -2356,12 +3072,14 @@ function MatchMapAnalytics({
     weapons: Weapon[];
     loading: boolean;
     error: string;
+    initialFight?: MatchKillEvent | null;
+    onBackToRound?: () => void;
 }) {
     const [filter, setFilter] = useState<"all" | "kill" | "death">("all");
     const [focusedArea, setFocusedArea] = useState<string | null>(null);
     const [focusedZone, setFocusedZone] = useState<string | null>(null);
     const [hoveredZone, setHoveredZone] = useState<string | null>(null);
-    const [duelFocus, setDuelFocus] = useState<DuelFocus | null>(null);
+    const [duelFocus, setDuelFocus] = useState<DuelFocus | null>(initialFight ? { id: fightEventKey(initialFight), label: `Round ${initialFight.roundNum + 1} · ${fmtLength(initialFight.roundTime)}`, events: [initialFight], index: 0 } : null);
     const analysis = useMemo(() => {
         const localPlayer = detail.players.find((player) => player.isLocal);
         const localSubject = localPlayer?.subject.toLowerCase() || "";
@@ -2566,6 +3284,11 @@ function MatchMapAnalytics({
         const roundWinner = (detail.rounds || []).find((round) => round.roundNum === selectedFight.roundNum)?.winningTeam.toLowerCase();
         const roundWon = roundWinner ? roundWinner === analysis.localTeam : null;
         const locatedFight = analysis.points.find((point) => fightEventKey(point.event) === fightEventKey(selectedFight));
+        const nearestFightCallout = map.callouts.reduce<MapMeta["callouts"][number] | undefined>((nearest, callout) => {
+            const distance = (callout.x - selectedFight.victimX) ** 2 + (callout.y - selectedFight.victimY) ** 2;
+            const nearestDistance = nearest ? (nearest.x - selectedFight.victimX) ** 2 + (nearest.y - selectedFight.victimY) ** 2 : Infinity;
+            return distance < nearestDistance ? callout : nearest;
+        }, undefined);
         return {
             killerPlayer,
             victimPlayer,
@@ -2574,9 +3297,10 @@ function MatchMapAnalytics({
             killerPoint: killerLocation ? toPlotPoint(killerLocation.x, killerLocation.y) : null,
             victimPoint: toPlotPoint(selectedFight.victimX, selectedFight.victimY),
             finisher,
+            finisherName: isAbility ? ability?.name : weapon?.displayName,
             localDeath,
             roundWon,
-            area: locatedFight?.area || "Map area",
+            area: locatedFight?.area || (nearestFightCallout ? mapCalloutLabel(nearestFightCallout) : "Map area"),
         };
     }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, map, playerBySubject, selectedFight, weaponById]);
 
@@ -2747,6 +3471,7 @@ function MatchMapAnalytics({
                         </strong>
                         {duelFocus ? (
                             <div className={s.mapDuelControls} aria-label="Selected duel controls">
+                                {onBackToRound && initialFight ? <button type="button" className={s.mapBackToRound} onClick={onBackToRound}>Back to R{initialFight.roundNum + 1}</button> : null}
                                 <span>{duelFocus.label}</span>
                             </div>
                         ) : (
@@ -2810,15 +3535,18 @@ function MatchMapAnalytics({
                                 const left = Math.max(0, Math.min(1, point.y * map!.xMultiplier! + map!.xScalarToAdd!));
                                 const top = Math.max(0, Math.min(1, point.x * map!.yMultiplier! + map!.yScalarToAdd!));
                                 return (
-                                    <span
+                                    <button
                                         key={`${point.round}-${point.gameTime}-${point.type}-${index}`}
+                                        type="button"
                                         className={`${s.mapEvent} ${point.type === "kill" ? s.mapEventKill : s.mapEventDeath}`}
                                         style={{ left: `${left * 100}%`, top: `${top * 100}%` }}
                                         title={`${point.type === "kill" ? "Kill" : "Death"}, round ${point.round + 1}`}
+                                        aria-label={`Inspect ${point.type}, round ${point.round + 1}, ${point.area}, ${fmtLength(point.event.roundTime)}`}
+                                        onClick={() => selectDuelGroup(fightEventKey(point.event), `Round ${point.round + 1} · ${fmtLength(point.event.roundTime)}`, [point.event])}
                                     >
                                         <i className={s.mapHeat} aria-hidden="true" />
                                         <b className={s.mapPoint} aria-hidden="true" />
-                                    </span>
+                                    </button>
                                 );
                             })}
                             {selectedFight && duelData ? (
@@ -2899,12 +3627,17 @@ function MatchMapAnalytics({
                     ) : null}
                 </div>
                 <section className={s.mapInsights} aria-label="Map performance breakdown">
+                    {selectedFight && duelData ? <section className={s.mapFightDetail} aria-label="Selected fight receipt">
+                        <header><strong>Round {selectedFight.roundNum + 1} · {fmtLength(selectedFight.roundTime)}</strong><small>Recorded elimination</small></header>
+                        <p><strong>{duelData.killerPlayer?.isLocal ? "You" : duelData.killerPlayer?.gameName || "Unknown player"}</strong><span aria-label="eliminated">→</span><strong>{duelData.victimPlayer?.isLocal ? "You" : duelData.victimPlayer?.gameName || "Unknown player"}</strong></p>
+                        <dl><div><dt>Location</dt><dd>{duelData.area}</dd></div><div><dt>Finisher</dt><dd>{duelData.finisherName || "Unavailable"}</dd></div><div><dt>Your team</dt><dd>{duelData.roundWon === null ? "Outcome unavailable" : duelData.roundWon ? "Round won" : "Round lost"}</dd></div></dl>
+                    </section> : null}
                     <header className={s.mapInsightsHeader}>
                         <div>
                             <span>Fight report</span>
                             <strong>Where you fought</strong>
                         </div>
-                        <small>{analysis.kills + analysis.deaths} fights · Select a zone</small>
+                        <small>Whole match · {analysis.kills + analysis.deaths} fights</small>
                     </header>
                     <div className={s.mapZoneList}>
                         {analysis.zones.map((zone) => {
@@ -3044,63 +3777,238 @@ function MatchMapAnalytics({
     );
 }
 
+function TeammatesDialog({
+    teammates,
+    agents,
+    onClose,
+    onView,
+    onCompare,
+}: {
+    teammates: ProfileTeammateStat[];
+    agents: Record<string, AgentMeta>;
+    onClose: () => void;
+    onView: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+    onCompare: (puuid: string) => void;
+}) {
+    const closeRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        closeRef.current?.focus();
+        const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [onClose]);
+
+    return createPortal(
+        <div className={s.matesBackdrop} role="presentation" onMouseDown={onClose}>
+            <section
+                className={s.matesDialog}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="mates-dialog-title"
+                onMouseDown={(event) => event.stopPropagation()}
+            >
+                <header>
+                    <div>
+                        <h2 id="mates-dialog-title">Played with</h2>
+                        <p>Players you queued with most, from your saved matches</p>
+                    </div>
+                    <button ref={closeRef} type="button" onClick={onClose} aria-label="Close">×</button>
+                </header>
+                <ol>
+                    {teammates.map((mate, index) => {
+                        const icon = agents[mate.characterId?.toLowerCase?.() || ""]?.icon;
+                        const winRate = mate.decided ? Math.round((mate.wins / mate.decided) * 100) : null;
+                        const body = (
+                            <>
+                                <span className={s.matesRank}>{index + 1}</span>
+                                {icon ? <img src={icon} alt="" /> : <span className={s.railMateFallback} />}
+                                <span className={s.matesCopy}>
+                                    <strong>{mate.gameName || "Hidden player"}{mate.tagLine ? <em>#{mate.tagLine}</em> : null}</strong>
+                                    <small>Last played {fmtAgo(mate.lastPlayed)}</small>
+                                </span>
+                                <span className={s.matesStat}><b>{mate.games}</b><small>games</small></span>
+                                <span className={s.matesStat}>
+                                    <b className={winRate === null ? "" : winRate >= 50 ? s.winText : s.lossText}>{winRate === null ? "—" : `${winRate}%`}</b>
+                                    <small>win rate</small>
+                                </span>
+                            </>
+                        );
+                        return (
+                            <li key={mate.subject}>
+                                {mate.gameName ? (
+                                    <button type="button" onClick={() => onView({ puuid: mate.subject, gameName: mate.gameName, tagLine: mate.tagLine })} title={`View ${mate.gameName}'s profile`}>
+                                        {body}
+                                    </button>
+                                ) : <div>{body}</div>}
+                                {mate.gameName ? <button type="button" className={s.matesCompare} onClick={() => onCompare(mate.subject)} aria-label={`Compare with ${mate.gameName}`}>Compare</button> : null}
+                            </li>
+                        );
+                    })}
+                </ol>
+            </section>
+        </div>,
+        document.body,
+    );
+}
+
+const ROUND_END_LABELS: Record<RoundOutcome["end"], string> = {
+    elim: "Elimination",
+    boom: "Spike detonated",
+    defuse: "Spike defused",
+    time: "Time ran out",
+    other: "Other",
+};
+
+function RoundEndIcon({ end }: { end: RoundOutcome["end"] }) {
+    const common = { width: 14, height: 14, viewBox: "0 0 24 24", "aria-hidden": true } as const;
+    if (end === "boom") {
+        return <svg {...common} fill="currentColor"><path d="M12 2l2.2 5.6L20 6l-3 5.2L22 14l-5.8 1.2L17 21l-5-3.4L7 21l.8-5.8L2 14l5-2.8L4 6l5.8 1.6z" /></svg>;
+    }
+    if (end === "defuse") {
+        return <svg {...common} fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.3L3 18l3 3 6.4-6.3a4 4 0 0 0 5.3-5.4l-2.6 2.6-2.4-.6-.6-2.4z" /></svg>;
+    }
+    if (end === "time") {
+        return <svg {...common} fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2" /><path d="M9 2h6" /></svg>;
+    }
+    if (end === "other") {
+        return <svg {...common} fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>;
+    }
+    return <svg {...common} fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><circle cx="12" cy="12" r="6" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></svg>;
+}
+
+// VLR-style round history: one row per team, the winner's cell carries how the round ended.
+function RoundHistory({ rounds, ownRounds, enemyRounds }: { rounds: RoundOutcome[]; ownRounds: number; enemyRounds: number }) {
+    const endsSeen = Array.from(new Set(rounds.map((round) => round.end)));
+    return (
+        <div className={s.roundHistory} role="group" aria-label="Round history">
+            <div className={s.roundHistoryTeams} aria-hidden="true">
+                <span data-team="ally"><i />Your team <b>{ownRounds}</b></span>
+                <small>Round</small>
+                <span data-team="enemy"><i />Enemy <b>{enemyRounds}</b></span>
+            </div>
+            <ol className={s.roundHistoryTrack}>
+                {rounds.map((round) => (
+                    <li key={round.roundNum} data-swap={round.afterSwap || undefined} title={round.label} aria-label={round.label}>
+                        <span data-team="ally" data-won={round.won || undefined}>{round.won ? <RoundEndIcon end={round.end} /> : null}</span>
+                        <small>{round.roundNum + 1}</small>
+                        <span data-team="enemy" data-won={!round.won || undefined}>{round.won ? null : <RoundEndIcon end={round.end} />}</span>
+                    </li>
+                ))}
+            </ol>
+            <ul className={s.roundHistoryKey} aria-label="Round end key">
+                {endsSeen.map((end) => (
+                    <li key={end}><RoundEndIcon end={end} />{ROUND_END_LABELS[end]}</li>
+                ))}
+            </ul>
+        </div>
+    );
+}
+
 function Scoreboard({
     detail,
+    breakdown,
+    side,
+    queueId,
     partyMembers,
     agents,
     tierAssets,
     onViewProfile,
 }: {
     detail: ProfileMatchDetails;
+    /** Source of rounds and kill events, which may arrive with a later analytics load. */
+    breakdown: ProfileMatchDetails;
+    side: MatchSide;
+    queueId?: string;
     partyMembers: NonNullable<ProfileMatchSummary["partyMembers"]>;
     agents: Record<string, AgentMeta>;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
 }) {
     const localPlayer = detail.players.find((p) => p.isLocal);
+    const [hoveredParty, setHoveredParty] = useState<string | null>(null);
+    const [focusedParty, setFocusedParty] = useState<string | null>(null);
+    const [pinnedParty, setPinnedParty] = useState<string | null>(null);
+    const activeParty = hoveredParty ?? focusedParty ?? pinnedParty;
     const localTeamId = localPlayer?.teamId || "Blue";
     const localIsBlue = localTeamId.toLowerCase() === "blue";
     const yourTeam = detail.players.filter((p) => p.teamId.toLowerCase() === localTeamId.toLowerCase());
     const enemyTeam = detail.players.filter((p) => p.teamId.toLowerCase() !== localTeamId.toLowerCase());
     const partyMemberSubjects = new Set(partyMembers.map((member) => member.subject.toLowerCase()));
     const partyGroups = buildScorePartyGroups(detail.players, partyMemberSubjects);
-    const sortPlayers = (rows: typeof detail.players) =>
-        [...rows].sort((a, b) => (b.acs || 0) - (a.acs || 0) || b.score - a.score || b.kills - a.kills);
+    // Free-for-all modes (e.g. Deathmatch) end 0:0 with every player on their
+    // own team, so show one standings list ranked by kills instead.
+    const teamRounds = detail.matchInfo.blueRoundsWon + detail.matchInfo.redRoundsWon > 0;
+    const stats = useMemo(
+        () => sideStats({ ...detail, rounds: breakdown.rounds, kills: breakdown.kills }, side, queueId),
+        [breakdown.kills, breakdown.rounds, detail, queueId, side],
+    );
+    const showFirsts = (breakdown.kills?.length ?? 0) > 0;
+    const acsOf = (p: ProfileMatchDetails["players"][number]) => stats.get(p.subject.toLowerCase())?.acs || 0;
+    const sortPlayers = (rows: typeof detail.players) => teamRounds
+        ? [...rows].sort((a, b) => acsOf(b) - acsOf(a) || b.score - a.score || b.kills - a.kills)
+        : [...rows].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || b.assists - a.assists);
+    const maxAcs = Math.max(1, ...detail.players.map(acsOf));
+    // Only the lobby best in each column gets emphasis; everything else stays neutral.
+    const statValues = detail.players.map((p) => stats.get(p.subject.toLowerCase())).filter((stat): stat is SideStats => Boolean(stat));
+    const leaders: ScoreLeaders = {
+        acs: maxAcs,
+        adr: Math.max(0, ...statValues.map((stat) => Math.round(stat.adr))),
+        hs: Math.max(0, ...statValues.filter((stat) => stat.hasShots).map((stat) => stat.hsPct)),
+        firstKills: Math.max(0, ...statValues.map((stat) => stat.firstKills)),
+    };
 
+    // MVPs always reflect the whole match, whichever side filter is active.
     const mvpPlayer = useMemo(() => {
         if (!detail.players.length) return null;
+        // Riot names one MVP per team; the stronger of them is the match MVP.
+        const riotMvps = detail.players.filter((p) => p.teamMvp);
+        if (riotMvps.length) {
+            return riotMvps.reduce((best, p) => ((teamRounds ? (p.acs || 0) > (best.acs || 0) : p.kills > best.kills) ? p : best), riotMvps[0]);
+        }
+        if (!teamRounds) {
+            return [...detail.players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)[0];
+        }
         return [...detail.players].reduce(
             (max, p) => ((p.acs || 0) > (max.acs || 0) ? p : max),
             detail.players[0],
         );
-    }, [detail.players]);
+    }, [detail.players, teamRounds]);
+
+    const shared = {
+        agents, mvpPlayer, partyGroups, tierAssets, onViewProfile, stats, maxAcs, showFirsts, leaders, activeParty, pinnedParty,
+        onPartyHover: setHoveredParty,
+        onPartyFocus: setFocusedParty,
+        onPartyPin: (party: string) => setPinnedParty((current) => current === party ? null : party),
+    };
+
+    if (!teamRounds) {
+        return (
+            <div className={s.scoreboardStage} data-party-active={Boolean(activeParty) || undefined}>
+                <div className={`${s.sbGrid} ${s.sbGridSingle}`}>
+                    <ScoreTeam title="Standings" side="blue" players={sortPlayers(detail.players)} roundStats={false} {...shared} />
+                </div>
+            </div>
+        );
+    }
 
     return (
-        <div className={s.scoreboardStage}>
-            <div className={s.scoreGrid}>
+        <div className={s.scoreboardStage} data-party-active={Boolean(activeParty) || undefined}>
+            <div className={s.sbGrid}>
                 <ScoreTeam
-                    title="Your"
+                    title="Your team"
                     side="blue"
                     won={localIsBlue ? detail.matchInfo.blueWins : !detail.matchInfo.blueWins}
                     score={localIsBlue ? detail.matchInfo.blueRoundsWon : detail.matchInfo.redRoundsWon}
                     players={sortPlayers(yourTeam)}
-                    agents={agents}
-                    mvpPlayer={mvpPlayer}
-                    partyGroups={partyGroups}
-                    tierAssets={tierAssets}
-                    onViewProfile={onViewProfile}
+                    {...shared}
                 />
                 <ScoreTeam
-                    title="Enemy"
+                    title="Enemy team"
                     side="red"
                     won={localIsBlue ? !detail.matchInfo.blueWins : detail.matchInfo.blueWins}
                     score={localIsBlue ? detail.matchInfo.redRoundsWon : detail.matchInfo.blueRoundsWon}
                     players={sortPlayers(enemyTeam)}
-                    agents={agents}
-                    mvpPlayer={mvpPlayer}
-                    partyGroups={partyGroups}
-                    tierAssets={tierAssets}
-                    onViewProfile={onViewProfile}
+                    {...shared}
                 />
             </div>
         </div>
@@ -3112,121 +4020,224 @@ function ScoreTeam({
     side,
     won,
     score,
+    roundStats = true,
     players,
     agents,
     mvpPlayer,
     partyGroups,
     tierAssets,
     onViewProfile,
+    stats,
+    maxAcs,
+    showFirsts,
+    leaders,
+    activeParty,
+    pinnedParty,
+    onPartyHover,
+    onPartyFocus,
+    onPartyPin,
 }: {
     title: string;
     side: "blue" | "red";
-    won: boolean;
-    score: number;
+    won?: boolean;
+    score?: number;
+    /** False for free-for-all modes: hides round result, ACS, ADR and first kills, and numbers the standings. */
+    roundStats?: boolean;
     players: ProfileMatchDetails["players"];
     agents: Record<string, AgentMeta>;
     mvpPlayer: ProfileMatchDetails["players"][number] | null;
     partyGroups: Map<string, ScorePartyGroup>;
     tierAssets: Map<number, { smallIcon: string }>;
     onViewProfile: (profile: { puuid: string; gameName: string; tagLine: string }) => void;
+    stats: Map<string, SideStats>;
+    maxAcs: number;
+    showFirsts: boolean;
+    leaders: ScoreLeaders;
+    activeParty: string | null;
+    pinnedParty: string | null;
+    onPartyHover: (party: string | null) => void;
+    onPartyFocus: (party: string | null) => void;
+    onPartyPin: (party: string) => void;
 }) {
+    const statOf = (p: ProfileMatchDetails["players"][number]) => stats.get(p.subject.toLowerCase());
+    // Team MVP: Riot's pick for this team when cached, otherwise the top
+    // full-match ACS on the team without the match MVP.
+    const riotTeamMvp = players.find((p) => p.teamMvp);
+    const teamMvp = players.some((p) => p.subject === mvpPlayer?.subject)
+        ? null
+        : riotTeamMvp ?? (roundStats && players.length
+            ? players.reduce((best, p) => ((p.acs || 0) > (best.acs || 0) ? p : best), players[0])
+            : null);
+    const teamKills = players.reduce((sum, p) => sum + (statOf(p)?.kills ?? p.kills), 0);
+    const avgAcs = players.length ? Math.round(players.reduce((sum, p) => sum + (statOf(p)?.acs ?? 0), 0) / players.length) : 0;
+
     return (
-        <div className={`${s.scoreTeam} ${side === "blue" ? s.scoreTeamBlue : s.scoreTeamRed}`}>
-            <div className={s.scoreTeamHeader}>
-                <span>{title} Team</span>
-                <small>{won ? "Victory" : "Defeat"}</small>
-                <strong>{score}</strong>
+        <div className={s.sbTeam} data-side={side}>
+            <div className={s.sbHead}>
+                <div className={s.sbBanner}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z" />
+                    </svg>
+                    <span>{title}</span>
+                    <small>{roundStats ? (won ? "Victory" : "Defeat") : `${players.length} players`}</small>
+                </div>
+                {roundStats ? <span className={s.sbTotals}>{teamKills} kills · {avgAcs} avg ACS</span> : null}
+                {roundStats ? <strong className={s.sbScore}>{score}</strong> : null}
             </div>
-            <table className={s.scoreTable}>
-                <thead>
-                    <tr>
-                        <th scope="col">Player</th>
-                        <th scope="col">K / D / A</th>
-                        <th scope="col">ACS</th>
-                        <th scope="col">ADR</th>
-                        <th scope="col">HS%</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {players.map((p, idx) => {
-                        const meta = agents[p.characterId?.toLowerCase?.() || ""];
-                        const name = p.gameName
-                            ? `${p.gameName}${p.tagLine ? `#${p.tagLine}` : ""}`
-                            : p.isLocal
-                                ? "You"
-                                : "Player";
-                        const isMvp = Boolean(mvpPlayer && mvpPlayer.subject === p.subject);
-                        const party = partyGroups.get(p.subject.toLowerCase());
-                        const rankIcon = p.competitiveTier > 0 ? rankIconUrl(p.competitiveTier, tierAssets) : null;
-                        const rowStyle = {
-                            "--agent-art": meta?.full ? `url(${meta.full})` : "none",
-                            ...(party ? { "--party-color": party.color } : {}),
-                        } as CSSProperties;
-                        return (
-                            <tr
-                                data-slot="score-player-row"
-                                key={p.subject || `${p.characterId}-${idx}`}
-                                className={`${p.isLocal ? s.scoreLocal : ""} ${party ? s.scorePartyRow : ""}`}
-                                style={rowStyle}
-                                title={party?.title}
-                            >
-                                <td>
-                                    <span className={s.scorePlayer}>
+            <div className={s.sbScroll}>
+                <table className={s.sbTable} data-round-stats={roundStats}>
+                    <thead>
+                        <tr className={s.sbRow}>
+                            <th scope="col">Player</th>
+                            <th scope="col">Rank</th>
+                            {roundStats ? <th scope="col">ACS</th> : null}
+                            <th scope="col">K / D / A</th>
+                            <th scope="col" title="Kills minus deaths">+/−</th>
+                            {roundStats ? <th scope="col">ADR</th> : null}
+                            <th scope="col">HS%</th>
+                            {roundStats ? <th scope="col" title="First kills: opened the round with a kill">FK</th> : null}
+                            {roundStats ? <th scope="col" title="First deaths: died first in the round">FD</th> : null}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {players.map((p, idx) => {
+                            const meta = agents[p.characterId?.toLowerCase?.() || ""];
+                            const stat = statOf(p);
+                            const kills = stat?.kills ?? p.kills;
+                            const deaths = stat?.deaths ?? p.deaths;
+                            const assists = stat?.assists ?? p.assists;
+                            const diff = kills - deaths;
+                            const acs = Math.round(stat?.acs ?? p.acs ?? 0);
+                            const hasShots = stat?.hasShots ?? p.headshots + p.bodyshots + p.legshots > 0;
+                            const hsPct = stat?.hsPct ?? p.hsPct;
+                            const adr = Math.round(stat?.adr ?? p.adr ?? 0);
+                            const firstKills = stat?.firstKills ?? 0;
+                            const firstDeaths = stat?.firstDeaths ?? 0;
+                            const name = p.gameName
+                                ? `${p.gameName}${p.tagLine ? `#${p.tagLine}` : ""}`
+                                : p.isLocal
+                                    ? "You"
+                                    : "Player";
+                            const isMvp = Boolean(mvpPlayer && mvpPlayer.subject === p.subject);
+                            const isTeamMvp = Boolean(teamMvp && teamMvp.subject === p.subject);
+                            const party = partyGroups.get(p.subject.toLowerCase());
+                            const displayedTier = p.competitiveTier || p.currentCompetitiveTier || 0;
+                            const rankIcon = displayedTier > 0 ? rankIconUrl(displayedTier, tierAssets) : null;
+                            const rowStyle = (party ? { "--party-color": party.color } : {}) as CSSProperties;
+                            return (
+                                <tr
+                                    data-slot="score-player-row"
+                                    key={p.subject || `${p.characterId}-${idx}`}
+                                    className={`${s.sbRow} ${p.isLocal ? s.sbRowLocal : ""}`}
+                                    style={rowStyle}
+                                    data-party-highlighted={Boolean(party && activeParty === party.key) || undefined}
+                                    onMouseEnter={() => onPartyHover(party?.key ?? null)}
+                                    onMouseLeave={() => onPartyHover(null)}
+                                    onFocus={() => onPartyFocus(party?.key ?? null)}
+                                    onBlur={(event) => {
+                                        if (!event.currentTarget.contains(event.relatedTarget)) onPartyFocus(null);
+                                    }}
+                                >
+                                    <td className={s.sbPlayerCell}>
+                                        {party ? (
+                                            <button
+                                                type="button"
+                                                className={s.sbPartyRail}
+                                                aria-label={party.title}
+                                                aria-pressed={pinnedParty === party.key}
+                                                title={`${party.title}. Click to keep this party highlighted.`}
+                                                onClick={() => onPartyPin(party.key)}
+                                            ><i aria-hidden="true" /></button>
+                                        ) : null}
+                                        {roundStats ? null : <span className={s.sbPlace} aria-label={`Place ${idx + 1}`}>{idx + 1}</span>}
                                         {meta?.icon ? (
-                                            <Image src={meta.icon} alt={meta.name} width={26} height={26} unoptimized className={s.scoreAgentIcon} />
+                                            <Image src={meta.icon} alt="" width={38} height={38} unoptimized className={s.sbAgent} />
                                         ) : (
-                                            <span className={`${s.scoreAgentIcon} ${s.scoreAgentPlaceholder}`} />
+                                            <span className={s.sbAgent} />
                                         )}
-                                        <span className={s.scorePlayerMeta}>
-                                            <span className={s.scorePlayerName}>
-                                                {rankIcon && (
-                                                    <Image src={rankIcon} alt="" width={16} height={16} unoptimized className={s.scoreRankIcon} />
-                                                )}
+                                        <span className={s.sbIdentity}>
+                                            <span className={s.sbName}>
                                                 {p.subject && p.gameName && !p.isLocal ? (
                                                     <button
                                                         type="button"
-                                                        className={s.scoreProfileBtn}
                                                         onClick={() => onViewProfile({ puuid: p.subject, gameName: p.gameName, tagLine: p.tagLine || "" })}
                                                         title={`View ${name}'s profile`}
                                                     >
                                                         {name}
                                                     </button>
                                                 ) : name}
-                                                {p.isLocal && <span className={s.youBadge}>You</span>}
-                                                {party && (
-                                                    <span className={s.partyBadge}>
-                                                        {party.includesLocal && !p.isLocal ? "With you" : party.label}
-                                                    </span>
-                                                )}
-                                                {isMvp && <span className={s.mvpBadge}>MVP</span>}
                                             </span>
-                                            <small>{meta?.name || "Agent"}</small>
+                                            <span className={s.sbTags}>
+                                                <small>{meta?.name || "Agent"}</small>
+                                                {party ? (
+                                                    <span
+                                                        className={s.sbParty}
+                                                        title={party.title}
+                                                        aria-label={party.title}
+                                                    >
+                                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                                            <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+                                                            <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+                                                        </svg>
+                                                        {party.label}
+                                                        <span className={s.sbPartyDots} aria-hidden="true">
+                                                            {Array.from({ length: Math.min(party.size, 5) }, (_, dot) => <i key={dot} />)}
+                                                        </span>
+                                                    </span>
+                                                ) : null}
+                                                {isMvp ? (
+                                                    <span className={`${s.sbTag} ${s.sbTagMvp}`}>
+                                                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l3 6.5 7 .8-5.2 4.8 1.5 7L12 17.6 5.7 21l1.5-7L2 9.3l7-.8z" /></svg>
+                                                        MVP
+                                                    </span>
+                                                ) : null}
+                                                {isTeamMvp ? (
+                                                    <span className={`${s.sbTag} ${s.sbTagTeamMvp}`}>
+                                                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinejoin="round" aria-hidden="true"><path d="M12 2l3 6.5 7 .8-5.2 4.8 1.5 7L12 17.6 5.7 21l1.5-7L2 9.3l7-.8z" /></svg>
+                                                        Team MVP
+                                                    </span>
+                                                ) : null}
+                                                {p.isLocal ? <span className={`${s.sbTag} ${s.sbTagYou}`}>You</span> : null}
+                                            </span>
                                         </span>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div>{p.kills}/{p.deaths}/{p.assists}</div>
-                                    <div className={`${s.scoreSub} ${kdColor(p.kd)}`}>{fmtRatio(p.kd)} KD</div>
-                                </td>
-                                <td>
-                                    <div className={acsColor(p.acs)}>{Math.round(p.acs || 0)}</div>
-                                </td>
-                                <td className={adrColor(p.adr)}>{Math.round(p.adr || 0)}</td>
-                                <td className={hsColor(p.hsPct)}>{fmtPct(p.hsPct)}</td>
-                            </tr>
-                        );
-                    })}
-                </tbody>
-            </table>
+                                    </td>
+                                    <td title={rankIcon ? `${tierLabel(displayedTier)} · ${p.competitiveTier > 0 ? "recorded in this match" : "current rank"}` : "Rank not provided"}>
+                                        {rankIcon ? <Image src={rankIcon} alt={`${tierLabel(displayedTier)}${p.competitiveTier > 0 ? "" : " (current)"}`} width={32} height={32} unoptimized /> : <span className={s.sbMuted} aria-label="Rank not provided">—</span>}
+                                    </td>
+                                    {roundStats ? (
+                                        <td className={`${s.sbAcs} ${acs === Math.round(leaders.acs) ? s.sbLead : ""}`}>
+                                            <b>{acs}</b>
+                                            <i aria-hidden="true"><span style={{ width: `${Math.min(100, (acs / maxAcs) * 100)}%` }} /></i>
+                                        </td>
+                                    ) : null}
+                                    <td className={s.sbKda}>{kills}<i>/</i>{deaths}<i>/</i>{assists}</td>
+                                    <td className={diff > 0 ? s.sbPositive : diff < 0 ? s.sbNegative : s.sbMuted}>{diff > 0 ? "+" : diff < 0 ? "−" : ""}{Math.abs(diff)}</td>
+                                    {roundStats ? <td className={adr === leaders.adr ? s.sbLead : ""}>{adr}</td> : null}
+                                    <td className={!hasShots ? s.sbMuted : hsPct === leaders.hs ? s.sbLead : ""}>{hasShots ? fmtPct(hsPct) : "—"}</td>
+                                    {roundStats ? <td className={!showFirsts || !firstKills ? s.sbMuted : firstKills === leaders.firstKills ? s.sbLead : ""}>{showFirsts ? firstKills : "—"}</td> : null}
+                                    {roundStats ? <td className={!showFirsts || !firstDeaths ? s.sbMuted : ""}>{showFirsts ? firstDeaths : "—"}</td> : null}
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
         </div>
     );
 }
 
+interface ScoreLeaders {
+    acs: number;
+    adr: number;
+    hs: number;
+    firstKills: number;
+}
+
 interface ScorePartyGroup {
+    key: string;
     label: string;
     size: number;
     color: string;
-    includesLocal: boolean;
     title: string;
 }
 
@@ -3263,18 +4274,17 @@ function buildScorePartyGroups(
     const palette = ["#e8b84a", "#9b7cff", "#4fa8ff", "#ff7699", "#a7b0ba"];
     const bySubject = new Map<string, ScorePartyGroup>();
 
-    groups.forEach(([, members], index) => {
+    groups.forEach(([key, members], index) => {
         const size = members.length;
-        const includesLocal = members.some((player) => player.isLocal);
         const label = size === 2 ? "Duo" : size === 3 ? "Trio" : `${Math.min(size, 5)}-stack`;
         const names = members
             .map((player) => player.gameName || "Hidden player")
             .join(", ");
         const group: ScorePartyGroup = {
+            key,
             label,
             size,
             color: palette[index % palette.length],
-            includesLocal,
             title: `${label} queued together: ${names}`,
         };
         for (const player of members) bySubject.set(player.subject.toLowerCase(), group);

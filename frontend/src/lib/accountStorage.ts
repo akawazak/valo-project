@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { RiotAccount } from "@/lib/types";
+import { isLockfileAccount, RiotAccount } from "@/lib/types";
 import { getPersistedAccounts, savePersistedAccounts } from "@/services/api";
 
 const ACCOUNTS_KEY = "riot_accounts";
@@ -10,7 +10,7 @@ let saveQueue: Promise<void> = Promise.resolve();
 function readLegacyAccounts(): RiotAccount[] {
     try {
         const value = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "[]");
-        return Array.isArray(value) ? value : [];
+        return Array.isArray(value) ? value.filter((account: RiotAccount) => !isLockfileAccount(account)) : [];
     } catch {
         return [];
     }
@@ -18,21 +18,6 @@ function readLegacyAccounts(): RiotAccount[] {
 
 function publicAccount(account: RiotAccount): RiotAccount {
     return { ...account, accessToken: "", entitlementsToken: "", ssid: undefined };
-}
-
-function mergeAccounts(local: RiotAccount[], persisted: RiotAccount[]) {
-    const merged = new Map(persisted.map((account) => [account.puuid, account]));
-    for (const account of local) {
-        const existing = merged.get(account.puuid);
-        merged.set(account.puuid, {
-            ...existing,
-            ...account,
-            accessToken: account.accessToken || existing?.accessToken || "",
-            entitlementsToken: account.entitlementsToken || existing?.entitlementsToken || "",
-            ssid: account.ssid || existing?.ssid,
-        });
-    }
-    return Array.from(merged.values());
 }
 
 async function saveSecrets(account: RiotAccount): Promise<void> {
@@ -46,8 +31,12 @@ async function saveSecrets(account: RiotAccount): Promise<void> {
 }
 
 async function persistPublicAccounts(accounts: RiotAccount[]) {
-    const publicAccounts = accounts.map(publicAccount);
+    const publicAccounts = accounts.filter(account => !isLockfileAccount(account)).map(publicAccount);
     await savePersistedAccounts(publicAccounts);
+    cachePublicAccounts(publicAccounts);
+}
+
+function cachePublicAccounts(publicAccounts: RiotAccount[]) {
     localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(publicAccounts));
     localStorage.removeItem("riot_access_token");
     localStorage.removeItem("riot_entitlements");
@@ -82,6 +71,23 @@ export function saveStoredAccounts(accounts: RiotAccount[]): Promise<void> {
     });
 }
 
+export async function removeStoredAccount(puuid: string): Promise<{ removed: RiotAccount; accounts: RiotAccount[] } | null> {
+    const normalizedPuuid = puuid.trim().toLowerCase();
+    const current = getStoredAccounts();
+    const removed = current.find((account) => account.puuid.toLowerCase() === normalizedPuuid);
+    if (!removed) return null;
+
+    const accounts = current.filter((account) => account.puuid.toLowerCase() !== normalizedPuuid);
+    const previousAccounts = accountCache;
+    accountCache = accounts;
+    saveQueue = saveQueue.catch(() => undefined).then(() => persistPublicAccounts(accounts));
+    await saveQueue.catch((error) => {
+        if (accountCache === accounts) accountCache = previousAccounts;
+        throw error;
+    });
+    return { removed, accounts };
+}
+
 export function saveStoredAccountPlayerCard(puuid: string, playerCardId: string): Promise<boolean> {
     const normalizedPuuid = puuid.trim().toLowerCase();
     const normalizedCardId = playerCardId.trim();
@@ -100,27 +106,40 @@ export function saveStoredAccountPlayerCard(puuid: string, playerCardId: string)
     return saveStoredAccounts(updated).then(() => true);
 }
 
-export async function hydrateStoredAccounts(): Promise<RiotAccount[]> {
+export function hydrateStoredAccounts(): Promise<RiotAccount[]> {
     const legacy = getStoredAccounts();
-    const persisted = await getPersistedAccounts();
-    const merged = mergeAccounts(legacy, persisted);
-    const hydrated = await Promise.all(merged.map(async (account) => {
-        try {
-            if (account.accessToken || account.entitlementsToken || account.ssid) {
+    const hydration = saveQueue.catch(() => undefined).then(async () => {
+        const persisted = await getPersistedAccounts();
+        // The shared disk snapshot owns membership, including an intentionally
+        // empty list. Only migrate a WebView cache when no disk snapshot exists.
+        const source = persisted ?? legacy;
+        const retained = source.filter(account => !isLockfileAccount(account));
+        const hydrated = await Promise.all(retained.map(async (account) => {
+            try {
                 await saveSecrets(account);
+                return publicAccount(account);
+            } catch (error) {
+                localStorage.setItem("riot_secure_storage_error", "1");
+                console.warn("Could not migrate legacy Riot credentials to protected native storage.");
+                throw error;
             }
-            return publicAccount(account);
-        } catch (error) {
-            localStorage.setItem("riot_secure_storage_error", "1");
-            console.warn("Could not migrate legacy Riot credentials to protected native storage.");
-            throw error;
-        }
-    }));
+        }));
 
-    accountCache = hydrated;
-    localStorage.removeItem("riot_secure_storage_error");
-    await persistPublicAccounts(hydrated);
-    return hydrated;
+        if (persisted === null || retained.length !== source.length
+            || retained.some(account => account.accessToken || account.entitlementsToken || account.ssid)) {
+            await savePersistedAccounts(hydrated);
+        }
+        // A queued user edit has already updated memory; let its save finish
+        // next instead of replacing it with this earlier startup snapshot.
+        if (accountCache === legacy) {
+            cachePublicAccounts(hydrated);
+            accountCache = hydrated;
+        }
+        localStorage.removeItem("riot_secure_storage_error");
+        return getStoredAccounts();
+    });
+    saveQueue = hydration.then(() => undefined, () => undefined);
+    return hydration;
 }
 
 export async function deleteStoredAccountSecrets(puuid: string): Promise<void> {

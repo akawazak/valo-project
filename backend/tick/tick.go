@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/truearken/valclient/valclient"
@@ -19,6 +20,7 @@ import (
 const TICK_SPEED_SECONDS = 1
 
 type Ticker struct {
+	mu                   sync.Mutex
 	Val                  *valclient.ValClient
 	stopCh               chan struct{}
 	running              bool
@@ -39,15 +41,34 @@ type coreGamePlayer struct {
 
 func NewTicker(val *valclient.ValClient) *Ticker {
 	return &Ticker{
-		Val:     val,
-		running: false,
-		stopCh:  make(chan struct{}),
+		Val: val,
 	}
 }
 
 func (t *Ticker) Start() {
+	t.mu.Lock()
 	if t.running {
+		t.mu.Unlock()
 		return
+	}
+	stopCh := make(chan struct{})
+	t.stopCh = stopCh
+	t.running = true
+	t.mu.Unlock()
+	go t.run(stopCh)
+}
+
+func (t *Ticker) run(stopCh <-chan struct{}) {
+	defer func() {
+		t.mu.Lock()
+		t.running = false
+		t.stopCh = nil
+		t.mu.Unlock()
+	}()
+	select {
+	case <-stopCh:
+		return
+	default:
 	}
 
 	slog.Info("ticker started")
@@ -71,23 +92,36 @@ func (t *Ticker) Start() {
 	}
 
 	events := make(chan *valclient.LocalWebsocketApiEvent)
+	readDone := make(chan struct{})
 	go func() {
+		defer close(readDone)
 		if err := ws.Read(events); err != nil {
 			slog.Info("unable to read event")
 			return
 		}
 	}()
-
-	t.stopCh = make(chan struct{})
-	t.running = true
+	defer func() {
+		_ = ws.Close()
+		// valclient sends events on an unbuffered channel. Drain a pending
+		// send so its reader can observe the closed socket and exit too.
+		for {
+			select {
+			case <-events:
+			case <-readDone:
+				return
+			}
+		}
+	}()
 
 	fired := false
 	phaseTicker := time.NewTicker(TICK_SPEED_SECONDS * time.Second)
 	defer phaseTicker.Stop()
 	for {
 		select {
-		case <-t.stopCh:
+		case <-stopCh:
 			t.restoreOriginalLoadout()
+			return
+		case <-readDone:
 			return
 		case <-phaseTicker.C:
 			t.checkForMatchEnd()
@@ -225,19 +259,7 @@ func (t *Ticker) Start() {
 				identity = selectedPreset.Identity
 			}
 
-			var sprays []presets.SpraySlotV1
-			if len(selectedVariant.Sprays) > 0 {
-				sprays = selectedVariant.Sprays
-			} else if len(selectedPreset.Sprays) > 0 {
-				sprays = selectedPreset.Sprays
-			}
-
-			expressions := append([]presets.ExpressionSlotV1{}, selectedPreset.Expressions...)
-			expressions = append(expressions, selectedPreset.Flexes...)
-			if len(selectedVariant.Expressions) > 0 || len(selectedVariant.Flexes) > 0 {
-				expressions = append([]presets.ExpressionSlotV1{}, selectedVariant.Expressions...)
-				expressions = append(expressions, selectedVariant.Flexes...)
-			}
+			sprays, expressions := autoPresetExpressions(selectedPreset, selectedVariant)
 
 			originalLoadout, err := t.Val.GetPlayerLoadout()
 			if err != nil {
@@ -319,10 +341,14 @@ func (t *Ticker) restoreOriginalLoadout() {
 }
 
 func (t *Ticker) Stop() {
-	if !t.running {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.stopCh == nil {
 		return
 	}
 	close(t.stopCh)
-	t.running = false
+	t.stopCh = nil
+	// The worker releases running after its restoration and reader finish.
+	// A replacement must not overlap that cleanup.
 	slog.Info("ticker stopped")
 }

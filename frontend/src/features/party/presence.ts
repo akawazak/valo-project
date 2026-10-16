@@ -1,32 +1,60 @@
 import type { SocialPresence } from "@/services/api";
+import { queueLabel } from "@/lib/gameMeta";
 
 export type PresenceState = "game" | "online" | "away" | "dnd" | "mobile" | "chat" | "offline";
 
+/** Queue display name from valorant-api.com (see useQueues to load it). */
 export function queueName(id = "") {
-    const labels: Record<string, string> = {
-        competitive: "Competitive",
-        unrated: "Unrated",
-        swiftplay: "Swiftplay",
-        spikerush: "Spike Rush",
-        deathmatch: "Deathmatch",
-        teamdeathmatch: "Team Deathmatch",
-        hurm: "Team Deathmatch",
-        custom: "Custom Game",
-        newmap: "New Map",
-        snowball: "Snowball Fight",
-        escalation: "Escalation",
-        replication: "Replication",
-        training: "The Range",
-    };
-    return labels[id.toLowerCase()] || id;
+    return queueLabel(id);
 }
 
 function normalizedProduct(product = "") {
     return product.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
+/** Match fields can linger in Riot presence after returning to menus. */
+export function friendMatchActivity(presence: SocialPresence, mapNames: Record<string, string> = {}) {
+    if (normalizedProduct(presence.product) !== "valorant" || presenceState(presence) !== "game" || presence.state?.toUpperCase() !== "INGAME") return null;
+    const map = presence.mapId ? mapNames[presence.mapId.toLowerCase()] : undefined;
+    const validScore = presence.scoreAvailable === true
+        && Number.isInteger(presence.allyScore) && Number.isInteger(presence.enemyScore)
+        && presence.allyScore! >= 0 && presence.enemyScore! >= 0;
+    return {
+        detail: [map, queueName(presence.queueId)].filter(Boolean).join(" · ") || "VALORANT",
+        score: validScore ? `${presence.allyScore}–${presence.enemyScore}` : null,
+    };
+}
+
+/** Small brand-coloured mark for the game a friend is in (not official logos). */
+export function gameMark(presence: SocialPresence): { key: string; code: string; color: string; label: string } | null {
+    const product = normalizedProduct(presence.product);
+    if (presenceState(presence) === "mobile" || RIOT_MOBILE_PRODUCTS.has(product)) return { key: "mobile", code: "", color: "#4aa8e0", label: "Riot Mobile" };
+    const marks: Record<string, { key: string; code: string; color: string }> = {
+        valorant: { key: "valorant", code: "VAL", color: "#ff4655" },
+        league_of_legends: { key: "lol", code: "LoL", color: "#c8aa6e" },
+        leagueoflegends: { key: "lol", code: "LoL", color: "#c8aa6e" },
+        lol: { key: "lol", code: "LoL", color: "#c8aa6e" },
+        teamfight_tactics: { key: "tft", code: "TFT", color: "#e8a33d" },
+        teamfighttactics: { key: "tft", code: "TFT", color: "#e8a33d" },
+        tft: { key: "tft", code: "TFT", color: "#e8a33d" },
+        legends_of_runeterra: { key: "lor", code: "LoR", color: "#3fc6d9" },
+        legendsofruneterra: { key: "lor", code: "LoR", color: "#3fc6d9" },
+        lor: { key: "lor", code: "LoR", color: "#3fc6d9" },
+        wild_rift: { key: "wr", code: "WR", color: "#5aa9ff" },
+        wildrift: { key: "wr", code: "WR", color: "#5aa9ff" },
+        "2xko": { key: "2xko", code: "2XKO", color: "#b06cff" },
+        project_l: { key: "2xko", code: "2XKO", color: "#b06cff" },
+    };
+    const mark = marks[product];
+    return mark ? { ...mark, label: productName(product) } : null;
+}
+
+/** Product IDs the Riot Mobile app reports; "ritoplus" appears while the app is backgrounded (Away). */
+const RIOT_MOBILE_PRODUCTS = new Set(["ritoplus", "riot_mobile", "riotmobile"]);
+
 export function productName(product = "") {
     const normalized = normalizedProduct(product);
+    if (RIOT_MOBILE_PRODUCTS.has(normalized)) return "Riot Mobile";
     const labels: Record<string, string> = {
         valorant: "VALORANT",
         league_of_legends: "League of Legends",
@@ -45,6 +73,7 @@ export function productName(product = "") {
         riotclient: "Riot Client",
         riot_client: "Riot Client",
         riot_chat: "Riot Client",
+        keystone: "Riot Client",
     };
     if (labels[normalized]) return labels[normalized];
     if (!normalized) return "Riot";
@@ -78,7 +107,7 @@ export function presenceSectionRank(label: string) {
 }
 
 function isClientProduct(product = "") {
-    return ["", "riotclient", "riot_client", "riot_chat"].includes(normalizedProduct(product));
+    return ["", "riotclient", "riot_client", "riot_chat", "keystone"].includes(normalizedProduct(product));
 }
 
 export function isGamePresence(presence: SocialPresence) {
@@ -90,21 +119,44 @@ export function presenceState(presence: SocialPresence): PresenceState {
     const availability = (presence.availability || "").toLowerCase();
     const product = normalizedProduct(presence.product);
     if (state === "OFFLINE") return "offline";
+    if (availability === "mobile") return "mobile";
+    // Riot sets "dnd" automatically during matches, so being in a game wins.
+    if (/(PREGAME|INGAME|IN_GAME|MATCH|CHAMP.?SELECT|GAMESTART)/.test(state)) return "game";
     if (availability === "away") return "away";
     if (availability === "dnd") return "dnd";
-    if (availability === "mobile") return "mobile";
-    if (/(PREGAME|INGAME|IN_GAME|MATCH|CHAMP.?SELECT|GAMESTART)/.test(state)) return "game";
     if (isClientProduct(product)) {
         return /pc|windows|desktop/i.test(presence.platform || "") ? "chat" : "offline";
     }
     return "online";
 }
 
+/** "5m ago", "3h ago", "2d ago", or a date once it is over a month old. */
+export function lastOnlineLabel(at: number, now = Date.now()) {
+    const minutes = Math.max(0, Math.floor((now - at) / 60_000));
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 31) return `${days}d ago`;
+    return `on ${new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(at).getFullYear() === new Date(now).getFullYear() ? undefined : "numeric" })}`;
+}
+
+/** Newest known activity for an offline friend, for sorting. */
+export function lastActiveAt(presence: SocialPresence | undefined) {
+    return Math.max(presence?.lastOnlineAt || 0, presence?.lastMatchAt || 0);
+}
+
 export function presenceActivity(presence: SocialPresence) {
     const kind = presenceState(presence);
     const product = normalizedProduct(presence.product);
     const productLabel = productName(product);
-    if (kind === "offline") return { label: "Offline", detail: "" };
+    if (kind === "offline") {
+        // Prefer whichever is newer: seen online, or the start of their latest match.
+        const played = (presence.lastMatchAt || 0) > (presence.lastOnlineAt || 0);
+        const at = played ? presence.lastMatchAt : presence.lastOnlineAt;
+        return { label: "Offline", detail: at ? `${played ? "Last played" : "Last online"} ${lastOnlineLabel(at)}` : "" };
+    }
     if (kind === "chat") return { label: "Riot Client", detail: "Online on PC" };
     if (kind === "mobile") return { label: "Mobile", detail: "Riot Mobile" };
 

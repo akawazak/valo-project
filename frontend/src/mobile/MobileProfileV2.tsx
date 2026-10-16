@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useData } from "@/context/DataContext";
+import { queueLabel, useQueues } from "@/lib/gameMeta";
 import RRHistoryChart from "@/features/profile/RRHistoryChart";
 import {
   getAgentStats,
@@ -68,17 +69,6 @@ function tierName(value?: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-const QUEUE_LABELS: Record<string, string> = {
-  competitive: "Competitive",
-  unrated: "Unrated",
-  swiftplay: "Swiftplay",
-  spikerush: "Spike Rush",
-  deathmatch: "Deathmatch",
-  teamdeathmatch: "Team Deathmatch",
-  premier: "Premier",
-  custom: "Custom",
-};
-
 function RankProgress({
   snapshots,
   tiers,
@@ -139,7 +129,8 @@ function MatchRow({
   const player = match.localPlayer;
   const agent = agents.find((item) => item.uuid.toLowerCase() === player?.characterId?.toLowerCase());
   const map = maps.get(match.mapID?.toLowerCase());
-  const isDeathmatch = match.queueID.toLowerCase() === "deathmatch";
+  // Free-for-all modes finish without team rounds.
+  const isDeathmatch = match.blueRoundsWon + match.redRoundsWon === 0;
   const score = player?.teamId?.toLowerCase() === "red"
     ? `${match.redRoundsWon}–${match.blueRoundsWon}`
     : `${match.blueRoundsWon}–${match.redRoundsWon}`;
@@ -165,7 +156,7 @@ function MatchRow({
         </span>
         <span className="mv2-match-result">
           <strong>{isDeathmatch ? `${player?.kills ?? 0} kills` : score}</strong>
-          <small>{isDeathmatch ? "Free for all · Deathmatch" : `${match.win ? "Victory" : "Defeat"} · ${formatQueue(match.queueID)}`}</small>
+          <small>{isDeathmatch ? `Free for all · ${formatQueue(match.queueID)}` : `${match.win ? "Victory" : "Defeat"} · ${formatQueue(match.queueID)}`}</small>
           <em>{playedAt} · {duration}m</em>
         </span>
         <span className="mv2-match-kda">
@@ -212,7 +203,8 @@ function MatchDetailsSheet({
   const map = maps.get(match.mapID?.toLowerCase());
   const opposingTeam = localTeam.toLowerCase() === "red" ? "Blue" : "Red";
   const score = `${scoreForTeam(match, localTeam)}–${scoreForTeam(match, opposingTeam)}`;
-  const isDeathmatch = match.queueID.toLowerCase() === "deathmatch";
+  // Free-for-all modes finish without team rounds.
+  const isDeathmatch = match.blueRoundsWon + match.redRoundsWon === 0;
 
   const renderPlayer = (player: ProfilePlayerStats) => {
     const agent = agents.find((item) => item.uuid.toLowerCase() === player.characterId?.toLowerCase());
@@ -491,13 +483,14 @@ export default function MobileProfileV2({
     };
   }, [matches]);
 
+  const queues = useQueues();
   const summary = overview?.seasonSummary;
   const hasMatchStats = Boolean((summary?.matches || 0) > 0 || matches.length > 0);
   const currentSeasonId = matches[0]?.seasonId || "";
   const queueOptions = useMemo(
     () => Array.from(new Set(matches.map((match) => match.queueID).filter(Boolean)))
-      .sort((left, right) => (QUEUE_LABELS[left.toLowerCase()] || left).localeCompare(QUEUE_LABELS[right.toLowerCase()] || right)),
-    [matches],
+      .sort((left, right) => (queueLabel(left, queues) || left).localeCompare(queueLabel(right, queues) || right)),
+    [matches, queues],
   );
   const filteredMatches = useMemo(
     () => matches.filter((match) =>
@@ -634,7 +627,7 @@ export default function MobileProfileV2({
           <button type="button" className={!queueFilter ? "selected" : ""} onClick={() => { setQueueFilter(""); setShowAll(false); }}>All</button>
           {queueOptions.map((queue) => (
             <button type="button" className={queueFilter === queue ? "selected" : ""} key={queue} onClick={() => { setQueueFilter(queue); setShowAll(false); }}>
-              {QUEUE_LABELS[queue.toLowerCase()] || formatQueue(queue)}
+              {formatQueue(queue)}
             </button>
           ))}
           {currentSeasonId ? (
