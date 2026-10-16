@@ -2722,7 +2722,7 @@ export function RoundReview({
                 id: "low-damage-losses",
                 tone: "danger",
                 label: "Low-damage losses",
-                value: `${lowDamageLosses.length} rounds`,
+                value: `${lowDamageLosses.length} round${lowDamageLosses.length === 1 ? "" : "s"}`,
                 ratio: lostRounds ? lowDamageLosses.length / lostRounds : undefined,
                 ring: lostRounds ? `${lowDamageLosses.length}/${lostRounds}` : String(lowDamageLosses.length),
                 evidence: `Below 100 recorded damage in rounds ${lowDamageLosses.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
@@ -2735,7 +2735,7 @@ export function RoundReview({
                 id: "economy-deficit",
                 tone: "neutral",
                 label: "Economy pressure",
-                value: `${weakBuyLosses.length} disadvantaged losses`,
+                value: `${weakBuyLosses.length} disadvantaged loss${weakBuyLosses.length === 1 ? "" : "es"}`,
                 ratio: lostRounds ? weakBuyLosses.length / lostRounds : undefined,
                 ring: String(weakBuyLosses.length),
                 evidence: `Your team entered those rounds at least 3,000 loadout value behind.`,
@@ -2791,7 +2791,7 @@ export function RoundReview({
                 id: "riot-status",
                 tone: "danger",
                 label: "Riot status flags",
-                value: `${flaggedFacts.length} rounds`,
+                value: `${flaggedFacts.length} round${flaggedFacts.length === 1 ? "" : "s"}`,
                 ratio: flaggedFacts.length / roundFacts.length,
                 ring: String(flaggedFacts.length),
                 evidence: `AFK, penalty, or spawn state was reported in rounds ${flaggedFacts.map((fact) => fact.round.roundNum + 1).join(", ")}.`,
@@ -2816,6 +2816,7 @@ export function RoundReview({
             tag?: "Opening" | "Trade" | "Ace" | "Alt fire";
             means?: string;
             meansIcon?: string;
+            meansAbility?: boolean;
             ally: boolean;
             you: boolean;
         }> = events.map((event, index) => {
@@ -2842,6 +2843,7 @@ export function RoundReview({
                 tag: enemyKills.get(killer) === 5 ? "Ace" : index === 0 ? "Opening" : traded ? "Trade" : event.secondaryFire ? "Alt fire" : undefined,
                 means: ability?.name || usedWeapon?.displayName,
                 meansIcon: ability?.icon || usedWeapon?.displayIcon,
+                meansAbility: Boolean(ability?.icon),
                 ally: sideOf(killer) === localTeam,
                 you: killer === localSubject || victim === localSubject,
             };
@@ -3044,7 +3046,7 @@ export function RoundReview({
             </section>
 
             <section className={rr.cell}>
-                <header className={rr.label}><b>02</b><span>Kill feed</span><small>{selectedKills.length} kill{selectedKills.length === 1 ? "" : "s"} · click one to see it</small></header>
+                <header className={rr.label}><b>02</b><span>Kill feed</span><small>{selectedKills.length} kill{selectedKills.length === 1 ? "" : "s"} · click one to see it</small>{activeKill && onInspectFight ? <button type="button" className={rr.inspect} onClick={() => onInspectFight(activeKill)}>Open on Map ↗</button> : null}</header>
                 {roundFeed.length ? <ol className={rr.feed} aria-label={`Round ${round.roundNum + 1} events`}>
                     {roundFeed.map((item) => <li key={item.id} data-kind={item.kind} data-side={item.ally ? "ally" : "enemy"} data-active={item.id === activeMomentId || undefined} onClick={() => { setReplaying(false); pickMoment(item.id); }}>
                         <time>{item.time ? fmtLength(item.time) : "0:00"}</time>
@@ -3055,8 +3057,7 @@ export function RoundReview({
                         </> : <span className={rr.text}>{item.text}</span>}
                         <span className={rr.means}>
                             {item.tag ? <em>{item.tag}</em> : item.kind !== "kill" ? <em data-kind={item.kind}>{item.kind === "plant" ? "Plant" : "Defuse"}</em> : null}
-                            {item.kind === "kill" ? item.meansIcon ? <Image src={item.meansIcon} alt={item.means || ""} title={item.means} width={64} height={20} unoptimized /> : <small>{item.means}</small> : null}
-                            {item.kind === "kill" && onInspectFight ? <button type="button" className={rr.inspect} aria-label={`Open ${playerName(item.actor)} eliminating ${playerName(item.target)} on the Map tab`} title="Open on the Map tab" onClick={(click) => { click.stopPropagation(); const event = selectedKills.find((entry) => fightEventKey(entry) === item.id); if (event) onInspectFight(event); }}>↗</button> : null}
+                            {item.kind === "kill" ? item.meansIcon ? <span className={rr.icon} data-ability={item.meansAbility || undefined} title={item.means}><Image src={item.meansIcon} alt={item.means || ""} width={72} height={22} unoptimized /></span> : <small>{item.means}</small> : null}
                         </span>
                     </li>)}
                 </ol> : <p className={rr.note}>No kills or objective actions were recorded for this round.</p>}
