@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import ProfileLoading from "./ProfileLoading";
+import rr from "./RoundReview.module.css";
 import { isProfileSyncReady, loadProfileSnapshot } from "./profileSnapshot";
 import { useData } from "@/context/DataContext";
 import type { Weapon } from "@/lib/types";
@@ -2538,6 +2539,9 @@ export function RoundReview({
     const localSubject = local?.subject.toLowerCase() || "";
     const localTeam = local?.teamId.toLowerCase() || "";
     const [selectedRoundNum, setSelectedRoundNum] = useState(initialRoundNum ?? rounds[0]?.roundNum ?? 0);
+    // Which feed moment the map replays. It belongs to one round; another round starts at its first kill.
+    const [moment, setMoment] = useState<{ round: number; id: string } | null>(null);
+    const [replaying, setReplaying] = useState(false);
     const weaponById = useMemo(() => new Map(weapons.map((weapon) => [weapon.uuid.toLowerCase(), weapon])), [weapons]);
     const selectedRound = rounds.find((round) => round.roundNum === selectedRoundNum) || rounds[0];
     const selectedStat = selectedRound?.playerStats?.find((stat) => stat.subject.toLowerCase() === localSubject);
@@ -2811,6 +2815,7 @@ export function RoundReview({
             text?: string;
             tag?: "Opening" | "Trade" | "Ace" | "Alt fire";
             means?: string;
+            meansIcon?: string;
             ally: boolean;
             you: boolean;
         }> = events.map((event, index) => {
@@ -2836,6 +2841,7 @@ export function RoundReview({
                 target: victim,
                 tag: enemyKills.get(killer) === 5 ? "Ace" : index === 0 ? "Opening" : traded ? "Trade" : event.secondaryFire ? "Alt fire" : undefined,
                 means: ability?.name || usedWeapon?.displayName,
+                meansIcon: ability?.icon || usedWeapon?.displayIcon,
                 ally: sideOf(killer) === localTeam,
                 you: killer === localSubject || victim === localSubject,
             };
@@ -2885,172 +2891,189 @@ export function RoundReview({
         return `${selectedFact.stat ? `${selectedFact.damage} damage` : "Damage unavailable"}, ${selectedFact.kills.length} kills, ${selectedFact.assists.length} assists, and ${selectedFact.deaths.length ? "a death" : "survival"} were recorded.`;
     })();
 
+    const activeMomentId = moment?.round === selectedRound?.roundNum && roundFeed.some((item) => item.id === moment.id)
+        ? moment.id
+        : roundFeed.find((item) => item.kind === "kill")?.id ?? null;
+    const activeMomentIndex = roundFeed.findIndex((item) => item.id === activeMomentId);
+    const pickMoment = useCallback((id: string) => {
+        if (selectedRound) setMoment({ round: selectedRound.roundNum, id });
+    }, [selectedRound]);
+    useEffect(() => {
+        if (!replaying) return;
+        if (activeMomentIndex >= roundFeed.length - 1) { setReplaying(false); return; }
+        const timer = window.setTimeout(() => pickMoment(roundFeed[activeMomentIndex + 1].id), 1600);
+        return () => window.clearTimeout(timer);
+    }, [replaying, activeMomentIndex, roundFeed, pickMoment]);
+    useEffect(() => { setReplaying(false); }, [selectedRoundNum]);
+
     if (!rounds.length) return <div className={s.mapAnalyticsEmpty}><strong>Round evidence is not cached yet.</strong><span>Open this view while connected to refresh the match details.</span></div>;
 
     const round = selectedRound!;
-    const roundIndex = rounds.findIndex((entry) => entry.roundNum === round.roundNum);
-    const stepRound = (delta: number) => {
-        const next = rounds[roundIndex + delta];
-        if (next) setSelectedRoundNum(next.roundNum);
-    };
     const outcome = (round.roundResult || round.roundCeremony || "").replace(/bomb/gi, "Spike");
     const outcomeTime = round.bombDefuser && round.defuseRoundTime ? ` at ${fmtLength(round.defuseRoundTime)}` : "";
     const allyLoadout = selectedFact?.allyLoadout || 0;
     const enemyLoadout = selectedFact?.enemyLoadout || 0;
-    const loadoutScale = Math.max(allyLoadout, enemyLoadout, 1) / 0.92;
-    const loadoutDiff = allyLoadout - enemyLoadout;
-    const spikeMarker = (kind: "plant" | "defuse", location?: { x: number; y: number }, time?: number) => {
-        if (!canPlot || !location || (!location.x && !location.y)) return null;
-        const p = plot(location.x, location.y);
-        return <i className={s.rvSpike} data-event={kind} title={`Spike ${kind === "plant" ? "planted" : "defused"}${time ? ` at ${fmtLength(time)}` : ""}`} style={{ left: `${p.left}%`, top: `${p.top}%` }}>{kind === "plant" ? "P" : "D"}</i>;
-    };
-    const calloutAt = (x: number, y: number) => {
-        let nearest: MapMeta["callouts"][number] | undefined;
-        let best = Infinity;
-        for (const callout of map?.callouts || []) {
-            const distance = (callout.x - x) ** 2 + (callout.y - y) ** 2;
-            if (distance < best) { best = distance; nearest = callout; }
-        }
-        return nearest ? mapCalloutLabel(nearest) : "";
-    };
-    const placesOf = (events: MatchKillEvent[]) => [...new Set(events.map((event) => calloutAt(event.victimX, event.victimY)).filter(Boolean))].join(", ");
-    const killPlaces = placesOf(localKills);
-    const deathPlace = placesOf(localDeaths);
-    const plantPlace = round.plantLocation && (round.plantLocation.x || round.plantLocation.y) ? calloutAt(round.plantLocation.x, round.plantLocation.y) : "";
-    const avatar = (subject: string, ally: boolean) => {
-        const icon = agentIcon(subject);
-        return <span className={s.rvAvatar} data-side={ally ? "ally" : "enemy"} data-you={subject === localSubject || undefined}>{icon ? <Image src={icon} alt="" width={24} height={24} unoptimized /> : null}</span>;
-    };
+    const killById = new Map(selectedKills.map((event) => [fightEventKey(event), event]));
+    const activeMoment = activeMomentIndex >= 0 ? roundFeed[activeMomentIndex] : undefined;
+    const activeKill = activeMoment?.kind === "kill" ? killById.get(activeMoment.id) : undefined;
+    const snapshot = activeKill ?? roundFeed.slice(0, activeMomentIndex + 1).reverse().map((item) => killById.get(item.id)).find(Boolean);
+    const earlierKills = roundFeed.slice(0, activeMomentIndex).map((item) => killById.get(item.id)).filter((event): event is MatchKillEvent => Boolean(event) && event !== activeKill);
+    const deadBefore = new Set(earlierKills.map((event) => event.victim.toLowerCase()));
+    const replayReady = canPlot && Boolean(snapshot?.playerLocations?.length);
+    const killerSpot = activeKill?.playerLocations?.find((location) => location.subject?.toLowerCase() === activeKill.killer.toLowerCase());
+    const momentTime = (item: (typeof roundFeed)[number]) => item.time || 0;
+    // Spread the moments over the part of the round they happened in, with a little room at the end.
+    const roundLength = Math.max(20_000, ...roundFeed.map(momentTime)) * 1.08;
 
-    return <section className={s.rv}>
-        <div className={s.rvPicker}>
-            <div className={s.rvRounds} role="group" aria-label="Rounds">
-                {roundFacts.map((fact) => {
-                    const phaseStart = fact.round.roundNum === 12 ? "half" : fact.round.roundNum === 24 ? "overtime" : undefined;
-                    const note = fact.kills.length
-                        ? `${fact.kills.length} kill${fact.kills.length === 1 ? "" : "s"}`
-                        : fact.deaths.length ? "Died" : fact.stat ? "Survived" : "";
-                    const first = fact.openingResult === "won" ? " · first blood" : fact.openingResult === "lost" ? " · first" : "";
-                    const factCeremony = ROUND_CEREMONIES[fact.round.roundCeremony || ""];
-                    return <button key={fact.round.roundNum} type="button" aria-pressed={fact.round.roundNum === round.roundNum} data-result={fact.won ? "win" : "loss"} data-active={fact.round.roundNum === round.roundNum || undefined} data-phase-start={phaseStart} onClick={() => setSelectedRoundNum(fact.round.roundNum)} title={`Round ${fact.round.roundNum + 1}: ${fact.won ? "won" : "lost"}, score ${fact.yourScore}–${fact.enemyScore}`}>
-                        <b>R{fact.round.roundNum + 1}</b>
-                        <span>{fact.yourScore}–{fact.enemyScore}</span>
-                        <small>{factCeremony ? <em data-won={fact.won || undefined}>{factCeremony}</em> : null}{factCeremony && (note || first) ? " · " : ""}{note}{factCeremony ? "" : first}</small>
-                    </button>;
-                })}
-            </div>
-            <div className={s.rvStep}>
-                <span>Round {roundIndex + 1} of {rounds.length}</span>
-                <button type="button" aria-label="Previous round" disabled={roundIndex <= 0} onClick={() => stepRound(-1)}>‹</button>
-                <button type="button" aria-label="Next round" disabled={roundIndex >= rounds.length - 1} onClick={() => stepRound(1)}>›</button>
-            </div>
+    // Halves follow the mode: Riot's red team attacks first and sides swap at the half, then every overtime round.
+    const queueId = (detail.matchInfo.queueID || "").toLowerCase();
+    const halfLength = queueId === "swiftplay" ? 4 : queueId === "spikerush" ? 3 : 12;
+    const startsOnAttack = localTeam === "red";
+    const halves = [
+        { key: "first", label: startsOnAttack ? "Attack" : "Defense", side: startsOnAttack ? "attack" : "defense", facts: roundFacts.filter((fact) => fact.round.roundNum < halfLength) },
+        { key: "second", label: startsOnAttack ? "Defense" : "Attack", side: startsOnAttack ? "defense" : "attack", facts: roundFacts.filter((fact) => fact.round.roundNum >= halfLength && fact.round.roundNum < halfLength * 2) },
+        { key: "overtime", label: "Overtime", side: "overtime", facts: roundFacts.filter((fact) => fact.round.roundNum >= halfLength * 2) },
+    ].filter((half) => half.facts.length);
+    const finalFact = roundFacts[roundFacts.length - 1];
+    const yourAgent = agents[local?.characterId.toLowerCase() || ""];
+    const roundTags = selectedSignals.filter((signal) => signal.tone === "good" || signal.tone === "objective").slice(0, 3).map((signal) => signal.label);
+
+    return <section className={rr.root} style={map?.splash ? { "--rr-map": `url("${map.splash}")` } as CSSProperties : undefined}>
+        {reviewInsights.length ? <div className={rr.review} aria-label="Match review">
+            {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={`${insight.tip}${insight.evidence ? `\n${insight.evidence}` : ""}`}>
+                <svg viewBox="0 0 40 40" aria-hidden="true">
+                    <circle cx="20" cy="20" r="16" />
+                    {insight.ratio !== undefined ? <circle cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.max(1, Math.round(insight.ratio * 100))} 100`} transform="rotate(-90 20 20)" /> : null}
+                </svg>
+                <span><small>{insight.label}</small><b>{insight.value}</b></span>
+            </article>)}
+        </div> : null}
+        {!hasDetailedRounds ? <p className={rr.note}>Objective timeline only. Buys and damage need a refresh while connected.</p> : null}
+
+        <div className={rr.rounds} role="group" aria-label="Rounds">
+            {halves.map((half) => <div key={half.key} className={rr.half} data-side={half.side} style={{ flexGrow: half.facts.length }}>
+                <span className={rr.halfLabel}>{half.label}</span>
+                <div>{half.facts.map((fact) => <button
+                    key={fact.round.roundNum}
+                    type="button"
+                    className={rr.round}
+                    data-win={fact.won || undefined}
+                    aria-pressed={fact.round.roundNum === round.roundNum}
+                    onClick={() => setSelectedRoundNum(fact.round.roundNum)}
+                    title={`Round ${fact.round.roundNum + 1}: ${fact.won ? "won" : "lost"}, ${fact.kills.length} kill${fact.kills.length === 1 ? "" : "s"}${fact.deaths.length ? ", died" : ""}, score ${fact.yourScore}–${fact.enemyScore}`}
+                >
+                    <span className={rr.plate} aria-hidden="true">{fact.won ? "W" : "L"}</span>
+                    <b>{fact.round.roundNum + 1}</b>
+                    <span className={rr.pips} aria-hidden="true">{fact.kills.slice(0, 5).map((event) => <i key={fightEventKey(event)} />)}</span>
+                </button>)}</div>
+            </div>)}
+            {finalFact ? <div className={rr.final} title="Final score"><b>{finalFact.yourScore}</b><span>–</span><b data-them>{finalFact.enemyScore}</b></div> : null}
         </div>
-        {!hasDetailedRounds ? <p className={s.rvNote}>Objective timeline only — buys and damage need a refresh while connected.</p> : null}
 
-        <div className={s.rvBody}>
-            <figure className={s.rvMap}>
-                <div className={s.rvMapCanvas} data-result={roundWon ? "win" : "loss"}>
-                    {map?.displayIcon ? <Image src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="320px" unoptimized /> : null}
-                    {round.plantSite ? <b className={s.rvMapSite} aria-hidden="true">{round.plantSite}</b> : null}
-                    <span className={s.rvMapLabel}><strong>{map?.name || "Map"}</strong>{round.plantSite ? <small>{round.plantSite} site</small> : null}</span>
-                    {canPlot && map!.callouts.map((callout, index) => {
-                        const { left, top } = mapCalloutPlotPosition(map!, callout);
-                        return <span key={`${callout.superRegion}-${callout.name}-${index}`} className={s.rvCallout} style={{ left: `${left * 100}%`, top: `${top * 100}%` }} aria-hidden="true">{mapCalloutLabel(callout)}</span>;
-                    })}
-                    {canPlot && selectedEvents.map((event) => {
-                        const position = plot(event.victimX, event.victimY);
-                        const isKill = event.killer.toLowerCase() === localSubject;
-                        return onInspectFight ? <button key={fightEventKey(event)} type="button" className={s.rvMarker} data-kind={isKill ? "kill" : "death"} style={{ left: `${position.left}%`, top: `${position.top}%` }} onClick={() => onInspectFight(event)} aria-label={`Inspect your ${isKill ? "kill" : "death"} at ${fmtLength(event.roundTime)} on the map`}>{isKill ? "+" : "×"}</button> : <span key={fightEventKey(event)} className={s.rvMarker} data-kind={isKill ? "kill" : "death"} style={{ left: `${position.left}%`, top: `${position.top}%` }} title={isKill ? "Your kill" : "Your death"}>{isKill ? "+" : "×"}</span>;
-                    })}
-                    {spikeMarker("plant", round.plantLocation, round.plantRoundTime)}
-                    {spikeMarker("defuse", round.defuseLocation, round.defuseRoundTime)}
-                </div>
-                <figcaption>
-                    {localKills.length ? <span><i data-kind="kill" />Your kill{localKills.length === 1 ? "" : "s"}{killPlaces ? <b>{killPlaces}</b> : null}</span> : null}
-                    {localDeaths.length ? <span><i data-kind="death" />Your death{deathPlace ? <b>{deathPlace}</b> : null}</span> : null}
-                    {round.bombPlanter ? <span><i data-kind="plant" />Plant{plantPlace ? <b>{plantPlace}</b> : null}</span> : null}
-                    {round.bombDefuser ? <span><i data-kind="defuse" />Defuse</span> : null}
-                    {!selectedEvents.length && !round.bombPlanter ? <span>No fights involving you</span> : null}
-                </figcaption>
-            </figure>
+        <div className={rr.hero} data-win={roundWon || undefined}>
+            {yourAgent?.full ? <Image className={rr.agent} src={yourAgent.full} alt="" width={290} height={290} unoptimized /> : null}
+            <div className={rr.title}>
+                <h3>Round {round.roundNum + 1} <em>· {roundWon ? "won" : "lost"}</em></h3>
+                <p>{outcome ? <>{outcome}{outcomeTime}</> : "Round recorded"}{selectedFact ? <> · score {selectedFact.yourScore}–{selectedFact.enemyScore}</> : null}{roundTags.map((tag) => <b key={tag}> · {tag}</b>)}</p>
+            </div>
+            <dl className={rr.stats}>
+                <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
+                <div><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
+                <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
+                <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div>
+                {selectedStat ? <div className={rr.gun}>
+                    <dt>{weapon?.displayName || "No weapon"}{selectedStat.economy.armor ? "" : " · no armor"}{headshots ? ` · ${headshots} HS` : ""}</dt>
+                    <dd>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={110} height={34} unoptimized /> : null}</dd>
+                </div> : null}
+            </dl>
+        </div>
 
-            <div className={s.rvStory}>
-                <header className={s.rvTitle}>
-                    <span aria-hidden="true">{String(round.roundNum + 1).padStart(2, "0")}</span>
-                    <div>
-                        <p><strong>{roundWon ? "Round won" : "Round lost"}</strong>{outcome ? <small>{outcome}{outcomeTime}</small> : null}</p>
-                        {selectedSignals.length ? <div className={s.rvChips}>{selectedSignals.map((signal) => <span key={signal.label} data-tone={signal.tone}><i />{signal.label}</span>)}</div> : null}
+        <div className={rr.frame}>
+            <section className={rr.cell}>
+                <header className={rr.label}><b>01</b><span>Replay</span><small>{activeMoment ? fmtLength(activeMoment.time) : ""}</small></header>
+                <div className={rr.mapWrap}>
+                    <div className={rr.map} data-replay={replayReady || undefined}>
+                        {map?.displayIcon ? <Image className={rr.mapImage} src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="560px" unoptimized /> : null}
+                        {canPlot && map!.callouts.map((callout, index) => {
+                            const { left, top } = mapCalloutPlotPosition(map!, callout);
+                            return <span key={`${callout.superRegion}-${callout.name}-${index}`} className={rr.callout} style={{ left: `${left * 100}%`, top: `${top * 100}%` }} aria-hidden="true">{mapCalloutLabel(callout)}</span>;
+                        })}
+                        {replayReady && activeKill && killerSpot ? (() => {
+                            const from = plot(killerSpot.x, killerSpot.y);
+                            const to = plot(activeKill.victimX, activeKill.victimY);
+                            return <svg className={rr.shot} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" data-side={activeMoment?.ally ? "ally" : "enemy"}>
+                                <line x1={from.left} y1={from.top} x2={to.left} y2={to.top} />
+                            </svg>;
+                        })() : null}
+                        {replayReady ? earlierKills.map((event) => {
+                            const spot = plot(event.victimX, event.victimY);
+                            return <i key={`dead-${fightEventKey(event)}`} className={rr.dead} data-side={teamOf(event.victim.toLowerCase()) === localTeam ? "ally" : "enemy"} style={{ left: `${spot.left}%`, top: `${spot.top}%` }} title={`${playerName(event.victim.toLowerCase())} died at ${fmtLength(event.roundTime)}`}>×</i>;
+                        }) : null}
+                        {replayReady ? snapshot!.playerLocations!.map((location) => {
+                            const subject = location.subject?.toLowerCase() || "";
+                            if (!subject || deadBefore.has(subject)) return null;
+                            const victim = subject === activeKill?.victim.toLowerCase();
+                            const spot = victim ? plot(activeKill!.victimX, activeKill!.victimY) : plot(location.x, location.y);
+                            const icon = agentIcon(subject);
+                            const shown = victim || subject === activeKill?.killer.toLowerCase() || subject === localSubject;
+                            return <span key={subject} className={rr.player} data-side={teamOf(subject) === localTeam ? "ally" : "enemy"} data-you={subject === localSubject || undefined} data-victim={victim || undefined} data-killer={subject === activeKill?.killer.toLowerCase() || undefined} style={{ left: `${spot.left}%`, top: `${spot.top}%`, backgroundImage: icon ? `url("${icon}")` : undefined }} title={playerName(subject)}>
+                                {shown ? <b>{playerName(subject)}</b> : null}
+                            </span>;
+                        }) : null}
+                        {canPlot && !replayReady && selectedEvents.map((event) => {
+                            const position = plot(event.victimX, event.victimY);
+                            const isKill = event.killer.toLowerCase() === localSubject;
+                            return <span key={fightEventKey(event)} className={rr.marker} data-kind={isKill ? "kill" : "death"} style={{ left: `${position.left}%`, top: `${position.top}%` }} title={isKill ? "Your kill" : "Your death"}>{isKill ? "+" : "×"}</span>;
+                        })}
+                        {canPlot && round.plantLocation && (round.plantLocation.x || round.plantLocation.y) ? (() => { const p = plot(round.plantLocation!.x, round.plantLocation!.y); return <i className={rr.spike} style={{ left: `${p.left}%`, top: `${p.top}%` }} title={`Spike planted${round.plantRoundTime ? ` at ${fmtLength(round.plantRoundTime)}` : ""}`}>◆</i>; })() : null}
+                        {!canPlot ? <p className={rr.note}>This map has no position data yet.</p> : null}
                     </div>
-                </header>
-                {roundFeed.length ? <ol className={s.rvFeed} aria-label={`Round ${round.roundNum + 1} events`}>
-                    {roundFeed.map((item) => <li key={item.id} data-kind={item.kind} data-side={item.ally ? "ally" : "enemy"} data-tag={item.tag} data-you={item.you || undefined}>
-                        <time>{item.time ? fmtLength(item.time) : "0:00"}</time>
-                        <i aria-hidden="true" />
-                        <span className={s.rvWho}>
-                            {avatar(item.actor, item.ally)}
-                            <strong>{playerName(item.actor)}</strong>
-                            {item.target ? <>
-                                <em aria-label="eliminated">→</em>
-                                <span className={s.rvVictim} data-you={item.target === localSubject || undefined}>{avatar(item.target, !item.ally)}{playerName(item.target)}</span>
-                            </> : <span className={s.rvVictim}>{item.text}</span>}
-                        </span>
-                        <span className={s.rvTag}>{item.tag ? <em>{item.tag}</em> : null}{item.kind === "kill" ? item.means : "Spike"}{item.kind === "kill" && onInspectFight ? <button type="button" className={s.rvInspect} aria-label={`Inspect ${playerName(item.actor)} eliminating ${playerName(item.target)} at ${fmtLength(item.time)} on the map`} onClick={() => { const event = selectedKills.find(event => fightEventKey(event) === item.id); if (event) onInspectFight(event); }}>Map ↗</button> : null}</span>
-                    </li>)}
-                </ol> : <p className={s.rvNote}>No kills or objective actions were recorded for this round.</p>}
-            </div>
+                </div>
+                {roundFeed.length ? <div className={rr.scrub}>
+                    <button type="button" aria-label="Previous moment" disabled={activeMomentIndex <= 0} onClick={() => { setReplaying(false); pickMoment(roundFeed[activeMomentIndex - 1].id); }}>‹</button>
+                    <button type="button" className={rr.play} aria-label={replaying ? "Pause the round" : "Play the round"} aria-pressed={replaying} onClick={() => {
+                        if (!replaying && activeMomentIndex >= roundFeed.length - 1) pickMoment(roundFeed[0].id);
+                        setReplaying((value) => !value);
+                    }}>{replaying ? "❚❚" : "▶"}</button>
+                    <div className={rr.track}>
+                        <span style={{ width: `${activeMoment ? (momentTime(activeMoment) / roundLength) * 100 : 0}%` }} />
+                        {roundFeed.map((item) => <button key={item.id} type="button" data-kind={item.kind} data-side={item.ally ? "ally" : "enemy"} data-active={item.id === activeMomentId || undefined} style={{ left: `${(momentTime(item) / roundLength) * 100}%` }} onClick={() => { setReplaying(false); pickMoment(item.id); }} aria-label={`${fmtLength(item.time)} ${item.kind === "kill" ? `${playerName(item.actor)} eliminated ${playerName(item.target)}` : item.text}`} />)}
+                    </div>
+                    <button type="button" aria-label="Next moment" disabled={activeMomentIndex >= roundFeed.length - 1} onClick={() => { setReplaying(false); pickMoment(roundFeed[activeMomentIndex + 1].id); }}>›</button>
+                </div> : null}
+            </section>
 
-            <aside className={s.rvPanel} data-result={roundWon ? "win" : "loss"}>
-                <section>
-                    <h4>Your round</h4>
-                    <dl className={s.rvKda}>
-                        <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
-                        <div data-bad={localDeaths.length > 0 || undefined}><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
-                        <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
-                        <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div>
-                    </dl>
-                </section>
-                {allyLoadout || enemyLoadout || selectedStat ? <section className={s.rvEconomy}>
-                    <h4>Economy{allyLoadout && enemyLoadout && loadoutDiff ? <small data-tone={loadoutDiff > 0 ? "good" : "danger"}>{loadoutDiff > 0 ? "+" : "−"}{Math.abs(loadoutDiff).toLocaleString()}</small> : null}</h4>
-                    <div className={s.rvBar} data-side="ally"><p><span>Your team</span><b>{allyLoadout ? allyLoadout.toLocaleString() : "—"}</b></p><i><span style={{ width: `${(allyLoadout / loadoutScale) * 100}%` }} /></i></div>
-                    <div className={s.rvBar} data-side="enemy"><p><span>Enemy</span><b>{enemyLoadout ? enemyLoadout.toLocaleString() : "—"}</b></p><i><span style={{ width: `${(enemyLoadout / loadoutScale) * 100}%` }} /></i></div>
-                    {selectedStat ? <div className={s.rvGun}>
-                        <span>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={96} height={28} unoptimized /> : null}</span>
-                        <p>
-                            <strong>{weapon?.displayName || (selectedStat.economy.weapon ? "Weapon recorded" : "No weapon")}</strong>{selectedStat.economy.armor ? " · armor" : " · no armor"}
-                            <small>{(selectedStat.economy.spent || 0).toLocaleString()} spent · {(selectedStat.economy.remaining || 0).toLocaleString()} left{headshots ? ` · ${headshots} HS` : ""}</small>
-                        </p>
-                    </div> : null}
-                </section> : null}
-                <section className={s.rvTakeaway}>
-                    <h4>Takeaway</h4>
+            <section className={rr.cell}>
+                <header className={rr.label}><b>02</b><span>Kill feed</span><small>{selectedKills.length} kill{selectedKills.length === 1 ? "" : "s"} · click one to see it</small></header>
+                {roundFeed.length ? <ol className={rr.feed} aria-label={`Round ${round.roundNum + 1} events`}>
+                    {roundFeed.map((item) => <li key={item.id} data-kind={item.kind} data-side={item.ally ? "ally" : "enemy"} data-active={item.id === activeMomentId || undefined} onClick={() => { setReplaying(false); pickMoment(item.id); }}>
+                        <time>{item.time ? fmtLength(item.time) : "0:00"}</time>
+                        <span className={rr.who}><i style={{ backgroundImage: agentIcon(item.actor) ? `url("${agentIcon(item.actor)}")` : undefined }} /><b data-you={item.actor === localSubject || undefined}>{playerName(item.actor)}</b></span>
+                        {item.target ? <>
+                            <svg className={rr.arrow} viewBox="0 0 24 24" aria-label="eliminated"><path d="M5 12h12M13 7l5 5-5 5" /></svg>
+                            <span className={rr.who} data-victim><i style={{ backgroundImage: agentIcon(item.target) ? `url("${agentIcon(item.target)}")` : undefined }} /><b data-you={item.target === localSubject || undefined}>{playerName(item.target)}</b></span>
+                        </> : <span className={rr.text}>{item.text}</span>}
+                        <span className={rr.means}>
+                            {item.tag ? <em>{item.tag}</em> : item.kind !== "kill" ? <em data-kind={item.kind}>{item.kind === "plant" ? "Plant" : "Defuse"}</em> : null}
+                            {item.kind === "kill" ? item.meansIcon ? <Image src={item.meansIcon} alt={item.means || ""} title={item.means} width={64} height={20} unoptimized /> : <small>{item.means}</small> : null}
+                            {item.kind === "kill" && onInspectFight ? <button type="button" className={rr.inspect} aria-label={`Open ${playerName(item.actor)} eliminating ${playerName(item.target)} on the Map tab`} title="Open on the Map tab" onClick={(click) => { click.stopPropagation(); const event = selectedKills.find((entry) => fightEventKey(entry) === item.id); if (event) onInspectFight(event); }}>↗</button> : null}
+                        </span>
+                    </li>)}
+                </ol> : <p className={rr.note}>No kills or objective actions were recorded for this round.</p>}
+                <div className={rr.take}>
+                    <b>Takeaway</b>
                     <p>{selectedRoundRead}</p>
-                </section>
-            </aside>
+                    {allyLoadout || enemyLoadout ? <small>Team buy <span data-side="ally">{allyLoadout.toLocaleString()}</span> vs <span data-side="enemy">{enemyLoadout.toLocaleString()}</span>{selectedStat ? ` · you spent ${(selectedStat.economy.spent || 0).toLocaleString()}, kept ${(selectedStat.economy.remaining || 0).toLocaleString()}` : ""}</small> : null}
+                </div>
+            </section>
         </div>
 
-        {turningPoints.length ? <section className={s.rvTurning}>
-            <header><h4>Turning points</h4><small>{turningPoints.length} moments that changed the match</small></header>
-            <div>{turningPoints.map((point) => <button key={`${point.roundNum}-${point.title}`} type="button" data-tone={point.tone} data-active={point.roundNum === round.roundNum || undefined} onClick={() => setSelectedRoundNum(point.roundNum)}>
-                <i />
-                <span><strong>{point.title}</strong><small>{point.detail}</small></span>
+        {turningPoints.length ? <section className={rr.turning}>
+            <header className={rr.label}><b>03</b><span>Turning points</span><small>{turningPoints.length} moments that changed the match</small></header>
+            <div>{turningPoints.map((point) => <button key={`${point.roundNum}-${point.title}`} type="button" data-tone={point.tone} aria-pressed={point.roundNum === round.roundNum} onClick={() => setSelectedRoundNum(point.roundNum)}>
+                <strong>{point.title}</strong><small>{point.detail}</small>
             </button>)}</div>
         </section> : null}
-
-        <section className={s.rvReview}>
-            <header><h4>Match review</h4><small>From recorded round data</small></header>
-            {reviewInsights.length ? <div className={s.rvReviewGrid}>
-                {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={insight.evidence}>
-                    <svg viewBox="0 0 40 40" aria-hidden="true">
-                        <circle cx="20" cy="20" r="16" />
-                        {insight.ratio !== undefined ? <circle cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.round(insight.ratio * 100)} 100`} transform="rotate(-90 20 20)" /> : null}
-                        <text x="20" y="20" dominantBaseline="central" textAnchor="middle">{insight.ring}</text>
-                    </svg>
-                    <span>{insight.label}</span>
-                    <strong>{insight.value}</strong>
-                    <p>{insight.tip}</p>
-                </article>)}
-            </div> : <p className={s.rvNote}>This match does not contain enough detailed round evidence for reliable tips yet.</p>}
-        </section>
     </section>;
 }
 
