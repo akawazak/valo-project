@@ -77,6 +77,7 @@ type PortableUpdateState = {
     version?: string | null;
     message?: string | null;
     checkedAt?: number | null;
+    progress?: number | null;
 };
 
 export default function Home() {
@@ -264,6 +265,7 @@ function HomeApp() {
     const [portableUpdate, setPortableUpdate] = useState<PortableUpdateState | null>(null);
     const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
     const [isUpdating, setIsUpdating] = useState(false);
+    const [updateProgress, setUpdateProgress] = useState<number | null>(null);
     const [updateReady, setUpdateReady] = useState(false);
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
@@ -404,8 +406,76 @@ function HomeApp() {
         setShowReleaseNotes(false);
     }, []);
 
+    // The player hears about a downloaded update once per version, wherever they are in the app.
+    const notifiedUpdateRef = useRef("");
+    const notificationAccountRef = useRef(activeAccount?.puuid);
+    useEffect(() => { notificationAccountRef.current = activeAccount?.puuid; });
+    const announceUpdateReady = useCallback((version?: string | null) => {
+        if (!version || notifiedUpdateRef.current === version) return;
+        notifiedUpdateRef.current = version;
+        publishAppNotification({
+            id: `update-ready:${version}`,
+            kind: "system",
+            title: `VantaVault ${version} is ready`,
+            body: "Restart VantaVault to finish updating. You can also do it from Settings → About.",
+            accountPuuid: notificationAccountRef.current,
+        });
+    }, []);
+
+    const applyPortableStatus = useCallback((next: PortableUpdateState | null) => {
+        setPortableUpdate(next);
+        setLastUpdateCheck(next?.checkedAt ?? null);
+        setUpdateCheckError(next?.status === "failed" ? next.message || "Portable update failed." : null);
+        if (next?.status === "ready") announceUpdateReady(next.version);
+    }, [announceUpdateReady]);
+
+    // Installer build: an update downloads in the background as soon as it is found.
+    // Restarting installs it, so nothing replaces the app while it is in use.
+    const downloadingRef = useRef(false);
+    const updateReadyRef = useRef(false);
+    const downloadUpdate = useCallback(async (update: Update) => {
+        if (downloadingRef.current || updateReadyRef.current) return;
+        downloadingRef.current = true;
+        setIsUpdating(true);
+        setUpdateProgress(0);
+        let total = 0;
+        let received = 0;
+        try {
+            await update.download((event) => {
+                if (event.event === "Started") total = event.data.contentLength ?? 0;
+                if (event.event === "Progress" && total) {
+                    received += event.data.chunkLength;
+                    setUpdateProgress(Math.min(99, Math.round((received * 100) / total)));
+                }
+            });
+            updateReadyRef.current = true;
+            setUpdateReady(true);
+            announceUpdateReady(update.version);
+        } catch (error) {
+            setUpdateCheckError(error instanceof Error ? error.message : String(error || "The update download failed."));
+        } finally {
+            downloadingRef.current = false;
+            setIsUpdating(false);
+            setUpdateProgress(null);
+        }
+    }, [announceUpdateReady]);
+
+    const takeInstallerCheck = useCallback((update: Update | null) => {
+        setAvailableUpdate(update);
+        setLastUpdateCheck(Date.now());
+        setUpdateCheckError(null);
+        if (update) void downloadUpdate(update);
+    }, [downloadUpdate]);
+
+    const startPortableCheck = useCallback(async () => {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("portable_start_update");
+        applyPortableStatus(await invoke<PortableUpdateState>("portable_update_status").catch(() => null));
+    }, [applyPortableStatus]);
+
     useEffect(() => {
         let alive = true;
+        let backgroundCheck = 0;
         const checkForUpdates = async () => {
             try {
                 if (isAndroid) {
@@ -427,20 +497,16 @@ function HomeApp() {
                     const portableStatus = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
                     if (!alive) return;
                     setAvailableUpdate(null);
-                    setPortableUpdate(portableStatus);
-                    setLastUpdateCheck(portableStatus?.checkedAt ?? null);
-                    setUpdateCheckError(
-                        portableStatus?.status === "failed"
-                            ? portableStatus.message || "Portable update failed."
-                            : null
-                    );
+                    applyPortableStatus(portableStatus);
+                    // Check shortly after startup, once the app has settled, so startup stays quick.
+                    backgroundCheck = window.setTimeout(() => {
+                        if (alive) void startPortableCheck().catch(() => undefined);
+                    }, 15_000);
                     return;
                 }
                 const update = await check();
                 if (!alive) return;
-                setAvailableUpdate(update ?? null);
-                setLastUpdateCheck(Date.now());
-                setUpdateCheckError(null);
+                takeInstallerCheck(update ?? null);
             } catch (error) {
                 if (!alive) return;
                 setAppVersion((current) => current || "dev");
@@ -451,38 +517,26 @@ function HomeApp() {
         void checkForUpdates();
         return () => {
             alive = false;
+            window.clearTimeout(backgroundCheck);
         };
-    }, [isAndroid]);
+    }, [isAndroid, applyPortableStatus, startPortableCheck, takeInstallerCheck]);
 
     const checkForUpdatesNow = useCallback(async () => {
         if (isAndroid) return;
-        if (isCheckingUpdate) return;
+        if (isCheckingUpdate || updateReadyRef.current) return;
         setIsCheckingUpdate(true);
         setUpdateCheckError(null);
         try {
             if (isPortable) {
-                const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("portable_start_update");
-                const portableStatus = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
-                setPortableUpdate(portableStatus);
-                setLastUpdateCheck(portableStatus?.checkedAt ?? Date.now());
-                setUpdateCheckError(
-                    portableStatus?.status === "failed"
-                        ? portableStatus.message || "Portable update failed."
-                        : null
-                );
+                await startPortableCheck();
                 return;
             }
             const [{ getVersion }, { check }] = await Promise.all([
                 import("@tauri-apps/api/app"),
                 import("@tauri-apps/plugin-updater"),
             ]);
-            const version = await getVersion();
-            setAppVersion(version);
-            const update = await check();
-            setAvailableUpdate(update ?? null);
-            setLastUpdateCheck(Date.now());
-            setUpdateCheckError(null);
+            setAppVersion(await getVersion());
+            takeInstallerCheck((await check()) ?? null);
         } catch (error) {
             setUpdateCheckError(
                 error instanceof Error ? error.message : String(error || "Update check failed.")
@@ -490,7 +544,7 @@ function HomeApp() {
         } finally {
             setIsCheckingUpdate(false);
         }
-    }, [isAndroid, isCheckingUpdate, isPortable]);
+    }, [isAndroid, isCheckingUpdate, isPortable, startPortableCheck, takeInstallerCheck]);
 
     useEffect(() => {
         const status = portableUpdate?.status;
@@ -500,9 +554,7 @@ function HomeApp() {
             const { invoke } = await import("@tauri-apps/api/core");
             const next = await invoke<PortableUpdateState>("portable_update_status").catch(() => null);
             if (!alive || !next) return;
-            setPortableUpdate(next);
-            setLastUpdateCheck(next.checkedAt ?? null);
-            setUpdateCheckError(next.status === "failed" ? next.message || "Portable update failed." : null);
+            applyPortableStatus(next);
         };
         void refresh();
         const interval = window.setInterval(() => void refresh(), 750);
@@ -510,65 +562,49 @@ function HomeApp() {
             alive = false;
             window.clearInterval(interval);
         };
-    }, [isPortable, portableUpdate?.status]);
+    }, [isPortable, portableUpdate?.status, applyPortableStatus]);
 
-    // Background periodic re-check every 6 hours so users get notified
-    // even if they leave the app running for days.
+    // Re-check every 6 hours so a long-running app still picks up new releases.
     useEffect(() => {
         if (isAndroid) return;
-        if (isPortable) return;
         const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
         const handle = setInterval(() => {
             void checkForUpdatesNow();
         }, SIX_HOURS_MS);
         return () => clearInterval(handle);
-    }, [checkForUpdatesNow, isAndroid, isPortable]);
+    }, [checkForUpdatesNow, isAndroid]);
 
+    // Manual retry when the background download failed.
     const installUpdate = useCallback(async () => {
-        if (!availableUpdate || isUpdating) return;
-        setIsUpdating(true);
-        try {
-            // Keep the backend available if the download itself fails. Once
-            // the signed bundle is local, release the sidecar file lock before
-            // NSIS replaces the installed backend executable.
-            await availableUpdate.download();
-            const { invoke } = await import("@tauri-apps/api/core");
-            await invoke("prepare_for_update");
-            await availableUpdate.install();
-            setUpdateReady(true);
-            setAvailableUpdate(null);
-            // On Windows, the updater launches the NSIS installer and the
-            // installed app must reopen from its stable install location.
-            // Relaunching immediately avoids returning users to an older
-            // process or shortcut after a successful update.
-            const { relaunch } = await import("@tauri-apps/plugin-process");
-            await relaunch();
-        } catch (error) {
-            setErrorMessage(error instanceof Error ? error.message : String(error || "Update failed."));
-            setShowErrorModal(true);
-        } finally {
-            setIsUpdating(false);
-        }
-    }, [availableUpdate, isUpdating, setErrorMessage, setShowErrorModal]);
+        if (availableUpdate) await downloadUpdate(availableUpdate);
+    }, [availableUpdate, downloadUpdate]);
 
     const restartForUpdate = useCallback(async () => {
         try {
+            const { invoke } = await import("@tauri-apps/api/core");
             if (isPortable) {
-                const { invoke } = await import("@tauri-apps/api/core");
                 await invoke("portable_restart_to_update");
                 return;
+            }
+            if (updateReadyRef.current && availableUpdate) {
+                // Release the backend's file lock before the installer replaces it, then install the
+                // downloaded, signature-checked update and reopen from the installed location.
+                setIsUpdating(true);
+                await invoke("prepare_for_update");
+                await availableUpdate.install();
             }
             const { relaunch } = await import("@tauri-apps/plugin-process");
             await relaunch();
         } catch (error) {
+            setIsUpdating(false);
             setErrorMessage(
                 error instanceof Error
-                    ? `Couldn't relaunch the app: ${error.message}. Please close and reopen VantaVault manually.`
-                    : "Couldn't relaunch the app. Please close and reopen VantaVault manually."
+                    ? `Couldn't finish the update: ${error.message}. Please close and reopen VantaVault.`
+                    : "Couldn't finish the update. Please close and reopen VantaVault."
             );
             setShowErrorModal(true);
         }
-    }, [isPortable, setErrorMessage, setShowErrorModal]);
+    }, [availableUpdate, isPortable, setErrorMessage, setShowErrorModal]);
 
     const loadInitialData = useCallback(async () => {
         const owner = accountOwner ? { puuid: accountOwner, region: activeAccount?.region || "" } : undefined;
@@ -1082,6 +1118,7 @@ function HomeApp() {
                 updateCheckError={updateCheckError}
                 isUpdating={isPortable ? portableUpdate?.status === "checking" || portableUpdate?.status === "downloading" : isUpdating}
                 updateReady={isPortable ? portableUpdate?.status === "ready" : updateReady}
+                updateProgress={isPortable ? portableUpdate?.progress ?? null : updateProgress}
                 onInstallUpdate={installUpdate}
                 onRestartForUpdate={restartForUpdate}
                 onCheckForUpdates={checkForUpdatesNow}

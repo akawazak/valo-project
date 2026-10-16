@@ -90,6 +90,8 @@ interface SettingsModalProps {
     updateCheckError: string | null;
     isUpdating: boolean;
     updateReady: boolean;
+    /** Download progress, 0-100, while an update downloads in the background. */
+    updateProgress?: number | null;
     onInstallUpdate: () => void;
     onRestartForUpdate: () => void;
     onCheckForUpdates: () => void;
@@ -157,6 +159,7 @@ export default function SettingsModal({
     updateCheckError,
     isUpdating,
     updateReady,
+    updateProgress = null,
     onInstallUpdate,
     onRestartForUpdate,
     onCheckForUpdates,
@@ -478,66 +481,43 @@ export default function SettingsModal({
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Updates</div>
                                     <div className="settings-item-desc">
-                                        {isPortable
-                                            ? isUpdating
-                                            ? "Downloading and verifying the portable update in the background..."
+                                        {isCheckingUpdate
+                                            ? "Checking for updates..."
+                                            : isUpdating
+                                            ? `Downloading version ${updateVersion || "?"} in the background. You can keep using VantaVault.`
                                             : updateReady
-                                            ? `Version ${updateVersion || "?"} is ready. Restart VantaVault to switch to it.`
-                                            : updateCheckError
-                                            ? `Couldn't reach the portable update server: ${updateCheckError}`
-                                            : "Check for a new portable release. Updates remain portable - no setup wizard."
-                                            : isCheckingUpdate
-                                            ? "Contacting the update server..."
-                                            : updateReady
-                                            ? "An update is ready - restart VantaVault to apply it."
+                                            ? `Version ${updateVersion || "?"} is downloaded and verified. Restart VantaVault to finish updating.`
                                             : updateAvailable
-                                            ? `Version ${updateVersion || "?"} is available for download.`
+                                            ? `Version ${updateVersion || "?"} is available. The download didn't finish, so try again.`
                                             : updateCheckError
-                                            ? `Couldn't reach the update server: ${updateCheckError}`
-                                            : "Manually check for new releases. VantaVault also checks automatically every 6 hours."}
+                                            ? updateCheckError
+                                            : `${lastUpdateCheck ? "You're on the latest version. " : ""}Updates download by themselves and install when you restart${isPortable ? ", no setup needed" : ""}.`}
                                         <span className="settings-update-lastcheck settings-update-lastcheck--inline">
                                             Last check: {formatRelativeTime(lastUpdateCheck)}
                                         </span>
                                     </div>
                                 </div>
                                 <div className="settings-item-control">
-                                    {isPortable && updateReady ? (
+                                    {updateReady ? (
                                         <button
                                             type="button"
                                             className="settings-update-now-btn is-primary"
                                             onClick={onRestartForUpdate}
+                                            disabled={isUpdating}
                                         >
-                                            Restart now
+                                            {isUpdating ? "Restarting..." : "Restart to update"}
                                         </button>
-                                    ) : isPortable && isUpdating ? (
+                                    ) : isUpdating && !isCheckingUpdate ? (
                                         <button type="button" className="settings-update-now-btn" disabled>
-                                            Downloading...
-                                        </button>
-                                    ) : isPortable ? (
-                                        <button
-                                            type="button"
-                                            className="settings-update-now-btn"
-                                            onClick={onCheckForUpdates}
-                                            disabled={isCheckingUpdate}
-                                        >
-                                            {isCheckingUpdate ? "Checking..." : "Check for updates"}
-                                        </button>
-                                    ) : updateReady ? (
-                                        <button
-                                            type="button"
-                                            className="settings-update-now-btn is-primary"
-                                            onClick={onRestartForUpdate}
-                                        >
-                                            Restart now
+                                            {updateProgress !== null ? `Downloading ${updateProgress}%` : "Downloading..."}
                                         </button>
                                     ) : updateAvailable ? (
                                         <button
                                             type="button"
                                             className="settings-update-now-btn is-primary"
                                             onClick={onInstallUpdate}
-                                            disabled={isUpdating}
                                         >
-                                            {isUpdating ? "Updating..." : `Download v${updateVersion || "?"}`}
+                                            Retry download
                                         </button>
                                     ) : (
                                         <button
@@ -546,7 +526,7 @@ export default function SettingsModal({
                                             onClick={onCheckForUpdates}
                                             disabled={isCheckingUpdate}
                                         >
-                                            {isCheckingUpdate ? "Checking..." : "Check for updates"}
+                                            {isCheckingUpdate ? "Checking..." : updateCheckError ? "Try again" : "Check for updates"}
                                         </button>
                                     )}
                                 </div>

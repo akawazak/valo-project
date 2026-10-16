@@ -1392,8 +1392,30 @@ struct PortableUpdateState {
     checked_at: Option<u64>,
     #[serde(default)]
     pending_path: Option<String>,
+    /// Which updated portable EXE the launcher hands over to. Kept on every write.
+    #[serde(default)]
+    active_path: Option<String>,
     #[serde(default)]
     apply_on_exit: bool,
+    #[serde(default)]
+    progress: Option<u8>,
+}
+
+/// A check or download that has not reported for this long is treated as interrupted.
+const PORTABLE_UPDATE_STALE_MS: u64 = 10 * 60 * 1000;
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn portable_update_in_progress(state: &PortableUpdateState, now: u64) -> bool {
+    matches!(state.status.as_str(), "checking" | "downloading")
+        && state
+            .checked_at
+            .is_some_and(|at| now.saturating_sub(at) < PORTABLE_UPDATE_STALE_MS)
 }
 
 fn portable_update_state_path() -> Result<PathBuf, String> {
@@ -1421,7 +1443,9 @@ fn write_portable_update_state(state: &PortableUpdateState) -> Result<(), String
     let path = portable_update_state_path()?;
     let bytes = serde_json::to_vec(state)
         .map_err(|error| format!("Could not save portable update status: {error}"))?;
-    std::fs::write(path, bytes)
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, bytes)
+        .and_then(|_| std::fs::rename(&temporary, &path))
         .map_err(|error| format!("Could not save portable update status: {error}"))
 }
 
@@ -1440,18 +1464,15 @@ fn portable_start_update() -> Result<(), String> {
     }
 
     let current = read_portable_update_state()?;
-    if matches!(current.status.as_str(), "checking" | "downloading") {
+    // A downloaded update stays ready; a crashed check is retried once it goes stale.
+    if current.status == "ready" || portable_update_in_progress(&current, now_millis()) {
         return Ok(());
     }
 
     write_portable_update_state(&PortableUpdateState {
         status: "checking".to_string(),
-        checked_at: Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        ),
+        checked_at: Some(now_millis()),
+        active_path: current.active_path,
         ..Default::default()
     })?;
 
@@ -2488,10 +2509,37 @@ mod tests {
     use super::{
         backend_request_needs_riot_secrets, build_riot_cookie_header, cleanup_stale_sessions,
         forwardable_backend_header, is_allowed_backend_request, is_valid_login_session_id,
-        prune_session_cache, recover_session_swap_artifacts, selected_backend_account,
-        session_cache_size, strip_chromium_host_key_hash, valid_riot_account_id,
+        portable_update_in_progress, prune_session_cache, recover_session_swap_artifacts,
+        selected_backend_account, session_cache_size, strip_chromium_host_key_hash,
+        valid_riot_account_id, PortableUpdateState, PORTABLE_UPDATE_STALE_MS,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn portable_update_state_keeps_the_active_copy_and_recovers_stale_checks() {
+        let saved: PortableUpdateState = serde_json::from_str(
+            r#"{"status":"applied","version":"0.5.30","activePath":"C:/vv/updates/new.exe","checkedAt":1}"#,
+        )
+        .unwrap();
+        let round_trip = serde_json::to_string(&saved).unwrap();
+        assert!(round_trip.contains(r#""activePath":"C:/vv/updates/new.exe""#));
+
+        let checking = |at: u64| PortableUpdateState {
+            status: "downloading".to_string(),
+            checked_at: Some(at),
+            ..Default::default()
+        };
+        let now = 50 * 60 * 1000;
+        assert!(portable_update_in_progress(&checking(now - 1_000), now));
+        assert!(!portable_update_in_progress(
+            &checking(now - PORTABLE_UPDATE_STALE_MS),
+            now
+        ));
+        assert!(!portable_update_in_progress(
+            &PortableUpdateState::default(),
+            now
+        ));
+    }
 
     #[test]
     fn accepts_only_safe_riot_account_ids_for_credential_targets() {
