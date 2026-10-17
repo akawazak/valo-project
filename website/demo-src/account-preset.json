@@ -1,0 +1,166 @@
+{
+  "uuid": "demo-hett",
+  "name": "hett",
+  "loadout": {
+    "1baa85b4-4c70-1284-64bb-6481dfc3bb4e": {
+      "skinId": "431799d6-4e79-bdf2-573d-4cbc8112982e",
+      "skinLevelId": "1145f28a-4973-633c-f9fe-cca21aee1a1a",
+      "chromaId": "c12acbe7-423a-2bfa-1fe6-7a855b93494e",
+      "charmID": "c05b209d-4a09-d7a3-634b-9bb23d63348d",
+      "charmLevelID": "c0046e9d-48f1-0006-896a-3c8336a16c9e"
+    },
+    "29a0cfab-485b-f5d5-779a-b59f85e204a8": {
+      "skinId": "34a8c776-47a9-e15d-fe4d-0c86b2cefb43",
+      "skinLevelId": "bd9fb713-4785-1369-c570-61aeaa044848",
+      "chromaId": "3fdd7b30-44a8-82fe-2678-2f8994f2670f"
+    },
+    "2f59173c-4bed-b6c3-2191-dea9b58be9c7": {
+      "skinId": "d0873346-4e42-238e-0251-a399eff11f2f",
+      "skinLevelId": "e088f24f-446f-8b07-6fe8-009ce8711e53",
+      "chromaId": "3954c0a0-45b3-d347-745c-0eb6301610fa"
+    },
+    "410b2e0b-4ceb-1321-1727-20858f7f3477": {
+      "skinId": "f6cdb486-426f-d890-d78b-a88d0640ce61",
+      "skinLevelId": "d538eac0-4990-f84d-93bf-4d9ce09bf75a",
+      "chromaId": "0e5b5221-4f91-2c76-2330-8883ab13b51f"
+    },
+    "42da8ccc-40d5-affc-beec-15aa47b42eda": {
+      "skinId": "e7ec70cb-4e16-255e-caa4-fea9a78c8084",
+      "skinLevelId": "9184b2aa-4b81-556b-b1e7-39b007fc8634",
+      "chromaId": "81ea2bb0-40ab-616c-55d1-308a1f7ba7d8"
+    },
+    "44d4e95c-4157-0037-81b2-17841bf2e8e3": {
+      "skinId": "67f86b80-4411-b593-7ecc-01839637cb85",
+      "skinLevelId": "5a993777-400e-0d61-e351-eb98652ac9d3",
+      "chromaId": "0eda257a-4463-dea3-7da7-749066da15f1"
+    },
+    "462080d1-4035-2937-7c09-27aa2a5c27a7": {
+      "skinId": "1bc10f1f-4140-cd8c-4cc6-64b1983b04f2",
+      "skinLevelId": "010c738b-4ac0-b4ea-d6d9-cca5a62133c1",
+      "chromaId": "85200e05-4ee9-2fb8-ac87-0183db2100b9"
+    },
+    "4ade7faa-4cf1-8376-95ef-39884480959b": {
+      "skinId": "2a049f35-4bcd-af25-21fd-ec942e2d5007",
+      "skinLevelId": "99b7b761-41b3-e26c-ceeb-b9a1c3a67736",
+      "chromaId": "e2f5a979-4e9a-f931-7f52-d99f0ec4a61b"
+    },
+    "55d8a0f4-4274-ca67-fe2c-06ab45efdf58": {
+      "skinId": "d40afbc0-4cb6-d8ec-a5e8-23afdfdc9dc3",
+      "skinLevelId": "8fe097f6-433f-546e-aaf2-5a99fed23576",
+      "chromaId": "8c219c09-479c-6f0e-a8cc-668f4a9e9d22"
+    },
+    "5f0aaf7a-4289-3998-d5ff-eb9a5cf7ef5c": {
+      "skinId": "30e38547-4d4b-f0bd-6416-deab45d74493",
+      "skinLevelId": "d642b410-40f1-dc0d-175c-3bb0a85a2b86",
+      "chromaId": "52374aea-4db0-3dd2-105d-a9a9031867af"
+    },
+    "63e6c2b6-4a8e-869c-3d4c-e38355226584": {
+      "skinId": "ca1a3ade-4809-35ea-cd96-b687149f4945",
+      "skinLevelId": "2940f37c-40cf-4094-fa0a-e9bfc62c0f5c",
+      "chromaId": "d2a6429f-4d7a-a70f-3a0e-7f8303773b7a"
+    },
+    "8db0a1bf-4a50-832a-4566-faaaa6d250ca": {
+      "skinId": "61d99a36-4033-0fa9-2c94-71aaf901e120",
+      "skinLevelId": "45a2214f-4730-8c89-b0a4-a7a2b5125ac8",
+      "chromaId": "44b01f26-4569-0161-681f-e2a677f317ff"
+    },
+    "910be174-449b-c412-ab22-d0873436b21b": {
+      "skinId": "e1fed5e0-4369-7de0-2545-b6ab4c0f7369",
+      "skinLevelId": "63c72bcf-4b55-bb68-f9ce-469a5adf1668",
+      "chromaId": "d34ae01e-468e-5e37-448b-f491dbe1f0ef"
+    },
+    "9c82e19d-4575-0200-1a81-3eacf00cf872": {
+      "skinId": "e06fd704-4171-b5ea-5028-d3befb62107d",
+      "skinLevelId": "0aed84f4-4370-7b05-bb9a-05a1048f7133",
+      "chromaId": "8eca8228-44f7-e09f-639a-2c9a19126e65"
+    },
+    "a03b24d3-4319-996d-0f8c-94bbfba1dfc7": {
+      "skinId": "c5993299-40fc-208a-55e8-388f73328053",
+      "skinLevelId": "18948d97-4e43-decb-e16b-ad81487b2434",
+      "chromaId": "1f6b749b-4229-2348-787d-4aaca27e4d41",
+      "charmID": "4726b751-493b-3c00-825d-539d75df4db9",
+      "charmLevelID": "60586b16-4fed-d337-ce84-4b8beebea636"
+    },
+    "ae3de142-4d85-2547-dd26-4e90bed35cf7": {
+      "skinId": "6ff0d2cf-488e-c565-d118-da9bd4ac1e3c",
+      "skinLevelId": "5f0ecd25-464c-f8d1-5e72-e0922da5b311",
+      "chromaId": "87ab2342-436e-5460-9cb3-18aee9fccbfc"
+    },
+    "c4883e50-4494-202c-3ec3-6b8a9284f00b": {
+      "skinId": "dbc02d43-4a71-573c-1beb-c1b7e0274b74",
+      "skinLevelId": "c6ad0bef-4121-f0f2-1e24-9797be0b4ceb",
+      "chromaId": "a81274c3-46b7-1993-d623-a0804862e8ac",
+      "charmID": "c05b209d-4a09-d7a3-634b-9bb23d63348d",
+      "charmLevelID": "c0046e9d-48f1-0006-896a-3c8336a16c9e"
+    },
+    "e336c6b8-418d-9340-d77f-7a9e4cfe0702": {
+      "skinId": "bfd9e773-4376-1f6a-98f2-dc93f0c0607c",
+      "skinLevelId": "65c2c8d3-4473-4f74-305c-ff90fbf318e8",
+      "chromaId": "47cd743f-4fab-88b9-5341-668bc62c0983"
+    },
+    "ec845bf4-4f79-ddda-a3da-0db3774b2794": {
+      "skinId": "138d9143-4b8c-9201-2fe0-97b4c2b94402",
+      "skinLevelId": "9a224aac-4541-4eeb-68e9-adb3f8da6fbc",
+      "chromaId": "0167cd57-405b-a65d-f9b5-eab82eacc1f3"
+    },
+    "ee8e8d15-496b-07ac-e5f6-8fae5d4c7b1a": {
+      "skinId": "fe7cd972-4651-2865-257b-51846321ad61",
+      "skinLevelId": "5f21cca5-4360-2b61-42c0-7595304cba99",
+      "chromaId": "08fdca4f-44a3-ffe9-63ef-e0ab6e98dcfb"
+    },
+    "f7e1b454-4ad4-1063-ec0a-159e56b58941": {
+      "skinId": "21f25ca2-46e0-da6c-295c-f09d294b2d8d",
+      "skinLevelId": "77acb671-4260-d01b-a5eb-bbb17b52d7fd",
+      "chromaId": "503251c6-4a25-4d87-7413-b89dab34e088"
+    }
+  },
+  "agents": [
+    "a3bfb853-43b2-7238-a4f1-ad90e9e46bcc",
+    "8e253930-4c05-31dd-1b6c-968525494517"
+  ],
+  "identity": {
+    "playerCardId": "920957bd-4517-2e67-3402-92a0b782c678",
+    "playerTitleId": "d200078b-477c-bfb6-af5c-16b19cdfd801"
+  },
+  "sprays": [
+    {
+      "equipSlotId": "0812b14c-4120-ed47-5cc2-c6b49b951408",
+      "sprayId": "aa2c316b-4017-0576-c8bb-398407df94fa"
+    },
+    {
+      "equipSlotId": "04cbc83a-43cf-aa2a-ee40-a09869679f22",
+      "sprayId": "35c6df99-46a7-3da4-a9d2-4f85092265a4"
+    },
+    {
+      "equipSlotId": "ee063def-4a6b-8254-8e39-16a7eb108e42",
+      "sprayId": "0bab517a-4c55-8a5e-da8d-e59c56a741ed"
+    },
+    {
+      "equipSlotId": "d2b4e425-4a7b-3b3b-81d3-356c9a33bb58",
+      "sprayId": "01210480-4587-61e4-271e-d5b71acc3da6"
+    }
+  ],
+  "expressions": [
+    {
+      "typeId": "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
+      "assetId": "aa2c316b-4017-0576-c8bb-398407df94fa",
+      "slotIndex": 0
+    },
+    {
+      "typeId": "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
+      "assetId": "35c6df99-46a7-3da4-a9d2-4f85092265a4",
+      "slotIndex": 1
+    },
+    {
+      "typeId": "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
+      "assetId": "0bab517a-4c55-8a5e-da8d-e59c56a741ed",
+      "slotIndex": 2
+    },
+    {
+      "typeId": "d5f120f8-ff8c-4aac-92ea-f2b5acbe9475",
+      "assetId": "01210480-4587-61e4-271e-d5b71acc3da6",
+      "slotIndex": 3
+    }
+  ],
+  "disabled": false
+}

@@ -217,6 +217,7 @@
     </div>
 
     <div class="panels">
+      <div class="demo-frame" id="demo-frame" hidden><div class="demo-scale"><iframe id="demo-iframe" title="VantaVault live demo with demo data" width="1280" height="720" loading="lazy"></iframe></div><div class="demo-loading" role="status">Starting the live demo…</div></div>
       <section class="panel is-active" id="panel-trailer" role="tabpanel" aria-labelledby="tab-trailer" tabindex="0">
         <div class="screen screen-video" id="trailer">
           <video id="trailer-video" src="assets/vantavault-trailer.mp4" poster="assets/vantavault-trailer-poster.jpg" width="1920" height="1080" muted loop playsinline preload="metadata" aria-label="VantaVault trailer: loadouts, profile, round and map review, live match, store, career insights, sessions, compare, Duos and accolades"><track kind="captions" src="assets/vantavault-trailer.vtt" srclang="en" label="English"></video>
@@ -229,6 +230,7 @@
             Play with sound
           </button>
           <p class="fine">Demo account. Names, stats and store offers are made up. Captions included.</p>
+          <p class="fine demo-hint">The other tabs run the real app with demo data. Click around.</p>
         </aside>
       </section>
 
@@ -549,6 +551,7 @@ function appWindow(){
   const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if(!tabs.length)return;
   let withSound=false;
+  const demoCtl=liveDemo();
   const place=tab=>{if(!bar)return;bar.style.transform="translateX("+tab.offsetLeft+"px) scaleX("+tab.offsetWidth+")"};
   const quiet=()=>{withSound=false;if(!video)return;video.muted=true;video.loop=true;video.controls=false};
   const select=(tab,{focus=false,push=true,animate=true}={})=>{
@@ -556,6 +559,7 @@ function appWindow(){
     tabs.forEach(t=>{const on=t===tab;t.setAttribute("aria-selected",String(on));t.tabIndex=on?0:-1});
     $$(".panel").forEach(p=>{const on=p.id==="panel-"+id;p.hidden=!on;p.classList.toggle("is-active",on);p.classList.remove("is-entering");if(on&&animate&&!reduce){void p.offsetWidth;p.classList.add("is-entering")}});
     place(tab);
+    if(demoCtl)demoCtl.show(id);
     tab.scrollIntoView({block:"nearest",inline:"nearest",behavior:reduce?"auto":"smooth"});
     if(focus)tab.focus();
     if(video){if(id==="trailer"){if(!reduce||withSound)video.play().catch(()=>{})}else{video.pause()}}
@@ -598,6 +602,26 @@ function appWindow(){
     }));
     video.addEventListener("ended",()=>{quiet();video.currentTime=0;if(!reduce)video.play().catch(()=>{})});
   }
+}
+function liveDemo(){
+  const frame=$("#demo-frame"),iframe=$("#demo-iframe"),panels=$(".panels");
+  if(!frame||!iframe)return null;
+  const box=frame.querySelector(".demo-scale");
+  const wide=window.matchMedia("(min-width:1121px)");
+  let started=false,ready=false,current="trailer";
+  const scale=()=>{if(frame.clientWidth)box.style.transform="scale("+(frame.clientWidth/1280)+")"};
+  if("ResizeObserver"in window)new ResizeObserver(scale).observe(frame);
+  const post=v=>{if(ready&&v&&v!=="trailer")iframe.contentWindow.postMessage({type:"vv-demo",view:v},location.origin)};
+  iframe.addEventListener("load",()=>{if(!started)return;setTimeout(()=>{ready=true;frame.classList.add("is-ready");post(current)},700)});
+  const show=id=>{
+    current=id;const on=wide.matches&&id!=="trailer";
+    frame.hidden=!on;panels.classList.toggle("has-live",on);
+    if(!on)return;
+    if(!started){started=true;iframe.src="/demo/?view="+id;const send=window.va;if(typeof send==="function")send("event",{name:"Live demo",data:{tab:id}})}else post(id);
+    scale();
+  };
+  wide.addEventListener("change",()=>show(current));
+  return{show};
 }
 function siteThemes(){
   const box=$(".backdrop");

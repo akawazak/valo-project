@@ -276,3 +276,45 @@ main{position:relative}
 }
 .hero .lede{color:#c2ccd4}
 .hero-meta{color:#9aa8b4}
+
+/* Live demo: the real app, running with demo data, inside the window (desktop only) */
+.demo-frame{display:none}
+.demo-hint{display:none}
+@media (min-width:1121px){
+  .panel{grid-template-columns:1fr}
+  .screen{border-right:0;border-bottom:1px solid var(--line)}
+  .notes{display:grid;grid-template-columns:minmax(220px,300px) 1fr auto;align-items:center;gap:8px 32px;padding:18px 24px}
+  .notes h2{font-size:19px}
+  .notes ul{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 24px}
+  .notes li{font-size:14px}
+  .notes-link,.notes .fine:last-child{margin-top:0}
+  .notes .segmented{grid-row:1}
+  #panel-trailer .notes{grid-template-columns:minmax(220px,300px) 1fr auto}
+  #panel-trailer .notes>p:not(.fine){grid-column:2}
+  #panel-trailer .notes .btn{width:auto;grid-column:3;grid-row:1}
+  #panel-trailer .notes .fine{grid-column:1/-1}
+  .demo-hint{display:block}
+  .demo-frame{position:absolute;z-index:3;top:0;left:0;right:0;aspect-ratio:16/9;overflow:hidden;background:var(--bg)}
+  .demo-frame:not([hidden]){display:block}
+  .demo-scale{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0;opacity:0;transition:opacity .35s var(--ease)}
+  .demo-frame.is-ready .demo-scale{opacity:1}
+  .demo-scale iframe{width:1280px;height:720px;border:0;display:block;background:var(--bg)}
+  .demo-loading{position:absolute;left:16px;bottom:14px;padding:6px 12px;border:1px solid var(--line2);border-radius:6px;background:rgba(6,11,15,.92);color:var(--muted);font-size:13px}
+  .demo-frame.is-ready .demo-loading{display:none}
+  .demo-frame.is-live+.panel .segmented,.panels.has-live .segmented{display:none}
+}
+@media (min-width:1121px){
+  .demo-frame{background:transparent;pointer-events:none}
+  .demo-frame.is-ready{pointer-events:auto;background:var(--bg)}
+}
+@media (min-width:1121px){
+  .appbar{height:44px;background:#0a1015}
+  .appbar-mark,.appbar-account{display:none}
+  .app-tab{font-size:13px}
+  .titlebar{border-bottom:0}
+}
+@media (min-width:1121px){
+  .notes{align-items:start}
+  .notes ul{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .notes-link{align-self:center}
+}
