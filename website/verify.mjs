@@ -75,15 +75,16 @@ if (!schemaBlocks.length) {
 }
 for (const [, json] of schemaBlocks) JSON.parse(json);
 
-if (!sitemap.includes("<lastmod>2026-08-21</lastmod>") || !sitemap.includes("<image:image>")) {
+if (!/<lastmod>\d{4}-\d{2}-\d{2}<\/lastmod>/.test(sitemap) || !sitemap.includes("<image:image>")) {
   throw new Error("Sitemap is missing freshness or image discovery metadata.");
 }
 
-if ((sitemap.match(/<loc>/g) || []).length !== 4) {
-  throw new Error("Sitemap must contain the homepage and three feature pages.");
+const guidePages = [...sitemap.matchAll(/<loc>https:\/\/vanta-vault-app\.vercel\.app\/([a-z-]+)\/<\/loc>/g)].map(m => m[1]);
+if (guidePages.length < 3) {
+  throw new Error("Sitemap must contain the homepage and the guide pages.");
 }
 
-for (const page of ["valorant-store-checker", "valorant-loadout-manager", "valorant-match-history"]) {
+for (const page of guidePages) {
   const pageHtml = await readFile(new URL(`./${page}/index.html`, import.meta.url), "utf8");
   if (!pageHtml.includes('<meta name="description"') || !pageHtml.includes('application/ld+json')) {
     throw new Error(`${page} is missing search metadata or structured data.`);

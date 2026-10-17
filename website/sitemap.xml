@@ -3,38 +3,90 @@
         xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
   <url>
     <loc>https://vanta-vault-app.vercel.app/</loc>
-    <lastmod>2026-08-21</lastmod>
+    <lastmod>2026-10-17</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
     <image:image>
-      <image:loc>https://vanta-vault-app.vercel.app/assets/social-preview-sanitized.png</image:loc>
-      <image:title>VantaVault VALORANT storefront and featured bundle</image:title>
-    </image:image>
-    <image:image>
-      <image:loc>https://vanta-vault-app.vercel.app/assets/homepage-loadout-sanitized.png</image:loc>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-loadouts.webp</image:loc>
       <image:title>VantaVault VALORANT loadout manager</image:title>
     </image:image>
     <image:image>
-      <image:loc>https://vanta-vault-app.vercel.app/assets/homepage-profile-sanitized.png</image:loc>
-      <image:title>VantaVault VALORANT profile, rank, and match history</image:title>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-store-detail.webp</image:loc>
+      <image:title>VantaVault VALORANT store checker</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-history.webp</image:loc>
+      <image:title>VantaVault VALORANT match history</image:title>
     </image:image>
   </url>
   <url>
     <loc>https://vanta-vault-app.vercel.app/valorant-store-checker/</loc>
-    <lastmod>2026-08-21</lastmod>
+    <lastmod>2026-10-17</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-store.webp</image:loc>
+      <image:title>VantaVault daily store with four skin offers</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-night-market-checker/</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-store-detail.webp</image:loc>
+      <image:title>VantaVault skin details with levels and variants</image:title>
+    </image:image>
   </url>
   <url>
     <loc>https://vanta-vault-app.vercel.app/valorant-loadout-manager/</loc>
-    <lastmod>2026-08-21</lastmod>
+    <lastmod>2026-10-17</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-loadouts.webp</image:loc>
+      <image:title>VantaVault loadout screen with a skin for every weapon and saved presets</image:title>
+    </image:image>
   </url>
   <url>
     <loc>https://vanta-vault-app.vercel.app/valorant-match-history/</loc>
-    <lastmod>2026-08-21</lastmod>
+    <lastmod>2026-10-17</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-history.webp</image:loc>
+      <image:title>VantaVault match history grouped by day</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-round-review/</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-rounds.webp</image:loc>
+      <image:title>VantaVault round review with the map, kill feed and economy for one round</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-duo-stats/</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-duos.webp</image:loc>
+      <image:title>VantaVault Duos screen comparing how often two players avenge each other</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://vanta-vault-app.vercel.app/valorant-playstyle-stats/</loc>
+    <lastmod>2026-10-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://vanta-vault-app.vercel.app/assets/tab-insights.webp</image:loc>
+      <image:title>VantaVault career insights with a playstyle chart</image:title>
+    </image:image>
   </url>
 </urlset>
