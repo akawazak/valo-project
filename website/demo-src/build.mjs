@@ -6,6 +6,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const here = import.meta.dirname;
 const site = path.resolve(here, '..');
@@ -16,6 +18,10 @@ const cache = path.join(here, '.cache', 'media');
 const req = createRequire(path.join(front, 'package.json'));
 const esbuild = req('esbuild');
 await fs.mkdir(cache, { recursive: true });
+// ffmpeg converts the bundled art to WebP. Set FFMPEG to its path, or have it on PATH.
+const ffmpeg = [process.env.FFMPEG, 'C:/Users/ahais/Documents/Codex/tools/video-tools/bin/ffmpeg.exe'].find(p => p && existsSync(p))
+  || (spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status === 0 ? 'ffmpeg' : null);
+if (!ffmpeg) console.warn('ffmpeg not found: demo art ships as PNG (slower).');
 await fs.rm(out, { recursive: true, force: true });
 await fs.mkdir(path.join(out, 'media'), { recursive: true });
 
@@ -49,13 +55,21 @@ async function localize(value) {
   if (value && typeof value === 'object') return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([k, v]) => [k, await localize(v)])));
   if (typeof value !== 'string' || !/^https:\/\/media\.valorant-api\.com\/.+\.(png|jpg|webp)$/.test(value)) return value;
   if (!mediaMap.has(value)) mediaMap.set(value, (async () => {
-    const filename = crypto.createHash('sha256').update(value).digest('hex').slice(0, 20) + path.extname(value);
-    const cached = path.join(cache, filename);
+    const base = crypto.createHash('sha256').update(value).digest('hex').slice(0, 20);
+    const cached = path.join(cache, base + path.extname(value));
     try { await fs.access(cached); } catch {
       const r = await fetch(value); if (!r.ok) throw new Error(`Public asset ${r.status}: ${value}`);
       await fs.writeFile(cached, Buffer.from(await r.arrayBuffer()));
     }
-    await fs.copyFile(cached, path.join(out, 'media', filename));
+    // WebP keeps transparency and is a fraction of the PNG size; fall back to the original without ffmpeg.
+    let filename = base + path.extname(value);
+    if (ffmpeg) {
+      const webp = path.join(cache, base + '.webp');
+      try { await fs.access(webp); } catch {
+        spawnSync(ffmpeg, ['-v', 'error', '-y', '-i', cached, '-c:v', 'libwebp', '-quality', '82', webp], { windowsHide: true });
+      }
+      try { await fs.access(webp); filename = base + '.webp'; await fs.copyFile(webp, path.join(out, 'media', filename)); } catch { await fs.copyFile(cached, path.join(out, 'media', filename)); }
+    } else await fs.copyFile(cached, path.join(out, 'media', filename));
     mediaCount++;
     return '/demo/media/' + filename;
   })());

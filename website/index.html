@@ -222,7 +222,7 @@
     </div>
 
     <div class="panels">
-      <div class="demo-frame" id="demo-frame" hidden><div class="demo-scale"><iframe id="demo-iframe" title="VantaVault live demo with demo data" width="1280" height="720" loading="lazy"></iframe></div><div class="demo-loading" role="status">Starting the live demo…</div><div class="demo-coach" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>This is the real app.</b> Click anything. Demo data only.</span></div></div>
+      <div class="demo-frame" id="demo-frame" hidden><div class="demo-scale"><iframe id="demo-iframe" title="VantaVault live demo with demo data" width="1280" height="720"></iframe></div><div class="demo-loading" role="status">Starting the live demo…</div><div class="demo-coach" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>This is the real app.</b> Click anything. Demo data only.</span></div></div>
       <section class="panel is-active" id="panel-trailer" role="tabpanel" aria-labelledby="tab-trailer" tabindex="0">
         <div class="screen screen-video" id="trailer">
           <video id="trailer-video" src="assets/vantavault-trailer.mp4" poster="assets/vantavault-trailer-poster.jpg" width="1920" height="1080" muted loop playsinline preload="metadata" aria-label="VantaVault trailer: loadouts, profile, round and map review, live match, store, career insights, sessions, compare, Duos and accolades"><track kind="captions" src="assets/vantavault-trailer.vtt" srclang="en" label="English"></video>
@@ -621,16 +621,23 @@ function liveDemo(){
   if(!frame||!iframe)return null;
   const box=frame.querySelector(".demo-scale");
   const wide=window.matchMedia("(min-width:1121px)");
-  let started=false,ready=false,current="trailer";
+  let started=false,ready=false,seen=false,current="trailer";
   const scale=()=>{if(frame.clientWidth)box.style.transform="scale("+(frame.clientWidth/1280)+")"};
   if("ResizeObserver"in window)new ResizeObserver(scale).observe(frame);
   const post=v=>{if(ready&&v&&v!=="trailer")iframe.contentWindow.postMessage({type:"vv-demo",view:v},location.origin)};
-  iframe.addEventListener("load",()=>{if(!started)return;setTimeout(()=>{ready=true;frame.classList.add("is-ready");post(current);setTimeout(()=>frame.classList.add("touched"),15000)},700)});
+  const markReady=()=>{if(ready)return;ready=true;frame.classList.add("is-ready");post(current)};
+  // The demo reports when it has drawn; the load event is the fallback.
+  window.addEventListener("message",e=>{if(e.origin===location.origin&&e.source===iframe.contentWindow&&e.data&&e.data.type==="vv-demo-ready")markReady()});
+  iframe.addEventListener("load",()=>{if(started)setTimeout(markReady,1200)});
+  // Start loading quietly on desktop once the window is near the screen, so a click is instant.
+  const start=view=>{if(started||!wide.matches)return;started=true;iframe.src="/demo/?view="+view};
+  if("IntersectionObserver"in window){const io=new IntersectionObserver(es=>{if(es.some(e=>e.isIntersecting)){start("loadouts");io.disconnect()}},{rootMargin:"300px"});io.observe(frame.closest(".window"))}
   const show=id=>{
     current=id;const on=wide.matches&&id!=="trailer";
     frame.hidden=!on;panels.classList.toggle("has-live",on);
     if(!on)return;
-    if(!started){started=true;iframe.src="/demo/?view="+id;const send=window.va;if(typeof send==="function")send("event",{name:"Live demo",data:{tab:id}})}else post(id);
+    if(!seen){seen=true;setTimeout(()=>frame.classList.add("touched"),15000);const send=window.va;if(typeof send==="function")send("event",{name:"Live demo",data:{tab:id}})}
+    if(!started)start(id);else post(id);
     scale();
   };
   wide.addEventListener("change",()=>show(current));

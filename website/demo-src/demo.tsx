@@ -99,6 +99,8 @@ function Demo() {
     const first = new URLSearchParams(location.search).get('view'); if (first) go(first);
     const onMsg = (e: MessageEvent) => { if (e.origin === location.origin && e.data?.type === 'vv-demo') go(String(e.data.view)); };
     window.addEventListener('message', onMsg);
+    // Tell the website the app has drawn, so it can show the demo straight away.
+    requestAnimationFrame(() => requestAnimationFrame(() => { try { parent.postMessage({ type: 'vv-demo-ready' }, location.origin); } catch { /* not embedded */ } }));
     return () => window.removeEventListener('message', onMsg);
   }, []);
   const close = () => setOverlay(null);
