@@ -45,7 +45,7 @@ export default function AppTopbar({
     updateControl,
 }: AppTopbarProps) {
     const { playerCards, accounts } = useData();
-    const attention = useMemo(() => accountsNeedingAttention(accounts), [accounts]);
+    const attention = useMemo(() => accountsNeedingAttention(accounts ?? []), [accounts]);
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
     const navRef = useRef<HTMLElement>(null);
     const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
