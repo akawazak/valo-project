@@ -20,27 +20,27 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
-    "@tauri-apps/plugin-http": "^2.5.2",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-shell": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.9.0",
+    "@tauri-apps/api": "2.12.3",
+    "@tauri-apps/plugin-autostart": "^2.7.0",
+    "@tauri-apps/plugin-http": "^2.8.2",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-shell": "^2.5.0",
+    "@tauri-apps/plugin-updater": "^2.13.3",
     "bootstrap": "^5.3.8",
-    "next": "16.3.8",
-    "react": "19.2.0",
+    "next": "16.4.0",
+    "react": "19.3.0",
     "react-bootstrap": "^2.10.10",
-    "react-dom": "19.2.0"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@next/eslint-plugin-next": "16.3.8",
-    "@tauri-apps/cli": "2.11.4",
+    "@next/eslint-plugin-next": "16.4.0",
+    "@tauri-apps/cli": "2.12.2",
     "@types/node": "^20",
-    "@types/react": "19.2.2",
-    "@types/react-dom": "19.2.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "eslint": "^9",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "typescript": "^5",
@@ -48,8 +48,8 @@
     "vitest": "3.2.6"
   },
   "overrides": {
-    "@types/react": "19.2.2",
-    "@types/react-dom": "19.2.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "postcss": "8.5.23",
     "sharp": "0.35.5"
   }
