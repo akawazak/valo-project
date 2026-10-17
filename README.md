@@ -22,6 +22,8 @@
     &nbsp;&middot;&nbsp;
     <a href="https://discord.gg/gxGQwWyECE">Discord</a>
   </p>
+  <p><a href="https://vanta-vault-app.vercel.app/#loadouts"><strong>▶ Try it in your browser</strong></a>: the real app with demo data, no download needed.</p>
+  <a href="https://vanta-vault-app.vercel.app/#loadouts"><img src="docs/assets/readme/live-demo.gif" alt="The VantaVault live demo: store, skin details, match history, a match popup with round review, Duos and loadouts, using a demo account" width="800" /></a>
 </div>
 
 > [!IMPORTANT]
