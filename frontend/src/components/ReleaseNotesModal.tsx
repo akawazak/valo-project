@@ -21,7 +21,7 @@ export type ReleaseNotes = {
 };
 
 // Each feature card wears its profile-menu colour.
-const TONE: Record<ReleasePreviewKind, string> = { insights: "#4fd6ff", compare: "#ffb03a", badges: "#2fd6a3" };
+const TONE: Record<ReleasePreviewKind, string> = { insights: "#4fd6ff", compare: "#ffb03a", badges: "#2fd6a3", replay: "#8b7bff", trade: "#22d3a3", takeaways: "#ffb03a" };
 
 type Props = {
     notes: ReleaseNotes;
