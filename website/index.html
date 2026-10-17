@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#07090f">
+<meta name="theme-color" content="#060b0f">
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Download VantaVault, a free open-source VALORANT companion for Windows: store checker, skin and loadout manager, rank stats, match history, live party, and friends.">
 <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
@@ -17,7 +17,7 @@
 <link rel="icon" href="/assets/app-icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/assets/app-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<link rel="preload" as="image" href="/assets/homepage-profile-sanitized.png" type="image/png" fetchpriority="high">
+<link rel="preload" as="image" href="/assets/vantavault-trailer-poster.jpg" fetchpriority="high">
 <link rel="preconnect" href="https://api.github.com" crossorigin>
 
 <meta property="og:type" content="website">
@@ -113,450 +113,301 @@
   ]
 }
 </script>
-<style>
-:root{
-  --bg:#07090f;--bg2:#0b0e16;--panel:#10141f;--panel2:#151a27;
-  --text:#f6f7fb;--muted:#9ca4b7;--soft:#697185;--line:rgba(255,255,255,.095);
-  --red:#ff4655;--red2:#ff6875;--cyan:#55d9cf;--green:#6ce5a6;--max:1280px;
-}
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{
-  margin:0;min-width:320px;overflow-x:hidden;color:var(--text);
-  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  background:
-    radial-gradient(circle at 12% 0%,rgba(96,70,170,.14),transparent 30%),
-    radial-gradient(circle at 89% 8%,rgba(255,70,85,.13),transparent 30%),
-    linear-gradient(180deg,#080a11 0%,#07090f 55%,#090b12 100%);
-  -webkit-font-smoothing:antialiased;
-}
-body:before{
-  content:"";position:fixed;inset:0;pointer-events:none;opacity:.026;z-index:20;
-  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-a{color:inherit;text-decoration:none}button{font:inherit}img{display:block;max-width:100%}
-.shell{width:min(calc(100% - 44px),var(--max));margin-inline:auto}
-.header{
-  position:fixed;top:16px;left:50%;z-index:30;transform:translateX(-50%);
-  width:min(calc(100% - 28px),1220px);height:66px;padding:9px 11px 9px 15px;
-  display:flex;align-items:center;justify-content:space-between;
-  border:1px solid var(--line);border-radius:18px;background:rgba(8,10,17,.77);
-  box-shadow:0 16px 50px rgba(0,0,0,.32);backdrop-filter:blur(24px) saturate(145%);
-}
-.brand{display:flex;align-items:center;gap:10px;font-weight:850;letter-spacing:-.035em}
-.brand-badge{
-  width:39px;height:39px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.12);
-  border-radius:12px;background:linear-gradient(145deg,rgba(255,70,85,.2),rgba(86,57,142,.18));
-  box-shadow:inset 0 1px rgba(255,255,255,.09),0 8px 20px rgba(0,0,0,.28)
-}
-.brand-badge svg{width:24px;height:24px}
-.brand-word span{color:var(--red)}
-.nav{display:flex;gap:28px;color:var(--muted);font-size:13px;font-weight:700}
-.nav a:hover{color:white}
-.mini-download,.btn{
-  display:inline-flex;align-items:center;justify-content:center;gap:10px;border:1px solid var(--line);
-  border-radius:13px;font-weight:820;transition:.2s ease
-}
-.mini-download{height:44px;padding:0 16px;background:#f5f6fa;color:#090b11;font-size:13px}
-.mini-download:hover,.btn:hover{transform:translateY(-2px)}
-.hero{
-  min-height:870px;padding-top:145px;padding-bottom:80px;
-  display:grid;grid-template-columns:.88fr 1.12fr;gap:62px;align-items:center
-}
-.kicker{
-  display:flex;align-items:center;gap:10px;color:#c8cdd8;font-size:11px;font-weight:850;
-  letter-spacing:.16em;text-transform:uppercase
-}
-.kicker i{width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 0 5px rgba(255,70,85,.1),0 0 22px rgba(255,70,85,.75)}
-h1,h2,h3,p{margin-top:0}
-h1{margin-bottom:25px;font-size:clamp(54px,6vw,89px);line-height:.91;letter-spacing:-.07em}
-h1 em,h2 em{font-style:normal;color:transparent;-webkit-text-stroke:1px rgba(246,247,251,.82)}
-.hero-copy p{max-width:610px;color:var(--muted);font-size:17px;line-height:1.72}
-.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
-.btn{min-height:61px;padding:0 20px}
-.btn.primary{background:linear-gradient(135deg,var(--red),#ef3142);border-color:rgba(255,105,118,.72);box-shadow:0 18px 40px rgba(255,70,85,.2)}
-.btn.secondary{background:rgba(255,255,255,.045);color:#dde1ea}
-.btn svg,.mini-download svg{width:18px;height:18px}
-.btn-copy{display:flex;flex-direction:column;align-items:flex-start;gap:1px}
-.btn-copy small{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.67)}
-.btn-copy strong{font-size:14px}
-.hero-meta{display:flex;gap:30px;margin-top:34px;padding-top:23px;border-top:1px solid var(--line)}
-.hero-meta div{display:grid;gap:4px}.hero-meta strong{font-size:12px}.hero-meta span{color:var(--soft);font-size:10px}
-.hero-visual{position:relative;min-height:620px;display:grid;place-items:center}
-.hero-visual:before{
-  content:"";position:absolute;width:85%;aspect-ratio:1;border-radius:50%;
-  background:radial-gradient(circle,rgba(255,70,85,.19),rgba(71,119,159,.08) 42%,transparent 69%);
-  filter:blur(18px)
-}
-.app-frame{
-  position:relative;z-index:2;width:min(790px,100%);overflow:hidden;border:1px solid rgba(255,255,255,.15);
-  border-radius:20px;background:#080a10;box-shadow:0 40px 110px rgba(0,0,0,.6),0 0 0 1px rgba(255,70,85,.05);
-  transform:perspective(1500px) rotateY(-7deg) rotateX(2deg);transition:transform .35s ease
-}
-.hero-visual:hover .app-frame{transform:perspective(1500px) rotateY(-2deg) rotateX(0)}
-.windowbar{height:39px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;background:#161922;border-bottom:1px solid var(--line)}
-.windowbrand{display:flex;align-items:center;gap:8px;font-size:10px;font-weight:850}.windowbrand .mini-v{color:var(--red)}
-.controls{display:flex;gap:6px}.controls i{width:7px;height:7px;border-radius:50%;background:#555d6e}.controls i:last-child{background:var(--red)}
-.app-frame img{width:100%;height:auto}
-.float-chip{
-  position:absolute;z-index:4;padding:12px 14px;display:flex;align-items:center;gap:10px;
-  border:1px solid rgba(255,255,255,.14);border-radius:13px;background:rgba(13,16,25,.86);
-  box-shadow:0 18px 45px rgba(0,0,0,.4);backdrop-filter:blur(18px)
-}
-.float-chip b{display:block;font-size:11px}.float-chip small{display:block;margin-top:2px;color:var(--muted);font-size:9px}
-.float-chip.one{right:-14px;top:90px}.float-chip.two{left:-16px;bottom:75px}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 14px rgba(108,229,166,.65)}
-.diamond{width:16px;height:16px;border:2px solid var(--red2);transform:rotate(45deg)}
-.trust{
-  min-height:75px;display:flex;align-items:center;justify-content:center;gap:24px;flex-wrap:wrap;
-  border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:#7b8395;
-  font-size:10px;font-weight:850;letter-spacing:.13em
-}
-.trust i{width:4px;height:4px;border-radius:50%;background:#353b48}
-.section{padding-top:145px}
-.heading{max-width:760px}.heading.center{text-align:center;margin-inline:auto}
-.heading h2{margin:22px 0 20px;font-size:clamp(45px,5.3vw,75px);line-height:.96;letter-spacing:-.058em}
-.heading p{color:var(--muted);line-height:1.68}
-.feature-grid{
-  margin-top:56px;display:grid;grid-template-columns:repeat(12,1fr);gap:17px;grid-auto-flow:row dense
-}
-.card{
-  position:relative;overflow:hidden;border:1px solid var(--line);border-radius:25px;
-  background:linear-gradient(145deg,rgba(18,22,34,.96),rgba(10,13,21,.96));
-  box-shadow:inset 0 1px rgba(255,255,255,.035)
-}
-.card:after{
-  content:"";position:absolute;right:-120px;bottom:-150px;width:310px;height:310px;border-radius:50%;
-  background:radial-gradient(circle,rgba(103,78,174,.12),transparent 67%);pointer-events:none
-}
-.visual-card{min-height:430px}
-.loadout-card{grid-column:span 7}
-.store-card{grid-column:span 5;padding:31px}
-.live-card{grid-column:span 5;padding:31px;background:linear-gradient(145deg,rgba(47,18,29,.94),rgba(16,13,22,.96))}
-.profile-card{grid-column:span 7}
-.privacy-card{grid-column:span 12;min-height:205px;padding:34px;display:grid;grid-template-columns:.85fr 1.15fr;gap:50px;align-items:center}
-.card-label{position:absolute;top:25px;left:27px;z-index:3;color:#778095;font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.14em}
-.visual-copy{
-  position:absolute;z-index:4;left:27px;right:27px;bottom:25px;padding:22px 23px;
-  border:1px solid rgba(255,255,255,.1);border-radius:17px;background:rgba(8,11,17,.78);
-  box-shadow:0 20px 50px rgba(0,0,0,.3);backdrop-filter:blur(18px)
-}
-.visual-copy h3,.card h3{margin-bottom:10px;font-size:25px;letter-spacing:-.04em}
-.visual-copy p,.card p{margin-bottom:0;color:var(--muted);font-size:13px;line-height:1.65}
-.visual-card img{width:100%;height:100%;min-height:430px;object-fit:cover;object-position:top center;opacity:.83}
-.visual-card:before{content:"";position:absolute;inset:0;z-index:2;background:linear-gradient(180deg,transparent 30%,rgba(7,9,15,.38) 65%,rgba(7,9,15,.82))}
-.feature-icon{
-  width:50px;height:50px;margin-top:42px;margin-bottom:24px;display:grid;place-items:center;
-  border:1px solid rgba(85,217,207,.22);border-radius:15px;background:rgba(85,217,207,.07);color:var(--cyan)
-}
-.feature-icon svg{width:23px;height:23px}
-.offer-stack{display:grid;gap:10px;margin-top:26px}
-.offer{
-  min-height:59px;padding:12px 14px;display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center;
-  border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.025)
-}
-.offer-thumb{width:42px;height:35px;border-radius:9px;background:linear-gradient(135deg,#26384b,#111722);position:relative;overflow:hidden}
-.offer-thumb:after{content:"";position:absolute;width:34px;height:6px;left:5px;top:14px;border-radius:99px;background:linear-gradient(90deg,#d7c99f,var(--red2));transform:rotate(-12deg)}
-.offer b{font-size:11px}.offer span{display:block;color:var(--soft);font-size:9px;margin-top:3px}.offer strong{font-size:10px;color:#dfe4ec}
-.live-map{position:relative;width:125px;height:125px;margin:26px auto 16px;border:1px solid rgba(255,70,85,.25);border-radius:50%}
-.live-map:before,.live-map:after{content:"";position:absolute;background:rgba(255,70,85,.18)}
-.live-map:before{width:1px;height:100%;left:50%}.live-map:after{height:1px;width:100%;top:50%}
-.live-map .ring{position:absolute;inset:18px;border:1px solid rgba(255,70,85,.18);border-radius:50%}
-.live-map .ping{position:absolute;width:8px;height:8px;top:29px;right:31px;border-radius:50%;background:var(--red2);box-shadow:0 0 16px var(--red)}
-.live-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}.live-tags span{padding:7px 10px;border:1px solid var(--line);border-radius:99px;color:#c3c8d3;font-size:9px;font-weight:750}
-.privacy-copy{position:relative;z-index:2}.privacy-copy h3{font-size:30px}
-.privacy-list{position:relative;z-index:2;display:grid;grid-template-columns:repeat(3,1fr);gap:11px}
-.privacy-list div{padding:17px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.025)}
-.privacy-list b{font-size:11px}.privacy-list span{display:block;margin-top:5px;color:var(--soft);font-size:9px;line-height:1.5}
-.gallery{margin-top:54px;padding:15px;border:1px solid var(--line);border-radius:27px;background:rgba(15,18,28,.82);box-shadow:0 35px 100px rgba(0,0,0,.45)}
-.tabs{display:flex;justify-content:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}
-.tab{padding:9px 15px;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:800}
-.tab:hover{background:rgba(255,255,255,.04);color:white}.tab.active{border-color:rgba(255,70,85,.3);background:rgba(255,70,85,.12);color:white}
-.stage{overflow:hidden;border:1px solid rgba(255,255,255,.13);border-radius:17px;background:#080a10}
-.stage-head{height:38px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);background:#151821}
-.stage img{width:100%;height:auto;max-height:none;object-fit:contain;background:#07090f;transition:opacity .18s ease}
-.stage img.switch{opacity:.14}
-.download-section{padding-bottom:120px}
-.download-box{
-  position:relative;overflow:hidden;padding:60px;display:grid;grid-template-columns:1fr .78fr;gap:65px;align-items:center;
-  border:1px solid rgba(255,255,255,.11);border-radius:31px;background:
-    radial-gradient(circle at 7% 0%,rgba(255,70,85,.18),transparent 35%),
-    radial-gradient(circle at 96% 100%,rgba(91,72,164,.17),transparent 38%),#0e111a;
-  box-shadow:0 35px 100px rgba(0,0,0,.45)
-}
-.download-box h2{margin:20px 0;font-size:clamp(47px,5vw,72px);line-height:.94;letter-spacing:-.058em}
-.download-box p{color:var(--muted);line-height:1.7}
-.pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:25px}.pills span{padding:8px 11px;border:1px solid var(--line);border-radius:99px;color:#c8cdd7;font-size:10px;font-weight:750;background:rgba(255,255,255,.025)}
-.release{
-  padding:23px;border:1px solid rgba(255,255,255,.14);border-radius:21px;background:rgba(7,9,15,.76);
-  box-shadow:0 25px 70px rgba(0,0,0,.35);backdrop-filter:blur(17px)
-}
-.release-top{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:10px;color:var(--muted)}
-.release-top b{display:flex;align-items:center;gap:7px;color:#e7eaf1}.release-top b i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 12px rgba(108,229,166,.7)}
-.release-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}
-.release-grid div,.release-file{padding:14px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025)}
-.release-grid small{display:block;color:var(--soft);font-size:8px;font-weight:850;letter-spacing:.12em}.release-grid strong{display:block;margin-top:5px;font-size:13px}
-.release-file{margin-top:10px}.release-file b{font-size:11px}.release-file span{display:block;margin-top:4px;color:var(--soft);font-size:9px}
-.release .btn{width:100%;margin-top:12px}.release-note{min-height:28px;margin:11px 2px 0!important;font-size:9px!important;color:var(--soft)!important}
-.footer{padding:42px 0 50px;display:flex;justify-content:space-between;gap:25px;border-top:1px solid var(--line);color:var(--soft);font-size:10px}
-.footer-links{display:flex;gap:18px}.footer a:hover{color:white}
-.reveal{opacity:0;transform:translateY(18px);transition:opacity .65s ease,transform .65s ease}.reveal.visible{opacity:1;transform:none}
-@media(max-width:1050px){
-  .hero{grid-template-columns:1fr;padding-top:150px}.hero-copy{text-align:center}.hero-copy p{margin-inline:auto}.actions,.hero-meta{justify-content:center}
-  .hero-visual{min-height:540px}.loadout-card,.store-card,.live-card,.profile-card{grid-column:span 6}
-  .privacy-card{grid-template-columns:1fr}.download-box{grid-template-columns:1fr}
-}
-@media(max-width:760px){
-  .shell{width:min(calc(100% - 26px),var(--max))}.header{top:9px;height:59px}.nav{display:none}.brand-word{font-size:14px}.mini-download{height:39px;padding:0 12px}
-  .hero{min-height:auto;padding-top:125px;padding-bottom:65px;gap:25px}.hero h1{font-size:51px}.hero-copy p{font-size:15px}.hero-meta{gap:16px;flex-wrap:wrap}
-  .hero-visual{min-height:330px}.app-frame{transform:none;border-radius:14px}.float-chip{display:none}
-  .trust{padding:20px 0;gap:13px}.trust i{display:none}.section{padding-top:100px}
-  .feature-grid{grid-template-columns:1fr}.loadout-card,.store-card,.live-card,.profile-card,.privacy-card{grid-column:auto}
-  .visual-card{min-height:390px}.visual-card img{min-height:390px}.privacy-list{grid-template-columns:1fr}
-  .gallery{padding:8px;border-radius:18px}.stage{border-radius:12px}.download-box{padding:31px 21px}.release-grid{grid-template-columns:1fr}
-  .footer{flex-direction:column}.footer-links{flex-wrap:wrap}
-}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.reveal{opacity:1;transform:none;transition:none}.app-frame,.btn{transition:none}}
-</style>
-<link rel="stylesheet" href="polish.css">
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="header">
-  <a class="brand" href="#top" aria-label="VantaVault home">
-    <span class="brand-badge" aria-hidden="true">
-      <svg viewBox="0 0 40 40"><path d="M8 7h24l-3 22-9 6-9-6L8 7Z" fill="#181a25" stroke="#5b6070"/><path d="m14 12 6 16 6-16" stroke="#ff4655" stroke-width="3"/><path d="m12 10 8-3 8 3" stroke="#ffffff" opacity=".65"/></svg>
-    </span>
-    <span class="brand-word">Vanta<span>Vault</span></span>
-  </a>
-  <nav class="nav" aria-label="Primary">
-    <a href="#features">Features</a><a href="#guides">Guides</a><a href="#screens">Screens</a><a href="#download">Download</a>
-    <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a>
-  </nav>
-  <button class="mini-download download-menu-trigger" type="button" aria-haspopup="dialog" aria-controls="download-dialog">
-    Download
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg>
-  </button>
+<a class="skip" href="#app">Skip to the app tour</a>
+<header class="site-header">
+  <div class="shell site-header-inner">
+    <a class="brand" href="#top" aria-label="VantaVault home">
+      <img src="assets/app-icon.png" width="30" height="30" alt="">
+      <span class="wordmark">VANTA<em>VAULT</em></span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#app">Tour</a><a href="#privacy">Privacy</a><a href="#guides">Guides</a><a href="#download">Download</a>
+      <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://discord.gg/gxGQwWyECE" target="_blank" rel="noreferrer">Discord</a>
+    </nav>
+    <button class="btn btn-solid btn-small download-menu-trigger" type="button" aria-haspopup="dialog" aria-controls="download-dialog">
+      Download
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+    </button>
+  </div>
 </header>
 
 <dialog class="download-dialog" id="download-dialog" aria-labelledby="download-dialog-title">
   <div class="download-dialog-panel">
     <div class="download-dialog-head">
-      <div>
-        <h2 id="download-dialog-title">Choose a platform</h2>
-      </div>
-      <button class="download-dialog-close" type="button" aria-label="Close download menu">
+      <h2 id="download-dialog-title">Choose a platform</h2>
+      <button class="icon-btn download-dialog-close" type="button" aria-label="Close download menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
     </div>
-
     <div class="platform-downloads">
       <section class="platform-download" id="windows-download-option">
-        <div class="platform-name">
-          <strong>Windows</strong>
-          <span id="windows-dialog-version">Checking releases…</span>
-        </div>
+        <div class="platform-name"><strong>Windows</strong><span id="windows-dialog-version">Checking releases…</span></div>
         <p>Windows 10 or 11. Choose the portable build or the standard installer.</p>
         <div class="platform-actions">
           <a class="platform-action primary download-link windows-portable-link" id="windows-portable-download" data-platform="windows" data-package="portable" href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe">
-            Portable .exe
-            <span id="windows-portable-meta">Latest release</span>
+            Portable .exe<span id="windows-portable-meta">Latest release</span>
           </a>
           <a class="platform-action secondary download-link windows-installer-link" id="windows-installer-download" data-platform="windows" data-package="installer" href="https://github.com/akawazak/valo-project/releases/latest">
-            Installer .exe
-            <span id="windows-installer-meta">Open releases</span>
+            Installer .exe<span id="windows-installer-meta">Open releases</span>
           </a>
         </div>
       </section>
-
       <section class="platform-download is-unavailable" id="android-download-option">
-        <div class="platform-name">
-          <strong>Android</strong>
-          <span id="android-dialog-version">Coming soon</span>
-        </div>
+        <div class="platform-name"><strong>Android</strong><span id="android-dialog-version">Coming soon</span></div>
         <p id="android-dialog-copy">The APK will appear here automatically when the Android release is published.</p>
         <div class="platform-actions">
           <a class="platform-action primary download-link android-download-link is-disabled" id="android-download" data-platform="android" data-package="apk" aria-disabled="true" tabindex="-1">
-            Android .apk
-            <span id="android-download-meta">Not published yet</span>
+            Android .apk<span id="android-download-meta">Not published yet</span>
           </a>
         </div>
       </section>
     </div>
-
     <p class="download-dialog-foot">Release files and version numbers are read directly from the VantaVault GitHub releases.</p>
   </div>
 </dialog>
 
 <main id="top">
+<div class="backdrop" aria-hidden="true"><img id="backdrop-img" src="assets/themes/china-launch.webp" alt="" width="2000" height="1125" fetchpriority="high"></div>
 <section class="hero shell">
-  <div class="hero-copy">
-    <h1>Your VALORANT<br><em>account in one place.</em></h1>
-    <p>Check your VALORANT store, manage skins and loadouts, follow rank stats and match history, and see your party and live lobby from one private Windows app.</p>
+  <h1>Your whole VALORANT account. <span>One app.</span></h1>
+  <div class="hero-side">
+    <p class="lede">Check your store, build loadouts and apply them in one click, go back through every round, and see every rank in your lobby. A free, open-source app for Windows.</p>
     <div class="actions">
-      <a class="btn primary download-link windows-portable-link" href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe">
-        <span class="btn-copy"><strong>Download for Windows</strong></span>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>
+      <a class="btn btn-solid download-link windows-portable-link" href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>
+        Download for Windows
       </a>
-      <a class="btn secondary" href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">View source on GitHub</a>
-    </div>
-    <div class="hero-meta">
-      <div><strong id="hero-version">Latest</strong><span>Release</span></div>
-      <div><strong>Windows 10/11</strong><span>Portable build</span></div>
-      <div><strong>Stored locally</strong><span>Sessions stay on your PC</span></div>
-    </div>
-  </div>
-  <div class="hero-visual">
-    <div class="app-frame">
-      <div class="windowbar">
-        <span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span>
-        <span class="controls"><i></i><i></i><i></i></span>
-      </div>
-      <img src="assets/homepage-profile-sanitized.png" width="1711" height="919" decoding="async" fetchpriority="high" alt="VantaVault profile and competitive history interface using a demo identity">
-    </div>
-  </div>
-</section>
-
-<div class="trust">
-  <span>Open source</span><i></i><span>Portable for Windows</span><i></i><span>Multiple accounts</span><i></i><span>Local match history</span><i></i><span>No injection</span>
-</div>
-
-<section id="guides" class="section shell">
-  <div class="heading reveal">
-    <div class="kicker">Explore VantaVault</div>
-    <h2>Built around the parts of<br><em>VALORANT you check every day.</em></h2>
-    <p>Read exactly how store checks, cosmetic loadouts, and local match history work before downloading.</p>
-  </div>
-  <div class="feature-grid">
-    <a class="card reveal" href="/valorant-store-checker/">
-      <span class="card-label">STORE CHECKER</span><h3>VALORANT store checker for Windows</h3>
-      <p>View daily offers, featured bundles, Night Market, accessories, prices, and wishlist matches from your local client session.</p>
-    </a>
-    <a class="card reveal" href="/valorant-loadout-manager/">
-      <span class="card-label">LOADOUTS</span><h3>VALORANT loadout manager</h3>
-      <p>Organize skins, variants, buddies, cards, sprays, titles, and reusable cosmetic presets in one desktop app.</p>
-    </a>
-    <a class="card reveal" href="/valorant-match-history/">
-      <span class="card-label">MATCH HISTORY</span><h3>VALORANT match history tracker</h3>
-      <p>Review rank progression, agent and map performance, and locally stored match history while keeping account data on your device.</p>
-    </a>
-  </div>
-</section>
-
-<section id="features" class="section shell">
-  <div class="heading reveal">
-    <div class="kicker">What you can do</div>
-    <h2>Store checker, loadout manager,<br><em>profiles, and live matches.</em></h2>
-    <p>Check daily offers, edit cosmetics, compare profiles, or open the current lobby without switching tools.</p>
-  </div>
-
-  <div class="feature-grid">
-    <article class="card visual-card loadout-card reveal">
-      <span class="card-label">LOADOUTS</span>
-      <img src="assets/homepage-loadout-sanitized.png" width="1652" height="952" loading="lazy" decoding="async" alt="VantaVault complete loadout and preset editor using a demo identity">
-      <div class="visual-copy"><h3>Your full loadout</h3><p>Change weapons, variants, buddies, cards, sprays, titles, expressions, and saved presets from one screen.</p></div>
-    </article>
-
-    <article class="card store-card reveal">
-      <span class="card-label">STOREFRONT</span>
-      <div class="feature-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h18l-2 11H5L3 8Zm3-4h12l1 4H5l1-4Z"/></svg>
-      </div>
-      <h3>Check your VALORANT store</h3>
-      <p>See daily skin offers, featured bundles, Night Market, accessories, balances, variants, and wishlist matches.</p>
-      <div class="offer-stack" aria-hidden="true">
-        <div class="offer"><i class="offer-thumb"></i><div><b>Daily offer</b><span>Owned variants and upgrades</span></div><strong>1,775 VP</strong></div>
-        <div class="offer"><i class="offer-thumb"></i><div><b>Wishlist match</b><span>Available in your storefront</span></div><strong>READY</strong></div>
-      </div>
-    </article>
-
-    <article class="card live-card reveal">
-      <span class="card-label">LIVE MATCH</span>
-      <div class="live-map" aria-hidden="true"><i class="ring"></i><i class="ping"></i></div>
-      <h3>See who you are playing with</h3>
-      <p>Map, queue, teams, agents, confirmed party context, and live score when Riot exposes it to the active session.</p>
-      <div class="live-tags"><span>AGENT SELECT</span><span>RANK CONTEXT</span><span>PARTY EVIDENCE</span></div>
-    </article>
-
-    <article class="card visual-card profile-card reveal">
-      <span class="card-label">PROFILES</span>
-      <img src="assets/homepage-profile-sanitized.png" width="1711" height="919" loading="lazy" decoding="async" alt="VantaVault detailed demo profile and ranked progression">
-      <div class="visual-copy"><h3>Ranks and matches that make sense</h3><p>Current RR, peak rank, win rate, agents, maps, and locally stored match history.</p></div>
-    </article>
-
-    <article class="card privacy-card reveal">
-      <div class="privacy-copy">
-        <span class="card-label" style="position:static;display:block;margin-bottom:20px">PRIVACY</span>
-        <h3>Your accounts stay on your PC</h3>
-        <p>VantaVault protects reusable Riot session secrets with Windows Credential Manager and does not inject into VALORANT.</p>
-      </div>
-      <div class="privacy-list">
-        <div><b>Protected locally</b><span>Reusable session secrets stay in native OS storage.</span></div>
-        <div><b>History you control</b><span>Choose how long match data is kept.</span></div>
-        <div><b>Safe diagnostics</b><span>Export errors without exposing account tokens.</span></div>
-      </div>
-    </article>
-  </div>
-</section>
-
-<section id="screens" class="section shell">
-  <div class="heading center reveal">
-    <div class="kicker" style="justify-content:center">Current Windows build</div>
-    <h2>See the app before<br><em>you download it.</em></h2>
-    <p>These are real VantaVault screens, shown without replacement mockups.</p>
-  </div>
-  <div class="gallery reveal">
-    <div class="tabs" role="tablist" aria-label="VantaVault app screens">
-      <button class="tab active" id="screen-tab-profile" role="tab" aria-selected="true" aria-controls="screen-panel" tabindex="0" data-screen="profile">Profile</button>
-      <button class="tab" id="screen-tab-loadout" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="loadout">Loadouts</button>
-      <button class="tab" id="screen-tab-customization" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="customization">Customization</button>
-      <button class="tab" id="screen-tab-social" role="tab" aria-selected="false" aria-controls="screen-panel" tabindex="-1" data-screen="social">Party & Friends</button>
-    </div>
-    <div class="stage" id="screen-panel" role="tabpanel" aria-labelledby="screen-tab-profile" tabindex="0">
-      <div class="stage-head"><span class="windowbrand"><span class="mini-v">◈</span> VantaVault</span><span class="controls"><i></i><i></i><i></i></span></div>
-      <img id="stage-image" src="assets/homepage-profile-sanitized.png" width="1711" height="919" loading="lazy" decoding="async" alt="VantaVault profile screen using a demo identity">
-    </div>
-  </div>
-</section>
-
-<section id="download" class="section download-section shell">
-  <div class="download-box reveal">
-    <div>
-      <div class="kicker">Latest GitHub release</div>
-      <h2>Download the<br><em>latest build.</em></h2>
-      <p>The download button always points to the newest <strong>VantaVault-portable.exe</strong> published on GitHub.</p>
-      <div class="pills"><span>Windows 10 or 11</span><span>Portable</span><span>WebView2</span><span>Apache-2.0</span></div>
-    </div>
-    <aside class="release" aria-live="polite">
-      <div class="release-top"><b><i></i> <span id="release-channel">Checking published versions</span></b><a id="release-link" href="https://github.com/akawazak/valo-project/releases/latest" target="_blank" rel="noreferrer">Release notes ↗</a></div>
-      <div class="release-grid">
-        <div><small>VERSION</small><strong id="release-version">Checking…</strong></div>
-        <div><small>PUBLISHED</small><strong id="release-date">GitHub</strong></div>
-      </div>
-      <div class="release-file"><b id="release-file">VantaVault-portable.exe</b><span id="release-size">Portable Windows build</span></div>
-      <a class="btn primary download-link windows-portable-link" id="main-download" href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe">
-        Download portable
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>
+      <a class="btn btn-line" href="#app" data-trailer-sound>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
+        Watch the trailer
       </a>
-      <p class="release-note" id="release-note">Comparing published release versions from GitHub…</p>
-    </aside>
+    </div>
+    <p class="hero-meta"><strong id="hero-version">Latest</strong> · Windows 10 and 11 · Portable, no setup</p>
   </div>
+</section>
+
+<section class="tour shell" id="app" aria-label="VantaVault app tour">
+  <div class="window">
+    <div class="titlebar">
+      <span class="titlebar-name"><img src="assets/app-icon.png" width="16" height="16" alt="">VantaVault</span>
+      <span class="titlebar-controls" aria-hidden="true">
+        <svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>
+        <svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7"/></svg>
+        <svg viewBox="0 0 12 12"><path d="m2.5 2.5 7 7m0-7-7 7"/></svg>
+      </span>
+    </div>
+    <div class="appbar">
+      <span class="wordmark appbar-mark"><img src="assets/app-icon.png" width="26" height="26" alt=""><span>VANTA<em>VAULT</em></span></span>
+      <div class="appbar-tabs" role="tablist" aria-label="VantaVault screens">
+        <button class="app-tab" role="tab" id="tab-trailer" aria-controls="panel-trailer" aria-selected="true" tabindex="0" data-tab="trailer">Trailer</button>
+        <button class="app-tab" role="tab" id="tab-loadouts" aria-controls="panel-loadouts" aria-selected="false" tabindex="-1" data-tab="loadouts">Loadouts</button>
+        <button class="app-tab" role="tab" id="tab-store" aria-controls="panel-store" aria-selected="false" tabindex="-1" data-tab="store">Store</button>
+        <button class="app-tab" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" tabindex="-1" data-tab="history">Match history</button>
+        <button class="app-tab" role="tab" id="tab-review" aria-controls="panel-review" aria-selected="false" tabindex="-1" data-tab="review">Match review</button>
+        <button class="app-tab" role="tab" id="tab-live" aria-controls="panel-live" aria-selected="false" tabindex="-1" data-tab="live">Live match</button>
+        <button class="app-tab" role="tab" id="tab-duos" aria-controls="panel-duos" aria-selected="false" tabindex="-1" data-tab="duos">Duos</button>
+        <button class="app-tab" role="tab" id="tab-insights" aria-controls="panel-insights" aria-selected="false" tabindex="-1" data-tab="insights">Insights</button>
+        <span class="appbar-underline" aria-hidden="true"></span>
+      </div>
+      <span class="appbar-account" aria-label="Demo account"><i>V</i>Vanta#DEMO<b></b></span>
+    </div>
+
+    <div class="panels">
+      <section class="panel is-active" id="panel-trailer" role="tabpanel" aria-labelledby="tab-trailer" tabindex="0">
+        <div class="screen screen-video" id="trailer">
+          <video id="trailer-video" src="assets/vantavault-trailer.mp4" poster="assets/vantavault-trailer-poster.jpg" width="1920" height="1080" muted loop playsinline preload="metadata" aria-label="VantaVault trailer: loadouts, profile, round and map review, live match, store, career insights, sessions, compare, Duos and accolades"><track kind="captions" src="assets/vantavault-trailer.vtt" srclang="en" label="English"></video>
+        </div>
+        <aside class="notes">
+          <h2>The one-minute tour</h2>
+          <p>Loadouts, match review, live match, the store, insights, Duos and accolades, narrated, in one window.</p>
+          <button class="btn btn-solid btn-block" type="button" data-trailer-sound>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
+            Play with sound
+          </button>
+          <p class="fine">Demo account. Names, stats and store offers are made up. Captions included.</p>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-loadouts" role="tabpanel" aria-labelledby="tab-loadouts" tabindex="0" hidden>
+        <div class="screen"><img src="assets/tab-loadouts.webp" width="1800" height="1054" loading="lazy" decoding="async" alt="VantaVault loadout screen with a skin for every weapon and saved presets, demo account"></div>
+        <aside class="notes">
+          <h2>Build it. Apply it. Play it.</h2>
+          <ul>
+            <li>Every weapon, variant, buddy, card, spray and title on one screen.</li>
+            <li>Save full loadouts as presets.</li>
+            <li>Apply a preset to VALORANT in one click.</li>
+            <li>Link a preset to agents and it applies when you lock them in.</li>
+          </ul>
+          <a class="notes-link" href="/valorant-loadout-manager/">How the loadout manager works</a>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-store" role="tabpanel" aria-labelledby="tab-store" tabindex="0" hidden>
+        <div class="screen">
+          <img src="assets/tab-store-detail.webp" width="1800" height="1054" loading="lazy" decoding="async" alt="VantaVault skin details for the CYRAX Vandal with its variants, demo account">
+        </div>
+        <aside class="notes">
+          <h2>Your daily store, a click away</h2>
+          <div class="segmented" role="group" aria-label="Store view">
+            <button type="button" aria-pressed="true" data-src="assets/tab-store-detail.webp" data-alt="VantaVault skin details for the CYRAX Vandal with its variants, demo account">Skin details</button>
+            <button type="button" aria-pressed="false" data-src="assets/tab-store.webp" data-alt="VantaVault daily store with four skin offers, demo account">Daily offers</button>
+          </div>
+          <ul>
+            <li>Daily offers, featured bundle, Night Market and accessories.</li>
+            <li>Open any skin to see its levels and variants.</li>
+            <li>Wishlist a skin and see when it shows up.</li>
+          </ul>
+          <a class="notes-link" href="/valorant-store-checker/">How the store checker works</a>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-history" role="tabpanel" aria-labelledby="tab-history" tabindex="0" hidden>
+        <div class="screen"><img src="assets/tab-history.webp" width="1800" height="1054" loading="lazy" decoding="async" alt="VantaVault match history grouped by day, demo account"></div>
+        <aside class="notes">
+          <h2>Your whole journey</h2>
+          <ul>
+            <li>Rank and RR over time, with your peak.</li>
+            <li>Every match saved on your PC, grouped by day.</li>
+            <li>Session recaps for a night of games.</li>
+          </ul>
+          <a class="notes-link" href="/valorant-match-history/">How match history works</a>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-review" role="tabpanel" aria-labelledby="tab-review" tabindex="0" hidden>
+        <div class="screen">
+          <img src="assets/tab-rounds.webp" width="1800" height="1100" loading="lazy" decoding="async" alt="VantaVault round review with the map, kill feed and economy for one round, demo data">
+        </div>
+        <aside class="notes">
+          <h2>Every round, kill by kill</h2>
+          <div class="segmented" role="group" aria-label="Match review view">
+            <button type="button" aria-pressed="true" data-src="assets/tab-rounds.webp" data-alt="VantaVault round review with the map, kill feed and economy for one round, demo data">Round review</button>
+            <button type="button" aria-pressed="false" data-src="assets/tab-map.webp" data-alt="VantaVault map review showing where fights happened, demo data">Map</button>
+          </div>
+          <ul>
+            <li>Step through each round: kills, plants and economy.</li>
+            <li>The map shows where you win fights and where you keep dying.</li>
+            <li>Takeaways point out what changed the match.</li>
+          </ul>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-live" role="tabpanel" aria-labelledby="tab-live" tabindex="0" hidden>
+        <div class="screen"><img src="assets/tab-live.webp" width="1800" height="1126" loading="lazy" decoding="async" alt="VantaVault live match with both teams, agents and ranks, demo players"></div>
+        <aside class="notes">
+          <h2>Every rank in your lobby</h2>
+          <ul>
+            <li>Map, score, agents and ranks for both teams.</li>
+            <li>See who's partied up.</li>
+            <li>Open any player's details.</li>
+          </ul>
+          <p class="fine">Shows what Riot shares with your session during the match.</p>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-duos" role="tabpanel" aria-labelledby="tab-duos" tabindex="0" hidden>
+        <div class="screen">
+          <img src="assets/tab-duos.webp" width="1800" height="1170" loading="lazy" decoding="async" alt="VantaVault Duos screen comparing how often two demo players avenge each other">
+        </div>
+        <aside class="notes">
+          <h2>Who backs who up</h2>
+          <div class="segmented" role="group" aria-label="Duos view">
+            <button type="button" aria-pressed="true" data-src="assets/tab-duos.webp" data-alt="VantaVault Duos screen comparing how often two demo players avenge each other">Duos</button>
+            <button type="button" aria-pressed="false" data-src="assets/tab-compare.webp" data-alt="VantaVault comparing two demo players' playstyle and match stats">Compare</button>
+          </div>
+          <ul>
+            <li>How often you and your duo trade and avenge each other.</li>
+            <li>Your best agent pairs together.</li>
+            <li>Compare your playstyle and stats with any friend.</li>
+          </ul>
+        </aside>
+      </section>
+
+      <section class="panel" id="panel-insights" role="tabpanel" aria-labelledby="tab-insights" tabindex="0" hidden>
+        <div class="screen"><img src="assets/tab-insights.webp" width="1800" height="1082" loading="lazy" decoding="async" alt="VantaVault career insights with a playstyle chart, demo data"></div>
+        <aside class="notes">
+          <h2>Know your game</h2>
+          <ul>
+            <li>Your playstyle across aim, entry, clutch, teamplay, economy and consistency.</li>
+            <li>Ranked against the players in your own matches.</li>
+            <li>Recent form, best games and accolades.</li>
+          </ul>
+        </aside>
+      </section>
+    </div>
+  </div>
+  <div class="themes" role="radiogroup" aria-label="Background theme">
+    <span class="themes-label">Backgrounds from the app</span>
+    <button class="theme" type="button" role="radio" aria-checked="true" data-theme="china-launch" title="China Launch"><img src="assets/themes/china-launch-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">China Launch</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="evolution" title="Evolution"><img src="assets/themes/evolution-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Evolution</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="omen-outlaw" title="Omen &amp; Outlaw"><img src="assets/themes/omen-outlaw-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Omen &amp; Outlaw</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="cypher-reborn" title="Cypher Reborn"><img src="assets/themes/cypher-reborn-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Cypher Reborn</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="deadlock" title="Deadlock"><img src="assets/themes/deadlock-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Deadlock</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="viper" title="Viper"><img src="assets/themes/viper-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Viper</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="harbor" title="Harbor"><img src="assets/themes/harbor-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Harbor</span></button>
+    <button class="theme" type="button" role="radio" aria-checked="false" data-theme="gekko" title="Gekko"><img src="assets/themes/gekko-thumb.webp" width="160" height="90" alt="" loading="lazy"><span class="sr-only">Gekko</span></button>
+  </div>
+</section>
+
+<section class="privacy shell" id="privacy">
+  <div class="privacy-head">
+    <h2>Built on your own Riot Client. Kept on your own PC.</h2>
+    <p>VantaVault reads what your signed-in Riot Client already shares on your computer. It doesn't touch the game itself.</p>
+  </div>
+  <ul class="facts">
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><div><b>Open source</b><span>Every line is on <a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a>.</span></div></li>
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><div><b>No injection, no memory reading</b><span>It never hooks into or reads VALORANT's game process.</span></div></li>
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><div><b>Logins in Windows Credential Manager</b><span>Saved Riot sessions use the same protected storage as Windows itself.</span></div></li>
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg><div><b>Your history stays with you</b><span>Matches are stored on your PC, for as long as you choose.</span></div></li>
+  </ul>
+  <p class="privacy-note">VantaVault is an independent project and isn't endorsed by Riot Games. Background art is from Riot Games' official VALORANT media wallpapers, the same themes the app offers.</p>
+</section>
+
+<section class="guides shell" id="guides">
+  <h2>Guides</h2>
+  <div class="guide-list">
+    <a class="guide-row" href="/valorant-store-checker/"><b>VALORANT store checker for Windows</b><span>Daily offers, bundles, Night Market and wishlist matches.</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
+    <a class="guide-row" href="/valorant-loadout-manager/"><b>VALORANT loadout manager</b><span>Skins, variants, buddies, cards, sprays, titles and presets.</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
+    <a class="guide-row" href="/valorant-match-history/"><b>VALORANT match history tracker</b><span>Rank progression, agents, maps and history on your device.</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
+  </div>
+</section>
+
+<section class="download shell" id="download">
+  <div class="download-copy">
+    <h2>Download VantaVault</h2>
+    <p>Free for Windows 10 and 11. Run the portable build with no setup, or use the installer. Either way it updates itself from inside the app.</p>
+    <p class="fine">Needs Microsoft Edge WebView2, which Windows 10 and 11 already include. Apache-2.0 licence.</p>
+  </div>
+  <aside class="release" aria-live="polite">
+    <div class="release-top"><b><i></i><span id="release-channel">Checking published versions</span></b><a id="release-link" href="https://github.com/akawazak/valo-project/releases/latest" target="_blank" rel="noreferrer">Release notes</a></div>
+    <dl class="release-table">
+      <div><dt>Version</dt><dd id="release-version">Checking…</dd></div>
+      <div><dt>Published</dt><dd id="release-date">GitHub</dd></div>
+      <div><dt>File</dt><dd id="release-file">VantaVault-portable.exe</dd></div>
+      <div><dt>Size</dt><dd id="release-size">Portable Windows build</dd></div>
+    </dl>
+    <a class="btn btn-solid btn-block download-link windows-portable-link" id="main-download" href="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>
+      Download portable
+    </a>
+    <button class="btn btn-line btn-block download-menu-trigger" type="button" aria-haspopup="dialog" aria-controls="download-dialog">Installer and other platforms</button>
+    <p class="release-note" id="release-note">Comparing published release versions from GitHub…</p>
+  </aside>
 </section>
 </main>
 
 <footer class="footer shell">
-  <span>VantaVault isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</span>
-  <div class="footer-links"><a href="https://github.com/akawazak/valo-project/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a><a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/akawazak/valo-project/issues" target="_blank" rel="noreferrer">Issues</a><a href="https://discord.gg/gxGQwWyECE" target="_blank" rel="noreferrer">Discord</a></div>
+  <div class="footer-brand"><span class="wordmark">VANTA<em>VAULT</em></span>
+  <p>VantaVault isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p></div>
+  <nav class="footer-links" aria-label="Footer"><a href="https://github.com/akawazak/valo-project/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a><a href="https://github.com/akawazak/valo-project" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/akawazak/valo-project/issues" target="_blank" rel="noreferrer">Issues</a><a href="https://discord.gg/gxGQwWyECE" target="_blank" rel="noreferrer">Discord</a></nav>
 </footer>
 
 <script>
-const PROFILE_IMAGE="assets/homepage-profile-sanitized.png";
-const LOADOUT_IMAGE="assets/homepage-loadout-sanitized.png";
-const SCREENS={
-  profile:{src:PROFILE_IMAGE,alt:"VantaVault profile and competitive history interface using a demo identity",width:1711,height:919},
-  loadout:{src:LOADOUT_IMAGE,alt:"VantaVault complete loadout interface using a demo identity",width:1652,height:952},
-  customization:{src:"assets/cosmetic-picker.webp",alt:"VantaVault cosmetic picker interface",width:1280,height:720},
-  social:{src:"assets/party-friends-sanitized.png",alt:"VantaVault party and friends interface using demo identities",width:934,height:1683}
-};
+
 const RELEASES_API="https://api.github.com/repos/akawazak/valo-project/releases?per_page=30";
 const RELEASE_PAGE="https://github.com/akawazak/valo-project/releases/latest";
 const FALLBACK="https://github.com/akawazak/valo-project/releases/latest/download/VantaVault-portable.exe";
@@ -640,7 +491,7 @@ async function release(){
       $("#hero-version").textContent=version;
       $("#release-date").textContent=releaseDate(windowsRelease);
       $("#release-file").textContent=portable.name;
-      $("#release-size").textContent=`${bytes(portable.size)} · GitHub release asset`;
+      $("#release-size").textContent=`${bytes(portable.size)}`;
       $("#release-link").href=windowsRelease.html_url||RELEASE_PAGE;
       $("#release-note").textContent=`Selected ${version} after comparing ${published.length} published release${published.length===1?"":"s"}.`;
       $("#windows-dialog-version").textContent=`${version}${windowsRelease.prerelease?" · preview":" · stable"}`;
@@ -691,55 +542,98 @@ function downloadDialog(){
     if(disabled)event.preventDefault();
   });
 }
-function tabs(){
-  const image=$("#stage-image");
-  const panel=$("#screen-panel");
-  const buttons=$$(".tab");
-  const activate=(button,{focus=false}={})=>{
-    const item=SCREENS[button.dataset.screen];
-    if(!item)return;
-    buttons.forEach(x=>{
-      const selected=x===button;
-      x.classList.toggle("active",selected);
-      x.setAttribute("aria-selected",String(selected));
-      x.tabIndex=selected?0:-1;
-    });
-    panel.setAttribute("aria-labelledby",button.id);
-    if(focus)button.focus();
-    if(image.getAttribute("src")===item.src)return;
-    panel.setAttribute("aria-busy","true");
-    image.classList.add("switch");
-    const next=new Image();
-    next.onload=()=>{
-      image.src=item.src;
-      image.alt=item.alt;
-      image.width=item.width||1800;
-      image.height=item.height||967;
-      image.classList.remove("switch");
-      panel.removeAttribute("aria-busy");
-    };
-    next.onerror=()=>{
-      image.classList.remove("switch");
-      panel.removeAttribute("aria-busy");
-    };
-    next.src=item.src;
+function appWindow(){
+  const tabs=$$(".app-tab");
+  const bar=$(".appbar-underline");
+  const video=$("#trailer-video");
+  const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(!tabs.length)return;
+  let withSound=false;
+  const place=tab=>{if(!bar)return;bar.style.transform="translateX("+tab.offsetLeft+"px) scaleX("+tab.offsetWidth+")"};
+  const quiet=()=>{withSound=false;if(!video)return;video.muted=true;video.loop=true;video.controls=false};
+  const select=(tab,{focus=false,push=true,animate=true}={})=>{
+    const id=tab.dataset.tab;
+    tabs.forEach(t=>{const on=t===tab;t.setAttribute("aria-selected",String(on));t.tabIndex=on?0:-1});
+    $$(".panel").forEach(p=>{const on=p.id==="panel-"+id;p.hidden=!on;p.classList.toggle("is-active",on);p.classList.remove("is-entering");if(on&&animate&&!reduce){void p.offsetWidth;p.classList.add("is-entering")}});
+    place(tab);
+    tab.scrollIntoView({block:"nearest",inline:"nearest",behavior:reduce?"auto":"smooth"});
+    if(focus)tab.focus();
+    if(video){if(id==="trailer"){if(!reduce||withSound)video.play().catch(()=>{})}else{video.pause()}}
+    if(push&&history.replaceState)history.replaceState(null,"","#"+id);
+    const send=window.va;if(typeof send==="function"&&animate)send("event",{name:"App tab",data:{tab:id}});
   };
-  buttons.forEach((button,index)=>{
-    button.addEventListener("click",()=>activate(button));
-    button.addEventListener("keydown",event=>{
-      let next=index;
-      if(event.key==="ArrowRight")next=(index+1)%buttons.length;
-      else if(event.key==="ArrowLeft")next=(index-1+buttons.length)%buttons.length;
-      else if(event.key==="Home")next=0;
-      else if(event.key==="End")next=buttons.length-1;
-      else return;
-      event.preventDefault();
-      activate(buttons[next],{focus:true});
+  tabs.forEach((tab,i)=>{
+    tab.addEventListener("click",()=>select(tab));
+    tab.addEventListener("keydown",e=>{
+      let n=i;
+      if(e.key==="ArrowRight")n=(i+1)%tabs.length;else if(e.key==="ArrowLeft")n=(i-1+tabs.length)%tabs.length;
+      else if(e.key==="Home")n=0;else if(e.key==="End")n=tabs.length-1;else return;
+      e.preventDefault();select(tabs[n],{focus:true});
     });
   });
-  const preload=()=>Object.values(SCREENS).forEach(item=>{const img=new Image();img.src=item.src});
-  if("requestIdleCallback"in window)requestIdleCallback(preload,{timeout:1800});
-  else setTimeout(preload,900);
+  $$(".segmented").forEach(group=>{
+    const img=group.closest(".panel").querySelector(".screen img");
+    group.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
+      group.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+      if(!img||img.getAttribute("src")===b.dataset.src)return;
+      img.src=b.dataset.src;img.alt=b.dataset.alt||img.alt;
+      if(!reduce){img.style.animation="none";void img.offsetWidth;img.style.animation="reveal .45s cubic-bezier(.16,1,.3,1) both"}
+    }));
+  });
+  const fromHash=tabs.find(t=>"#"+t.dataset.tab===location.hash);
+  select(fromHash||tabs[0],{push:false,animate:false});
+  window.addEventListener("resize",()=>place(tabs.find(t=>t.getAttribute("aria-selected")==="true")));
+  document.fonts&&document.fonts.ready.then(()=>place(tabs.find(t=>t.getAttribute("aria-selected")==="true")));
+  if(video){
+    if(!reduce&&"IntersectionObserver"in window){
+      new IntersectionObserver(es=>es.forEach(e=>{if(withSound||$("#panel-trailer").hidden)return;if(e.isIntersecting)video.play().catch(()=>{});else video.pause()}),{threshold:.3}).observe(video);
+    }
+    $$("[data-trailer-sound]").forEach(trigger=>trigger.addEventListener("click",e=>{
+      e.preventDefault();
+      select(tabs[0]);
+      $("#app").scrollIntoView({behavior:reduce?"auto":"smooth",block:"start"});
+      withSound=true;video.currentTime=0;video.muted=false;video.loop=false;video.controls=true;
+      video.play().catch(quiet);
+      const send=window.va;if(typeof send==="function")send("event",{name:"Trailer",data:{location:trigger.closest(".notes")?"window":"hero"}});
+    }));
+    video.addEventListener("ended",()=>{quiet();video.currentTime=0;if(!reduce)video.play().catch(()=>{})});
+  }
+}
+function siteThemes(){
+  const box=$(".backdrop");
+  const img=$("#backdrop-img");
+  const buttons=$$(".theme");
+  if(!box||!img||!buttons.length)return;
+  const KEY="vv-site-theme";
+  const apply=(id,{save=true}={})=>{
+    const b=buttons.find(x=>x.dataset.theme===id);if(!b)return;
+    buttons.forEach(x=>{const on=x===b;x.setAttribute("aria-checked",String(on));x.tabIndex=on?0:-1});
+    const src="assets/themes/"+id+".webp";
+    if(save){try{localStorage.setItem(KEY,id)}catch{}}
+    if(img.getAttribute("src")===src)return;
+    box.classList.add("is-swapping");
+    const next=new Image();
+    next.onload=()=>setTimeout(()=>{img.src=src;box.classList.remove("is-swapping")},220);
+    next.onerror=()=>box.classList.remove("is-swapping");
+    next.src=src;
+    const send=window.va;if(typeof send==="function"&&save)send("event",{name:"Theme",data:{theme:id}});
+  };
+  buttons.forEach((b,i)=>{
+    b.addEventListener("click",()=>apply(b.dataset.theme));
+    b.addEventListener("keydown",e=>{
+      let n=i;if(e.key==="ArrowRight"||e.key==="ArrowDown")n=(i+1)%buttons.length;else if(e.key==="ArrowLeft"||e.key==="ArrowUp")n=(i-1+buttons.length)%buttons.length;else return;
+      e.preventDefault();apply(buttons[n].dataset.theme);buttons[n].focus();
+    });
+  });
+  let saved=null;try{saved=localStorage.getItem(KEY)}catch{}
+  if(saved)apply(saved,{save:false});else buttons.forEach((x,i)=>x.tabIndex=i?-1:0);
+}
+function drawFacts(){
+  const facts=$(".facts");
+  if(!facts||!("IntersectionObserver"in window)||window.matchMedia("(prefers-reduced-motion: reduce)").matches)return;
+  facts.classList.add("will-draw");
+  const o=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){facts.classList.add("is-in");o.disconnect()}}),{threshold:.25});
+  o.observe(facts);
 }
 function sectionNav(){
   const links=$$(".nav a[href^='#']");
@@ -778,15 +672,8 @@ function analytics(){
   }));
   $$(".tab").forEach(tab=>tab.addEventListener("click",()=>send("Screen preview",{screen:tab.dataset.screen})));
 }
-function reveal(){
-  const els=$$(".reveal");
-  if(!("IntersectionObserver"in window)){els.forEach(e=>e.classList.add("visible"));return}
-  const o=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add("visible");o.unobserve(x.target)}}),{threshold:.08});
-  els.forEach(e=>o.observe(e));setTimeout(()=>els.forEach(e=>e.classList.add("visible")),1200);
-}
-document.addEventListener("DOMContentLoaded",()=>{tabs();sectionNav();downloadDialog();analytics();reveal();release()});
+document.addEventListener("DOMContentLoaded",()=>{appWindow();siteThemes();drawFacts();sectionNav();downloadDialog();analytics();release()});
 </script>
-<script src="enhance.js"></script>
 <script>
 window.va=window.va||function(){(window.vaq=window.vaq||[]).push(arguments)};
 </script>
