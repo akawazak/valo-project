@@ -7695,3 +7695,435 @@ button.mapEvent .mapHeat { inset: -34px; }
 .railNav svg.railNavChevron { opacity: 0.7; }
 .railNavGroup .railNavQuick button { border-color: color-mix(in srgb, var(--tone) 30%, var(--border-strong)); }
 .railNavIcon[data-tone="compare"] { --tone: #ffb03a; }
+
+/* Map tab markers: crisp dots for kills and crosses for deaths, no glow, so clusters stay readable. */
+.mapAnalytics button.mapEvent .mapPoint {
+    width: 9px;
+    height: 9px;
+    border: 1.5px solid #05080b;
+    background: currentColor;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.mapAnalytics button.mapEvent.mapEventDeath .mapPoint {
+    width: 11px;
+    height: 11px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.mapAnalytics .mapEventDeath .mapPoint::before,
+.mapAnalytics .mapEventDeath .mapPoint::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 12px;
+    height: 3px;
+    border-radius: 1px;
+    background: currentColor;
+    box-shadow: 0 0 0 1px #05080b;
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.mapAnalytics .mapEventDeath .mapPoint::after {
+    transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.mapAnalytics button.mapEvent:hover .mapPoint,
+.mapAnalytics button.mapEvent:focus-visible .mapPoint {
+    transform: translate(-50%, -50%) scale(1.45);
+}
+
+.mapAnalytics button.mapEvent.mapEventKill:hover .mapPoint {
+    box-shadow: 0 0 0 2px #fff;
+}
+
+.mapAnalytics .mapLegendKill,
+.mapAnalytics .mapLegendDeath {
+    box-shadow: none;
+}
+
+.mapAnalytics .mapLegendDeath {
+    position: relative;
+    background: none;
+}
+
+.mapAnalytics .mapLegendDeath::before,
+.mapAnalytics .mapLegendDeath::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 2.5px;
+    border-radius: 1px;
+    background: #ff4f68;
+    transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.mapAnalytics .mapLegendDeath::after {
+    transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.mapAnalytics .mapZoneThumb i,
+.mapAnalytics .mapHotspotThumb i,
+.mapAnalytics .mapReviewThumb > i {
+    box-shadow: 0 0 0 2px #05080b;
+}
+
+.mapPlotFilterGroup {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.mapZoneSides {
+    display: flex;
+    gap: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.mapZoneSides > span {
+    color: #8d9da8;
+}
+
+/* Takeaways: one per row, advice first, with the numbers as chips underneath. */
+.mapAnalytics .mapReviewList {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.mapAnalytics .mapReviewCard {
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: start;
+    gap: 11px;
+    padding: 9px 12px 10px;
+    border-left: 3px solid var(--review-color);
+}
+
+.mapAnalytics .mapReviewThumb {
+    width: 44px;
+    height: 44px;
+}
+
+.mapAnalytics .mapReviewList p {
+    gap: 4px;
+}
+
+.mapAnalytics .mapReviewList p small {
+    font-size: 0.58rem;
+}
+
+.mapAnalytics .mapReviewList p strong {
+    font-size: 0.86rem;
+}
+
+.mapAnalytics .mapReviewList p span {
+    color: #aab8c2;
+    font-size: 0.72rem;
+    line-height: 1.42;
+}
+
+.mapAnalytics .mapReviewList p em {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 3px;
+    font-style: normal;
+}
+
+.mapAnalytics .mapReviewList p em i {
+    padding: 2px 7px;
+    border: 1px solid color-mix(in srgb, var(--review-color) 30%, transparent);
+    border-radius: 999px;
+    color: color-mix(in srgb, var(--review-color) 70%, #fff);
+    background: color-mix(in srgb, var(--review-color) 9%, transparent);
+    font-size: 0.64rem;
+    font-style: normal;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+
+.mapAnalytics .mapInsights {
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+/* Fight detail: trade range around your death, and the teammate nearest to it. */
+.mapTradeRing {
+    position: absolute;
+    z-index: 6;
+    border: 1.5px dashed rgba(255, 79, 104, 0.75);
+    border-radius: 50%;
+    background: rgba(255, 79, 104, 0.06);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.mapTradeRingCovered {
+    border-color: rgba(34, 211, 163, 0.8);
+    background: rgba(34, 211, 163, 0.07);
+}
+
+.mapTradeRing small {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    margin-top: 4px;
+    color: #d7dde3;
+    font-family: var(--match-font);
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-shadow: 0 1px 2px #000;
+    white-space: nowrap;
+    transform: translateX(-50%);
+}
+
+.mapTradeLine {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+}
+
+.mapTradeLine line {
+    stroke: #22d3a3;
+    stroke-width: 0.3;
+    stroke-dasharray: 1 0.8;
+}
+
+.mapTradeMate {
+    position: absolute;
+    z-index: 8;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    transform: translate(-50%, -11px);
+    pointer-events: auto;
+}
+
+.mapTradeMate img {
+    width: 22px;
+    height: 22px;
+    border: 2px solid #22d3a3;
+    border-radius: 50%;
+    background: #071018;
+}
+
+.mapTradeMate small {
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgba(5, 8, 11, 0.85);
+    color: #22d3a3;
+    font-family: var(--match-font);
+    font-size: 0.56rem;
+    font-weight: 750;
+}
+
+.mapTradeVerdict {
+    --tone: #8da1af;
+    margin: 14px 0 0 !important;
+    padding: 9px 12px;
+    border-left: 3px solid var(--tone);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--tone) 8%, #070b0f);
+    color: #c8d2d9;
+    font-size: 0.74rem !important;
+    line-height: 1.4;
+}
+
+.mapTradeVerdict[data-tone="good"] { --tone: #22d3a3; }
+.mapTradeVerdict[data-tone="danger"] { --tone: #ff4f68; }
+
+/* Fight report: the area that changed most when sides swapped. */
+.mapSideSwing {
+    --tone: #ffb321;
+    display: grid;
+    gap: 2px;
+    margin: 10px 10px 0;
+    padding: 8px 12px;
+    border-left: 3px solid var(--tone);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--tone) 7%, #070b0f);
+    font-family: var(--match-font);
+}
+
+.mapSideSwing[data-tone="good"] { --tone: #22d3a3; }
+.mapSideSwing[data-tone="danger"] { --tone: #ff4f68; }
+
+.mapSideSwing b {
+    color: var(--tone);
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.mapSideSwing span {
+    color: #c8d2d9;
+    font-size: 0.74rem;
+}
+
+.mapSideSwing strong {
+    color: #f0f4f5;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Round review: the same banner, slimmed to one line so the content starts higher. */
+.matchModal .matchModalHeader[data-compact] {
+    min-height: 0;
+    padding: 12px 70px 12px 22px;
+    align-items: center;
+    background-position: center 40%;
+}
+
+.matchModalHeader[data-compact] .matchModalHeading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 18px;
+}
+
+.matchModalHeader[data-compact] .matchModalTitle {
+    gap: 10px;
+    margin-bottom: 0;
+}
+
+.matchModalHeader[data-compact] .matchModalHeading h2 {
+    margin: 0;
+    font-size: 1.45rem;
+}
+
+.matchModalHeader[data-compact] .matchScorePlates {
+    align-items: center;
+    gap: 8px;
+}
+
+.matchModalHeader[data-compact] .matchScorePlates strong {
+    min-width: 0;
+    height: auto;
+    font-size: 1.7rem;
+}
+
+.matchModalHeader[data-compact] .matchScorePlates small {
+    display: none;
+}
+
+.matchModalHeader[data-compact] .matchScorePlates i {
+    padding-top: 0;
+    font-size: 1rem;
+}
+
+.matchModal .matchModalHeader[data-compact] .matchModalClose {
+    top: 50%;
+    width: 30px;
+    height: 30px;
+    transform: translateY(-50%);
+}
+
+/* Map tab: the app's normal font everywhere (no monospace), with even-width numbers. */
+.mapAnalytics {
+    --match-compact: var(--match-font);
+    font-variant-numeric: tabular-nums;
+}
+
+.mapAnalytics .mapCallout,
+.mapAnalytics .mapDuelControls,
+.mapAnalytics .mapDuelNavigator {
+    font-family: var(--match-font);
+}
+
+/* Map zoom: the stage scales and pans; markers and labels scale back so they keep their size. */
+.mapPlotStage {
+    position: absolute;
+    inset: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.mapPlotStage > .mapPlotImage {
+    position: absolute;
+    inset: 0;
+}
+
+.mapPlot { touch-action: none; }
+.mapPlot[data-zoomed] { cursor: grab; }
+.mapPlot[data-zoomed]:active { cursor: grabbing; }
+
+.mapPlotStage button.mapEvent,
+.mapPlotStage .mapCallout,
+.mapPlotStage .mapDuelMarker {
+    transform: translate(-50%, -50%) scale(calc(1 / var(--map-zoom, 1)));
+}
+
+.mapPlotStage .mapZoneRegion > * {
+    transform: scale(calc(1 / var(--map-zoom, 1)));
+    transform-origin: 0 0;
+}
+
+.mapPlotStage .mapTradeMate {
+    transform: translate(-50%, -11px) scale(calc(1 / var(--map-zoom, 1)));
+    transform-origin: 50% 11px;
+}
+
+.mapPlotStage .mapTradeRing small {
+    transform: translateX(-50%) scale(calc(1 / var(--map-zoom, 1)));
+    transform-origin: 50% 0;
+}
+
+.mapPlotStage .mapTradeLine line {
+    stroke-width: 1.2;
+    vector-effect: non-scaling-stroke;
+}
+
+.mapZoomControls {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 20;
+    display: flex;
+    gap: 4px;
+}
+
+.mapZoomControls button {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 6px;
+    background: rgba(5, 8, 11, 0.85);
+    color: #e6edf1;
+    font-family: var(--match-font);
+    font-size: 0.86rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.mapZoomControls button:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.35);
+    background: rgba(20, 28, 34, 0.95);
+}
+
+.mapZoomControls button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.mapZoomHint {
+    position: absolute;
+    left: 8px;
+    bottom: 10px;
+    z-index: 20;
+    color: rgba(200, 210, 217, 0.55);
+    font-family: var(--match-font);
+    font-size: 0.62rem;
+    pointer-events: none;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import Image from "next/image";
 import ProfileLoading from "./ProfileLoading";
@@ -1889,6 +1889,10 @@ function groupMapStats(
 }
 
 type MatchKillEvent = NonNullable<ProfileMatchDetails["kills"]>[number];
+// Distance at which a teammate can usually trade a death; Riot positions are in game units (100 per metre).
+const TRADE_RANGE_METRES = 10;
+const MAP_MAX_ZOOM = 4;
+const gameUnitsToMetres = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.round(Math.hypot(a.x - b.x, a.y - b.y) / 100);
 type MatchDetailPlayer = ProfileMatchDetails["players"][number];
 
 interface DuelFocus {
@@ -2359,8 +2363,10 @@ function MatchRow({
                             }
                         }}
                     >
+                        {/* Round review gets a slim banner, so its content starts higher. */}
                         <header
                             className={s.matchModalHeader}
+                            data-compact={activeMatchTab === "rounds" || undefined}
                             style={mapMeta?.splash ? { backgroundImage: `url(${mapMeta.splash})` } : undefined}
                         >
                             <div className={s.matchModalHeaderShade} />
@@ -2890,7 +2896,14 @@ export function RoundReview({
         if (!selectedFact.won && selectedFact.stat && selectedFact.damage < 100) return "Low-damage loss. Look for earlier, safer contribution — utility, a crossfire, or a supported first fight.";
         if (selectedFact.won && selectedFact.enemyLoadout - selectedFact.allyLoadout >= 3_000) return "Your team won against a stronger enemy loadout—one of the match’s clearest high-value rounds.";
         if (selectedFact.won && selectedFact.deaths.length === 0) return "You survived a converted round. Preserve the weapon and repeat the positioning that kept your impact available late.";
-        return `${selectedFact.stat ? `${selectedFact.damage} damage` : "Damage unavailable"}, ${selectedFact.kills.length} kills, ${selectedFact.assists.length} assists, and ${selectedFact.deaths.length ? "a death" : "survival"} were recorded.`;
+        const line = [selectedFact.stat ? `${selectedFact.damage} damage` : null, statCount(selectedFact.kills.length, "kill"), statCount(selectedFact.assists.length, "assist")]
+            .filter(Boolean).join(", ");
+        if (selectedFact.won) {
+            return selectedFact.deaths.length
+                ? `Your team won the round after you died${selectedFact.traded ? ", and your death was traded, so the fight still paid off" : ""}. You finished with ${line}.`
+                : `Your team won the round. You finished with ${line}.`;
+        }
+        return `Your team lost the round. You finished with ${line}${selectedFact.deaths.length ? " and died" : " and survived"}.`;
     })();
 
     const activeMomentId = moment?.round === selectedRound?.roundNum && roundFeed.some((item) => item.id === moment.id)
@@ -2940,8 +2953,11 @@ export function RoundReview({
     const yourAgent = agents[local?.characterId.toLowerCase() || ""];
     const roundTags = selectedSignals.filter((signal) => signal.tone === "good" || signal.tone === "objective").slice(0, 3).map((signal) => signal.label);
 
+    // Deathmatch and other modes without rounds come back as one long round: skip the round tools for them.
+    const singleRound = rounds.length <= 1;
+
     return <section className={rr.root} style={map?.splash ? { "--rr-map": `url("${map.splash}")` } as CSSProperties : undefined}>
-        {reviewInsights.length ? <div className={rr.review} aria-label="Match review">
+        {reviewInsights.length && !singleRound ? <div className={rr.review} aria-label="Match review">
             {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={`${insight.tip}${insight.evidence ? `\n${insight.evidence}` : ""}`}>
                 <svg viewBox="0 0 40 40" aria-hidden="true">
                     <circle cx="20" cy="20" r="16" />
@@ -2950,9 +2966,9 @@ export function RoundReview({
                 <span><small>{insight.label}</small><b>{insight.value}</b></span>
             </article>)}
         </div> : null}
-        {!hasDetailedRounds ? <p className={rr.note}>Objective timeline only. Buys and damage need a refresh while connected.</p> : null}
+        {!hasDetailedRounds && !singleRound ? <p className={rr.note}>Objective timeline only. Buys and damage need a refresh while connected.</p> : null}
 
-        <div className={rr.rounds} role="group" aria-label="Rounds">
+        {!singleRound ? <div className={rr.rounds} role="group" aria-label="Rounds">
             {halves.map((half) => <div key={half.key} className={rr.half} data-side={half.side} style={{ flexGrow: half.facts.length }}>
                 <span className={rr.halfLabel}>{half.label}</span>
                 <div>{half.facts.map((fact) => <button
@@ -2970,20 +2986,25 @@ export function RoundReview({
                 </button>)}</div>
             </div>)}
             {finalFact ? <div className={rr.final} title="Final score"><b>{finalFact.yourScore}</b><span>–</span><b data-them>{finalFact.enemyScore}</b></div> : null}
-        </div>
+        </div> : null}
 
-        <div className={rr.hero} data-win={roundWon || undefined}>
+        <div className={rr.hero} data-win={(!singleRound && roundWon) || undefined}>
             {yourAgent?.full ? <Image className={rr.agent} src={yourAgent.full} alt="" width={290} height={290} unoptimized /> : null}
             <div className={rr.title}>
+                {singleRound ? <>
+                    <h3>Whole match</h3>
+                    <p>No rounds in this mode, so every fight is in one timeline</p>
+                </> : <>
                 <h3>Round {round.roundNum + 1} <em>· {roundWon ? "won" : "lost"}</em></h3>
                 <p>{outcome ? <>{outcome}{outcomeTime}</> : "Round recorded"}{selectedFact ? <> · score {selectedFact.yourScore}–{selectedFact.enemyScore}</> : null}{roundTags.map((tag) => <b key={tag}> · {tag}</b>)}</p>
+                </>}
             </div>
             <dl className={rr.stats}>
                 <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
                 <div><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
                 <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
-                <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div>
-                {selectedStat ? <div className={rr.gun}>
+                {!singleRound ? <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div> : null}
+                {selectedStat && !singleRound ? <div className={rr.gun}>
                     <dt>{weapon?.displayName || "No weapon"}{selectedStat.economy.armor ? "" : " · no armor"}{headshots ? ` · ${headshots} HS` : ""}</dt>
                     <dd>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={110} height={34} unoptimized /> : null}</dd>
                 </div> : null}
@@ -3061,11 +3082,11 @@ export function RoundReview({
                         </span>
                     </li>)}
                 </ol> : <p className={rr.note}>No kills or objective actions were recorded for this round.</p>}
-                <div className={rr.take}>
+                {!singleRound ? <div className={rr.take}>
                     <b>Takeaway</b>
                     <p>{selectedRoundRead}</p>
                     {allyLoadout || enemyLoadout ? <small>Team buy <span data-side="ally">{allyLoadout.toLocaleString()}</span> vs <span data-side="enemy">{enemyLoadout.toLocaleString()}</span>{selectedStat ? ` · you spent ${(selectedStat.economy.spent || 0).toLocaleString()}, kept ${(selectedStat.economy.remaining || 0).toLocaleString()}` : ""}</small> : null}
-                </div>
+                </div> : null}
             </section>
         </div>
 
@@ -3100,6 +3121,7 @@ export function MatchMapAnalytics({
     onBackToRound?: () => void;
 }) {
     const [filter, setFilter] = useState<"all" | "kill" | "death">("all");
+    const [sideFilter, setSideFilter] = useState<"both" | "attack" | "defense">("both");
     const [focusedArea, setFocusedArea] = useState<string | null>(null);
     const [focusedZone, setFocusedZone] = useState<string | null>(null);
     const [hoveredZone, setHoveredZone] = useState<string | null>(null);
@@ -3120,13 +3142,21 @@ export function MatchMapAnalytics({
             const winner = roundWinnerByNumber.get(roundNum);
             return winner ? winner === localTeam : null;
         };
-        const points: Array<{ type: "kill" | "death"; x: number; y: number; round: number; gameTime: number; event: MatchKillEvent }> = [];
+        // Riot's red team attacks first; sides swap at the half, then every overtime round.
+        const queueId = (detail.matchInfo.queueID || "").toLowerCase();
+        const halfLength = queueId === "swiftplay" ? 4 : queueId === "spikerush" ? 3 : 12;
+        const startsOnAttack = localTeam === "red";
+        const sideOf = (roundNum: number): "attack" | "defense" => {
+            const firstHalf = roundNum < halfLength || (roundNum >= halfLength * 2 && (roundNum - halfLength * 2) % 2 === 0);
+            return firstHalf === startsOnAttack ? "attack" : "defense";
+        };
+        const points: Array<{ type: "kill" | "death"; x: number; y: number; round: number; gameTime: number; side: "attack" | "defense"; event: MatchKillEvent }> = [];
         for (const event of kills) {
             if (event.killer.toLowerCase() === localSubject) {
-                points.push({ type: "kill", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, event });
+                points.push({ type: "kill", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, side: sideOf(event.roundNum), event });
             }
             if (event.victim.toLowerCase() === localSubject) {
-                points.push({ type: "death", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, event });
+                points.push({ type: "death", x: event.victimX, y: event.victimY, round: event.roundNum, gameTime: event.gameTime, side: sideOf(event.roundNum), event });
             }
         }
 
@@ -3187,7 +3217,7 @@ export function MatchMapAnalytics({
 
         const locatedPoints = points.map((point) => ({ ...point, ...nearestCallout(point.x, point.y) }));
         const hotspotMap = new Map<string, { name: string; kills: number; deaths: number; killRounds: number[]; deathRounds: number[]; killXTotal: number; killYTotal: number; deathXTotal: number; deathYTotal: number }>();
-        const zoneMap = new Map<string, { name: string; focusZone: string; focusArea: string; kills: number; deaths: number; xTotal: number; yTotal: number; count: number; rounds: Set<number> }>();
+        const zoneMap = new Map<string, { name: string; focusZone: string; focusArea: string; kills: number; deaths: number; xTotal: number; yTotal: number; count: number; rounds: Set<number>; sides: Record<"attack" | "defense", { kills: number; deaths: number }> }>();
         for (const point of locatedPoints) {
             const name = point.area;
             const hotspot = hotspotMap.get(name) || { name, kills: 0, deaths: 0, killRounds: [], deathRounds: [], killXTotal: 0, killYTotal: 0, deathXTotal: 0, deathYTotal: 0 };
@@ -3208,8 +3238,10 @@ export function MatchMapAnalytics({
                 yTotal: 0,
                 count: 0,
                 rounds: new Set<number>(),
+                sides: { attack: { kills: 0, deaths: 0 }, defense: { kills: 0, deaths: 0 } },
             };
             zone[point.type === "kill" ? "kills" : "deaths"] += 1;
+            zone.sides[point.side][point.type === "kill" ? "kills" : "deaths"] += 1;
             zone.xTotal += point.x;
             zone.yTotal += point.y;
             zone.count += 1;
@@ -3247,10 +3279,12 @@ export function MatchMapAnalytics({
             tradedDeaths,
             tradePoint,
             zones,
+            sideOf,
+            roundWon: localWonRound,
             killSpot: killSpots.find((spot) => spot.kills >= 2) || null,
             deathSpot: deathSpots.find((spot) => spot.deaths >= 2) || null,
         };
-    }, [detail.players, detail.rounds, kills, map?.callouts]);
+    }, [detail.matchInfo.queueID, detail.players, detail.rounds, kills, map?.callouts]);
 
     const canPlot = Boolean(
         map?.displayIcon
@@ -3259,8 +3293,79 @@ export function MatchMapAnalytics({
         && typeof map.xScalarToAdd === "number"
         && typeof map.yScalarToAdd === "number",
     );
+    // Zoom and pan for the minimap: scroll zooms at the cursor, dragging moves it. Markers keep their size.
+    const plotRef = useRef<HTMLDivElement | null>(null);
+    const [plotNode, setPlotNode] = useState<HTMLDivElement | null>(null);
+    const attachPlot = useCallback((node: HTMLDivElement | null) => {
+        plotRef.current = node;
+        setPlotNode(node);
+    }, []);
+    const [plotView, setPlotView] = useState({ scale: 1, x: 0, y: 0 });
+    const plotDragRef = useRef<{ pointerId: number; startX: number; startY: number; x: number; y: number; moved: boolean } | null>(null);
+    const plotDraggedRef = useRef(false);
+    const clampPlotView = useCallback((scale: number, x: number, y: number) => {
+        const width = plotRef.current?.clientWidth || 0;
+        const height = plotRef.current?.clientHeight || 0;
+        return {
+            scale,
+            x: Math.min(0, Math.max(width - width * scale, x)),
+            y: Math.min(0, Math.max(height - height * scale, y)),
+        };
+    }, []);
+    const zoomPlot = useCallback((factor: number, originX?: number, originY?: number) => {
+        setPlotView((current) => {
+            const scale = Math.min(MAP_MAX_ZOOM, Math.max(1, current.scale * factor));
+            if (scale === 1) return { scale: 1, x: 0, y: 0 };
+            const cx = originX ?? (plotRef.current?.clientWidth || 0) / 2;
+            const cy = originY ?? (plotRef.current?.clientHeight || 0) / 2;
+            const ratio = scale / current.scale;
+            return clampPlotView(scale, cx - (cx - current.x) * ratio, cy - (cy - current.y) * ratio);
+        });
+    }, [clampPlotView]);
+    useEffect(() => {
+        const plot = plotNode;
+        if (!plot) return undefined;
+        // React wheel listeners are passive, so the page would scroll too.
+        const onWheel = (event: WheelEvent) => {
+            event.preventDefault();
+            const rect = plot.getBoundingClientRect();
+            zoomPlot(event.deltaY < 0 ? 1.2 : 1 / 1.2, event.clientX - rect.left, event.clientY - rect.top);
+        };
+        plot.addEventListener("wheel", onWheel, { passive: false });
+        return () => plot.removeEventListener("wheel", onWheel);
+    }, [plotNode, zoomPlot]);
+    const startPlotDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0 || plotView.scale === 1) return;
+        plotDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: plotView.x, y: plotView.y, moved: false };
+    };
+    const movePlotDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+        const drag = plotDragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const dx = event.clientX - drag.startX;
+        const dy = event.clientY - drag.startY;
+        if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+        if (!drag.moved) {
+            drag.moved = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+        }
+        setPlotView((current) => clampPlotView(current.scale, drag.x + dx, drag.y + dy));
+    };
+    const endPlotDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+        const drag = plotDragRef.current;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        plotDraggedRef.current = drag.moved;
+        plotDragRef.current = null;
+    };
+    // A drag ends with a click on whatever is under the cursor; do not open a fight for it.
+    const swallowDragClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+        if (!plotDraggedRef.current) return;
+        plotDraggedRef.current = false;
+        event.stopPropagation();
+        event.preventDefault();
+    };
     const visiblePoints = analysis.points.filter((point) => {
         if (filter !== "all" && point.type !== filter) return false;
+        if (sideFilter !== "both" && point.side !== sideFilter) return false;
         if (focusedZone && point.zone !== focusedZone) return false;
         if (focusedArea && point.area !== focusedArea) return false;
         return true;
@@ -3308,6 +3413,23 @@ export function MatchMapAnalytics({
         const roundWinner = (detail.rounds || []).find((round) => round.roundNum === selectedFight.roundNum)?.winningTeam.toLowerCase();
         const roundWon = roundWinner ? roundWinner === analysis.localTeam : null;
         const locatedFight = analysis.points.find((point) => fightEventKey(point.event) === fightEventKey(selectedFight));
+        // Nearest living teammate of the player who died, and whether their killer was traded within 5 seconds.
+        const victimSpot = { x: selectedFight.victimX, y: selectedFight.victimY };
+        const victimTeam = victimPlayer?.teamId.toLowerCase() || "";
+        const nearestMate = (selectedFight.playerLocations || [])
+            .filter((location) => {
+                const subject = location.subject?.toLowerCase();
+                return subject && subject !== victimSubject && playerBySubject.get(subject)?.teamId.toLowerCase() === victimTeam;
+            })
+            .map((location) => ({ location, metres: gameUnitsToMetres(location, victimSpot) }))
+            .sort((a, b) => a.metres - b.metres)[0];
+        const matePlayer = nearestMate ? playerBySubject.get(nearestMate.location.subject!.toLowerCase()) : undefined;
+        const traded = kills.some((event) => (
+            event.roundNum === selectedFight.roundNum
+            && event.victim.toLowerCase() === killerSubject
+            && event.roundTime >= selectedFight.roundTime
+            && event.roundTime - selectedFight.roundTime <= 5_000
+        ));
         const nearestFightCallout = map.callouts.reduce<MapMeta["callouts"][number] | undefined>((nearest, callout) => {
             const distance = (callout.x - selectedFight.victimX) ** 2 + (callout.y - selectedFight.victimY) ** 2;
             const nearestDistance = nearest ? (nearest.x - selectedFight.victimX) ** 2 + (nearest.y - selectedFight.victimY) ** 2 : Infinity;
@@ -3325,8 +3447,17 @@ export function MatchMapAnalytics({
             localDeath,
             roundWon,
             area: locatedFight?.area || (nearestFightCallout ? mapCalloutLabel(nearestFightCallout) : "Map area"),
+            killDistance: killerLocation ? gameUnitsToMetres(killerLocation, victimSpot) : null,
+            mate: nearestMate ? {
+                player: matePlayer,
+                agent: agents[matePlayer?.characterId?.toLowerCase() || ""],
+                point: toPlotPoint(nearestMate.location.x, nearestMate.location.y),
+                metres: nearestMate.metres,
+            } : null,
+            traded,
+            tradeRingRadius: Math.abs(TRADE_RANGE_METRES * 100 * map.xMultiplier!),
         };
-    }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, map, playerBySubject, selectedFight, weaponById]);
+    }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, kills, map, playerBySubject, selectedFight, weaponById]);
 
     const zoneRegions = useMemo(() => {
         if (!canPlot || !map) return [];
@@ -3367,102 +3498,134 @@ export function MatchMapAnalytics({
         const bRate = b.kills / Math.max(1, b.deaths);
         return bRate - aRate || (b.kills + b.deaths) - (a.kills + a.deaths);
     })[0];
-    const weakestZone = analysis.zones
-        .filter((zone) => zone.deaths > zone.kills)
-        .sort((a, b) => (b.deaths - b.kills) - (a.deaths - a.kills) || b.deaths - a.deaths)[0];
-    const reviewNotes: Array<{ id: string; tone: "good" | "danger" | "neutral"; kicker: string; label: string; copy: string; x: number; y: number; events: MatchKillEvent[] }> = [];
+    // Takeaways: each one says what happened, why it matters and what to try, with the numbers behind it.
+    const sideName = (side: "attack" | "defense") => side === "attack" ? "Attack" : "Defense";
+    const roundList = (rounds: number[]) => rounds.length === 1 ? `Round ${rounds[0]}` : rounds.length <= 4 ? `Rounds ${rounds.join(", ")}` : `Rounds ${rounds[0]}–${rounds[rounds.length - 1]}`;
+    const reviewNotes: Array<{ id: string; tone: "good" | "danger" | "neutral"; label: string; copy: string; chips: string[]; x: number; y: number; events: MatchKillEvent[] }> = [];
+    const openingWinCount = analysis.openingEvents.filter((event) => event.result === "win").length;
+    const openingLossCount = analysis.openingEvents.filter((event) => event.result === "loss").length;
     const openingKillsWithOutcome = analysis.openingEvents.filter((event) => event.result === "win" && event.teamWon !== null);
     if (openingKillsWithOutcome.length) {
         const converted = openingKillsWithOutcome.filter((event) => event.teamWon).length;
         const conversion = Math.round((converted / openingKillsWithOutcome.length) * 100);
-        const representative = openingKillsWithOutcome[0];
+        const tone = conversion >= 60 ? "good" : conversion < 50 ? "danger" : "neutral";
         reviewNotes.push({
             id: "opening-advantage",
-            tone: conversion >= 60 ? "good" : conversion < 50 ? "danger" : "neutral",
-            kicker: "Opening advantage",
-            label: `${conversion}% round conversion`,
-            copy: `Your team won ${converted} of ${openingKillsWithOutcome.length} rounds after you got the first kill.`,
-            x: representative.x,
-            y: representative.y,
+            tone,
+            label: tone === "good" ? "Your first kills win rounds" : tone === "danger" ? "First kills aren't turning into rounds" : "First kills only sometimes win the round",
+            copy: tone === "good"
+                ? `Your team won ${converted} of ${openingKillsWithOutcome.length} rounds where you got the first kill. Keep looking for that opening duel.`
+                : `Your team won ${converted} of ${openingKillsWithOutcome.length} rounds where you got the first kill. After an opening pick, play with your team instead of chasing a second one.`,
+            chips: [`${openingWinCount}–${openingLossCount} opening duels`, `${conversion}% rounds won`],
+            x: openingKillsWithOutcome[0].x,
+            y: openingKillsWithOutcome[0].y,
             events: openingKillsWithOutcome.map((event) => event.event),
         });
     }
     const openingDeathsWithOutcome = analysis.openingEvents.filter((event) => event.result === "loss" && event.teamWon !== null);
-    if (openingDeathsWithOutcome.length) {
+    // When most first deaths happened at the repeat death spot, that takeaway already covers them.
+    const deathSpotName = analysis.deathSpot?.name;
+    const firstDeathsAtSpot = deathSpotName ? openingDeathsWithOutcome.filter((event) => event.area === deathSpotName).length : 0;
+    if (openingDeathsWithOutcome.length >= 2 && firstDeathsAtSpot / openingDeathsWithOutcome.length < 0.6) {
         const recovered = openingDeathsWithOutcome.filter((event) => event.teamWon).length;
         const recovery = Math.round((recovered / openingDeathsWithOutcome.length) * 100);
-        const representative = openingDeathsWithOutcome[0];
+        const tone = recovery >= 50 ? "good" : "danger";
         reviewNotes.push({
             id: "opening-death",
-            tone: recovery >= 50 ? "good" : "danger",
-            kicker: "After first death",
-            label: `${recovery}% round recovery`,
-            copy: `Your team recovered ${recovered} of ${openingDeathsWithOutcome.length} rounds after you died first.`,
-            x: representative.x,
-            y: representative.y,
+            tone,
+            label: tone === "danger" ? "Dying first is costing rounds" : "Your team covers your first deaths",
+            copy: tone === "danger"
+                ? `You died first in ${openingDeathsWithOutcome.length} rounds and your team won ${recovered} of them. Take the first fight with a teammate close enough to trade.`
+                : `You died first in ${openingDeathsWithOutcome.length} rounds and your team still won ${recovered}.`,
+            chips: [statCount(openingDeathsWithOutcome.length, "first death"), `${openingDeathsWithOutcome.length - recovered} rounds lost`],
+            x: openingDeathsWithOutcome[0].x,
+            y: openingDeathsWithOutcome[0].y,
             events: openingDeathsWithOutcome.map((event) => event.event),
         });
     }
     if (analysis.deathSpot) {
         const spot = analysis.deathSpot;
+        const spotPoints = analysis.points.filter((point) => point.type === "death" && point.area === spot.name);
         const rounds = [...new Set(spot.deathRounds)];
-        const localTeam = detail.players.find((player) => player.isLocal)?.teamId.toLowerCase() || "";
-        const winners = new Map((detail.rounds || []).map((round) => [round.roundNum + 1, round.winningTeam.toLowerCase()]));
-        const decidedRounds = rounds.filter((round) => winners.get(round));
-        const lostRounds = decidedRounds.filter((round) => winners.get(round) !== localTeam).length;
+        const decidedRounds = rounds.filter((round) => analysis.roundWon(round - 1) !== null);
+        const lostRounds = decidedRounds.filter((round) => analysis.roundWon(round - 1) === false).length;
+        const attackDeaths = spotPoints.filter((point) => point.side === "attack").length;
+        const mainSide = attackDeaths / spotPoints.length >= 0.7 ? "attack" : attackDeaths / spotPoints.length <= 0.3 ? "defense" : null;
         reviewNotes.push({
             id: `repeat-death-${spot.name}`,
             tone: "danger",
-            kicker: "Repeat location",
-            label: decidedRounds.length ? `${lostRounds} of ${decidedRounds.length} rounds lost` : `${spot.deaths} deaths at ${spot.name}`,
-            copy: decidedRounds.length
-                ? `You died at ${spot.name} ${spot.deaths} times. Your team lost ${lostRounds} of the affected rounds.`
-                : `${statCount(spot.deaths, "death")} in ${rounds.length === 1 ? `Round ${rounds[0]}` : `Rounds ${rounds.join(", ")}`}.`,
+            label: `Change how you play ${spot.name}`,
+            copy: `You died there ${spot.deaths} times${firstDeathsAtSpot ? `, ${firstDeathsAtSpot === spot.deaths ? "every time" : `${firstDeathsAtSpot} times`} as the first death of the round` : ""}${mainSide ? `, mostly on ${sideName(mainSide)}` : ""}. Try a different angle, or wait for utility before you take that fight.`,
+            chips: [statCount(spot.deaths, "death"), ...(decidedRounds.length ? [`Lost ${lostRounds} of ${decidedRounds.length} rounds`] : []), roundList(rounds)],
             x: spot.deathXTotal / Math.max(1, spot.deaths),
             y: spot.deathYTotal / Math.max(1, spot.deaths),
-            events: analysis.points.filter((point) => point.type === "death" && point.area === spot.name).map((point) => point.event),
+            events: spotPoints.map((point) => point.event),
         });
     }
-    if (analysis.tradePoint && analysis.deaths > 0) {
+    if (analysis.deaths >= 3) {
         const tradeRate = analysis.tradedDeaths / analysis.deaths;
+        const tone = tradeRate >= 0.6 ? "good" : tradeRate < 0.35 ? "danger" : "neutral";
         reviewNotes.push({
             id: "trade-timing",
-            tone: tradeRate >= 0.6 ? "good" : tradeRate < 0.35 ? "danger" : "neutral",
-            kicker: "Trade timing",
-            label: `${analysis.tradedDeaths} of ${analysis.deaths} deaths traded`,
-            copy: `A teammate eliminated your killer within 5 seconds after ${analysis.tradedDeaths} of your deaths.`,
-            x: analysis.tradePoint.x,
-            y: analysis.tradePoint.y,
+            tone,
+            label: tone === "danger" ? "You're dying out of trade range" : tone === "good" ? "Your team is trading you" : "Some of your deaths get traded",
+            copy: tone === "danger"
+                ? `${analysis.tradedDeaths ? `Only ${analysis.tradedDeaths} of your ${analysis.deaths} deaths were` : `None of your ${analysis.deaths} deaths were`} traded by a teammate within 5 seconds. Fight closer to your team so they can punish your killer.`
+                : `A teammate killed your killer within 5 seconds after ${analysis.tradedDeaths} of your ${analysis.deaths} deaths, so those fights still paid off.`,
+            chips: [`${analysis.tradedDeaths}/${analysis.deaths} deaths traded`],
+            x: analysis.tradePoint?.x ?? 0,
+            y: analysis.tradePoint?.y ?? 0,
             events: analysis.localDeaths,
         });
-    } else if (weakestZone && weakestZone.name !== strongestZone?.name) {
+    }
+    const earlyDeaths = analysis.localDeaths.filter((event) => event.roundTime > 0 && event.roundTime < 25_000);
+    if (earlyDeaths.length >= 3 && earlyDeaths.length / Math.max(1, analysis.deaths) >= 0.3) {
         reviewNotes.push({
-            id: `area-result-${weakestZone.name}`,
+            id: "early-deaths",
             tone: "danger",
-            kicker: "Area result",
-            label: `${weakestZone.name}: ${weakestZone.kills}-${weakestZone.deaths}`,
-            copy: weakestZone.decidedRounds
-                ? `Your team won ${weakestZone.roundWins} of ${weakestZone.decidedRounds} rounds with one of your fights here.`
-                : `${statCount(weakestZone.kills, "kill")} and ${statCount(weakestZone.deaths, "death")} were recorded here.`,
-            x: weakestZone.xTotal / Math.max(1, weakestZone.count),
-            y: weakestZone.yTotal / Math.max(1, weakestZone.count),
-            events: analysis.points.filter((point) => (point.zone === "Other" ? point.area : point.zone) === weakestZone.name).map((point) => point.event),
+            label: "You're dying early in rounds",
+            copy: `${earlyDeaths.length === analysis.deaths ? `All ${analysis.deaths}` : `${earlyDeaths.length} of your ${analysis.deaths}`} deaths came in the first 25 seconds. Let the round develop before you take a fight.`,
+            chips: [`${earlyDeaths.length} deaths before 0:25`],
+            x: earlyDeaths[0].victimX,
+            y: earlyDeaths[0].victimY,
+            events: earlyDeaths,
         });
     }
-    if (strongestZone) {
+    if (strongestZone && strongestZone.kills > strongestZone.deaths) {
+        const bestSide = (["attack", "defense"] as const)
+            .map((side) => ({ side, ...strongestZone.sides[side] }))
+            .filter((side) => side.kills + side.deaths > 0)
+            .sort((a, b) => (b.kills - b.deaths) - (a.kills - a.deaths))[0];
         reviewNotes.push({
             id: `strongest-area-${strongestZone.name}`,
             tone: "good",
-            kicker: "Strongest area",
-            label: `${strongestZone.name}: ${strongestZone.kills}-${strongestZone.deaths}`,
-            copy: strongestZone.decidedRounds
-                ? `Your team won ${strongestZone.roundWins} of ${strongestZone.decidedRounds} rounds with one of your fights here.`
-                : `${statCount(strongestZone.kills, "kill")} and ${statCount(strongestZone.deaths, "death")} were recorded here.`,
+            label: `${strongestZone.name} is your area`,
+            copy: `You won ${strongestZone.kills} of ${strongestZone.kills + strongestZone.deaths} fights here${bestSide ? `, best on ${sideName(bestSide.side)} (${bestSide.kills}–${bestSide.deaths})` : ""}. Keep playing your fights from here.`,
+            chips: [`${strongestZone.kills}–${strongestZone.deaths} fights`, ...(strongestZone.decidedRounds ? [`Won ${strongestZone.roundWins}/${strongestZone.decidedRounds} rounds`] : [])],
             x: strongestZone.xTotal / Math.max(1, strongestZone.count),
             y: strongestZone.yTotal / Math.max(1, strongestZone.count),
             events: analysis.points.filter((point) => (point.zone === "Other" ? point.area : point.zone) === strongestZone.name).map((point) => point.event),
         });
     }
+    // The area whose results changed most when the sides swapped at the half.
+    const firstSide = analysis.sideOf(0);
+    const secondSide = firstSide === "attack" ? "defense" : "attack";
+    const sideSwing = [...new Set(analysis.points.map((point) => point.area))]
+        .map((area) => {
+            const record = (side: "attack" | "defense") => {
+                const sidePoints = analysis.points.filter((point) => point.area === area && point.side === side);
+                return { kills: sidePoints.filter((point) => point.type === "kill").length, deaths: sidePoints.filter((point) => point.type === "death").length };
+            };
+            const before = record(firstSide);
+            const after = record(secondSide);
+            return { area, before, after, change: (after.kills - after.deaths) - (before.kills - before.deaths) };
+        })
+        .filter((swing) => swing.before.kills + swing.before.deaths + swing.after.kills + swing.after.deaths >= 4 && Math.abs(swing.change) >= 2)
+        .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0];
+    // Things to work on first, but always keep the best thing you did when there is one.
+    const workOn = reviewNotes.filter((note) => note.tone === "danger");
+    const keepDoing = reviewNotes.filter((note) => note.tone === "good");
+    const takeaways = [...workOn.slice(0, keepDoing.length ? 3 : 4), ...keepDoing, ...reviewNotes.filter((note) => note.tone === "neutral")].slice(0, 4);
 
     if (loading) {
         return <div className={s.mapAnalyticsEmpty}>Loading this match&apos;s map events...</div>;
@@ -3499,6 +3662,23 @@ export function MatchMapAnalytics({
                                 <span>{duelFocus.label}</span>
                             </div>
                         ) : (
+                            <div className={s.mapPlotFilterGroup}>
+                            <div className={s.mapPlotFilters} aria-label="Side filter">
+                                {(["both", "attack", "defense"] as const).map((value) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        className={sideFilter === value ? s.mapPlotFilterActive : ""}
+                                        aria-pressed={sideFilter === value}
+                                        onClick={() => {
+                                            setDuelFocus(null);
+                                            setSideFilter(value);
+                                        }}
+                                    >
+                                        {value === "both" ? "Both sides" : value === "attack" ? "Attack" : "Defense"}
+                                    </button>
+                                ))}
+                            </div>
                             <div className={s.mapPlotFilters} aria-label="Map event filter">
                                 {(["all", "kill", "death"] as const).map((value) => (
                                     <button
@@ -3516,10 +3696,15 @@ export function MatchMapAnalytics({
                                     </button>
                                 ))}
                             </div>
+                            </div>
                         )}
                     </div>
                     {canPlot ? (
-                        <div className={s.mapPlot}>
+                        <div className={s.mapPlot} ref={attachPlot} data-zoomed={plotView.scale > 1 || undefined} onPointerDown={startPlotDrag} onPointerMove={movePlotDrag} onPointerUp={endPlotDrag} onPointerCancel={endPlotDrag} onClickCapture={swallowDragClick}>
+                            <div
+                                className={s.mapPlotStage}
+                                style={{ "--map-zoom": plotView.scale, transform: `translate(${plotView.x}px, ${plotView.y}px) scale(${plotView.scale})` } as CSSProperties}
+                            >
                             <Image src={map!.displayIcon} alt={`${map!.name} minimap`} width={640} height={640} unoptimized className={s.mapPlotImage} draggable={false} />
                             {!selectedFight && zoneRegions.map((region) => {
                                 const fights = analysis.zones.find((zone) => zone.name === region.name);
@@ -3564,17 +3749,52 @@ export function MatchMapAnalytics({
                                         type="button"
                                         className={`${s.mapEvent} ${point.type === "kill" ? s.mapEventKill : s.mapEventDeath}`}
                                         style={{ left: `${left * 100}%`, top: `${top * 100}%` }}
-                                        title={`${point.type === "kill" ? "Kill" : "Death"}, round ${point.round + 1}`}
+                                        title={`${point.type === "kill" ? "Kill" : "Death"} · Round ${point.round + 1} · ${sideName(point.side)} · ${point.area}`}
                                         aria-label={`Inspect ${point.type}, round ${point.round + 1}, ${point.area}, ${fmtLength(point.event.roundTime)}`}
                                         onClick={() => selectDuelGroup(fightEventKey(point.event), `Round ${point.round + 1} · ${fmtLength(point.event.roundTime)}`, [point.event])}
                                     >
-                                        <i className={s.mapHeat} aria-hidden="true" />
                                         <b className={s.mapPoint} aria-hidden="true" />
                                     </button>
                                 );
                             })}
                             {selectedFight && duelData ? (
                                 <>
+                                    {duelData.localDeath ? (
+                                        <>
+                                            <span
+                                                className={`${s.mapTradeRing} ${duelData.mate && duelData.mate.metres <= TRADE_RANGE_METRES ? s.mapTradeRingCovered : ""}`}
+                                                style={{
+                                                    left: `${duelData.victimPoint.left * 100}%`,
+                                                    top: `${duelData.victimPoint.top * 100}%`,
+                                                    width: `${duelData.tradeRingRadius * 200}%`,
+                                                    height: `${duelData.tradeRingRadius * 200}%`,
+                                                }}
+                                                aria-hidden="true"
+                                            >
+                                                <small>{TRADE_RANGE_METRES} m trade range</small>
+                                            </span>
+                                            {duelData.mate ? (
+                                                <>
+                                                    <svg className={s.mapTradeLine} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                                                        <line
+                                                            x1={duelData.mate.point.left * 100}
+                                                            y1={duelData.mate.point.top * 100}
+                                                            x2={duelData.victimPoint.left * 100}
+                                                            y2={duelData.victimPoint.top * 100}
+                                                        />
+                                                    </svg>
+                                                    <span
+                                                        className={s.mapTradeMate}
+                                                        style={{ left: `${duelData.mate.point.left * 100}%`, top: `${duelData.mate.point.top * 100}%` }}
+                                                        title={`Nearest teammate: ${duelData.mate.player?.gameName || "Teammate"}, ${duelData.mate.metres} m away`}
+                                                    >
+                                                        {duelData.mate.agent?.icon ? <Image src={duelData.mate.agent.icon} alt="" width={22} height={22} unoptimized /> : null}
+                                                        <small>{duelData.mate.metres} m</small>
+                                                    </span>
+                                                </>
+                                            ) : null}
+                                        </>
+                                    ) : null}
                                     {duelData.killerPoint ? (
                                         <svg className={`${s.mapDuelLine} ${duelData.localDeath ? s.mapDuelLineDeath : s.mapDuelLineKill}`} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                                             <line
@@ -3584,16 +3804,16 @@ export function MatchMapAnalytics({
                                                 y2={duelData.victimPoint.top * 100}
                                             />
                                             <line
-                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15}
-                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15}
-                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15}
-                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15}
+                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15 / plotView.scale}
+                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15 / plotView.scale}
+                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15 / plotView.scale}
+                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15 / plotView.scale}
                                             />
                                             <line
-                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15}
-                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15}
-                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15}
-                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15}
+                                                x1={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 + 1.15 / plotView.scale}
+                                                y1={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 - 1.15 / plotView.scale}
+                                                x2={((duelData.killerPoint.left + duelData.victimPoint.left) / 2) * 100 - 1.15 / plotView.scale}
+                                                y2={((duelData.killerPoint.top + duelData.victimPoint.top) / 2) * 100 + 1.15 / plotView.scale}
                                             />
                                         </svg>
                                     ) : null}
@@ -3617,6 +3837,13 @@ export function MatchMapAnalytics({
                                     />
                                 </>
                             ) : null}
+                            </div>
+                            <div className={s.mapZoomControls} onPointerDown={(event) => event.stopPropagation()}>
+                                <button type="button" onClick={() => zoomPlot(1.5)} disabled={plotView.scale >= MAP_MAX_ZOOM} aria-label="Zoom in">+</button>
+                                <button type="button" onClick={() => zoomPlot(1 / 1.5)} disabled={plotView.scale <= 1} aria-label="Zoom out">−</button>
+                                {plotView.scale > 1 ? <button type="button" onClick={() => setPlotView({ scale: 1, x: 0, y: 0 })} aria-label="Reset zoom">Fit</button> : null}
+                            </div>
+                            {plotView.scale === 1 ? <small className={s.mapZoomHint} aria-hidden="true">Scroll to zoom</small> : null}
                         </div>
                     ) : (
                         <div className={s.mapAnalyticsEmpty}>This map does not provide minimap coordinate metadata.</div>
@@ -3654,7 +3881,14 @@ export function MatchMapAnalytics({
                     {selectedFight && duelData ? <section className={s.mapFightDetail} aria-label="Selected fight receipt">
                         <header><strong>Round {selectedFight.roundNum + 1} · {fmtLength(selectedFight.roundTime)}</strong><small>Recorded elimination</small></header>
                         <p><strong>{duelData.killerPlayer?.isLocal ? "You" : duelData.killerPlayer?.gameName || "Unknown player"}</strong><span aria-label="eliminated">→</span><strong>{duelData.victimPlayer?.isLocal ? "You" : duelData.victimPlayer?.gameName || "Unknown player"}</strong></p>
-                        <dl><div><dt>Location</dt><dd>{duelData.area}</dd></div><div><dt>Finisher</dt><dd>{duelData.finisherName || "Unavailable"}</dd></div><div><dt>Your team</dt><dd>{duelData.roundWon === null ? "Outcome unavailable" : duelData.roundWon ? "Round won" : "Round lost"}</dd></div></dl>
+                        <dl><div><dt>Location</dt><dd>{duelData.area}</dd></div><div><dt>Finisher</dt><dd>{duelData.finisherName || "Unavailable"}</dd></div><div><dt>Your team</dt><dd>{duelData.roundWon === null ? "Outcome unavailable" : duelData.roundWon ? "Round won" : "Round lost"}</dd></div>{duelData.localDeath ? <><div><dt>Killer distance</dt><dd>{duelData.killDistance === null ? "Unavailable" : `${duelData.killDistance} m`}</dd></div><div><dt>Nearest teammate</dt><dd>{duelData.mate ? `${duelData.mate.player?.gameName || "Teammate"} · ${duelData.mate.metres} m` : "None alive"}</dd></div><div><dt>Traded</dt><dd className={duelData.traded ? s.mapKillText : s.mapDeathText}>{duelData.traded ? "Yes, within 5 s" : "No"}</dd></div></> : null}</dl>
+                        {duelData.localDeath ? <p className={s.mapTradeVerdict} data-tone={duelData.traded ? "good" : duelData.mate && duelData.mate.metres <= TRADE_RANGE_METRES ? "neutral" : "danger"}>{duelData.traded
+                            ? "Your team traded this death, so the fight still paid off."
+                            : duelData.mate && duelData.mate.metres <= TRADE_RANGE_METRES
+                                ? `${duelData.mate.player?.gameName || "A teammate"} was ${duelData.mate.metres} m away and could have traded, but didn't.`
+                                : duelData.mate
+                                    ? `Your nearest teammate was ${duelData.mate.metres} m away, too far to trade. Take this fight closer to your team.`
+                                    : "No teammate was alive to trade this fight."}</p> : null}
                     </section> : null}
                     <header className={s.mapInsightsHeader}>
                         <div>
@@ -3663,6 +3897,15 @@ export function MatchMapAnalytics({
                         </div>
                         <small>Whole match · {analysis.kills + analysis.deaths} fights</small>
                     </header>
+                    {sideSwing ? (
+                        <p className={s.mapSideSwing} data-tone={sideSwing.change > 0 ? "good" : sideSwing.after.kills < sideSwing.after.deaths ? "danger" : "neutral"}>
+                            <b>Biggest change after the swap</b>
+                            <span>
+                                {sideSwing.area} went <strong>{sideSwing.before.kills}–{sideSwing.before.deaths}</strong> on {sideName(firstSide)}
+                                {" "}and <strong>{sideSwing.after.kills}–{sideSwing.after.deaths}</strong> on {sideName(secondSide)}.
+                            </span>
+                        </p>
+                    ) : null}
                     <div className={s.mapZoneList}>
                         {analysis.zones.map((zone) => {
                             const total = zone.kills + zone.deaths;
@@ -3683,6 +3926,8 @@ export function MatchMapAnalytics({
                                         : "Even fights";
                             const zoneDetail = zone.kills > 0 && zone.deaths === 0
                                     ? "No deaths"
+                                    : zone.kills === 0
+                                        ? "No kills"
                                     : `${fmtRatio(zone.kills / zone.deaths)} K/D`;
                             const isFocused = zone.focusArea
                                 ? focusedArea === zone.focusArea
@@ -3717,6 +3962,11 @@ export function MatchMapAnalytics({
                                     <span className={s.mapZoneIdentity}>
                                         <strong>{zone.name}</strong>
                                         <small>{zoneSummary} <b>{zoneDetail}</b></small>
+                                        <small className={s.mapZoneSides}>
+                                            {(["attack", "defense"] as const).filter((side) => zone.sides[side].kills + zone.sides[side].deaths > 0).map((side) => (
+                                                <span key={side}>{side === "attack" ? "Atk" : "Def"} <b className={s.mapKillText}>{zone.sides[side].kills}</b>–<b className={s.mapDeathText}>{zone.sides[side].deaths}</b></span>
+                                            ))}
+                                        </small>
                                     </span>
                                     <span className={s.mapZoneStats}>
                                         <span><small>Kills</small><b className={s.mapKillText}>{zone.kills}</b></span>
@@ -3727,6 +3977,40 @@ export function MatchMapAnalytics({
                                 </button>
                             );
                         })}
+                    </div>
+                    <div className={s.mapMatchInsight}>
+                        <div className={s.mapInsightSectionHeading}>
+                            <span>Takeaways</span>
+                            <small>Select one to see it on the map</small>
+                        </div>
+                        <div className={s.mapReviewList}>
+                            {takeaways.map((note, index) => {
+                                const markerLeft = canPlot ? Math.max(0, Math.min(1, note.y * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
+                                const markerTop = canPlot ? Math.max(0, Math.min(1, note.x * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
+                                const isDuelFocused = duelFocus?.id === note.id;
+                                return (
+                                <button
+                                    key={`${note.label}-${note.copy}`}
+                                    type="button"
+                                    className={`${s.mapReviewCard} ${isDuelFocused ? s.mapReviewCardActive : ""}`}
+                                    data-tone={note.tone}
+                                    aria-pressed={isDuelFocused}
+                                    onClick={() => selectDuelGroup(note.id, note.label, note.events)}
+                                >
+                                    <span className={s.mapReviewThumb} aria-hidden="true">
+                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="52px" unoptimized /> : <b>{index + 1}</b>}
+                                        <i style={{ left: `${markerLeft * 100}%`, top: `${markerTop * 100}%` }} />
+                                    </span>
+                                    <p>
+                                        <small>{note.tone === "danger" ? "Work on" : note.tone === "good" ? "Keep doing" : "Worth knowing"}</small>
+                                        <strong>{note.label}</strong>
+                                        <span>{note.copy}</span>
+                                        <em>{note.chips.map((chip) => <i key={chip}>{chip}</i>)}</em>
+                                    </p>
+                                </button>
+                                );
+                            })}
+                        </div>
                     </div>
                     {(analysis.killSpot || analysis.deathSpot) && <div className={s.mapHotspotSummary}>
                         <div className={s.mapInsightSectionHeading}>
@@ -3769,32 +4053,6 @@ export function MatchMapAnalytics({
                             );
                         })}
                     </div>}
-                    <div className={s.mapMatchInsight}>
-                        <span>Round impact</span>
-                        <div className={s.mapReviewList}>
-                            {reviewNotes.slice(0, 4).map((note, index) => {
-                                const markerLeft = canPlot ? Math.max(0, Math.min(1, note.y * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
-                                const markerTop = canPlot ? Math.max(0, Math.min(1, note.x * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
-                                const isDuelFocused = duelFocus?.id === note.id;
-                                return (
-                                <button
-                                    key={`${note.label}-${note.copy}`}
-                                    type="button"
-                                    className={`${s.mapReviewCard} ${isDuelFocused ? s.mapReviewCardActive : ""}`}
-                                    data-tone={note.tone}
-                                    aria-pressed={isDuelFocused}
-                                    onClick={() => selectDuelGroup(note.id, note.kicker, note.events)}
-                                >
-                                    <span className={s.mapReviewThumb} aria-hidden="true">
-                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="52px" unoptimized /> : <b>{index + 1}</b>}
-                                        <i style={{ left: `${markerLeft * 100}%`, top: `${markerTop * 100}%` }} />
-                                    </span>
-                                    <p><small>{note.kicker}</small><strong>{note.label}</strong><span>{note.copy}</span></p>
-                                </button>
-                                );
-                            })}
-                        </div>
-                    </div>
                 </section>
             </div>
         </section>
