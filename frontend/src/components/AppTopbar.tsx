@@ -116,7 +116,7 @@ export default function AppTopbar({
                     {updateControl}
                     {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
 
-                    <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title={attention.total ? `Manage Accounts · ${attention.signIn.length ? `${attention.signIn.length} need a new sign-in` : ""}${attention.signIn.length && attention.endingSoon.length ? ", " : ""}${attention.endingSoon.length ? `${attention.endingSoon.length} ending soon` : ""}` : "Manage Accounts"}>
+                    <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title={attention.total ? `Manage Accounts · ${attention.signIn.length ? `${attention.signIn.length} ${attention.signIn.length === 1 ? "needs" : "need"} a new sign-in` : ""}${attention.signIn.length && attention.endingSoon.length ? ", " : ""}${attention.endingSoon.length ? `${attention.endingSoon.length} ending soon` : ""}` : "Manage Accounts"}>
                         {attention.total > 0 && <span className="profile-pill-attention" data-tone={attention.signIn.length ? "sign-in" : "soon"} aria-label={`${attention.total} saved ${attention.total === 1 ? "account needs" : "accounts need"} attention`}>{attention.total}</span>}
                         <div className="profile-pill-avatar">
                             {playerCard?.displayIcon ? (
