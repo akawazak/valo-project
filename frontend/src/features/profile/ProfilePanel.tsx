@@ -3607,6 +3607,21 @@ export function MatchMapAnalytics({
             events: analysis.points.filter((point) => (point.zone === "Other" ? point.area : point.zone) === strongestZone.name).map((point) => point.event),
         });
     }
+    // Where your kills come from, when no single area stood out as yours above.
+    if (analysis.killSpot && !reviewNotes.some((note) => note.id.startsWith("strongest-area-"))) {
+        const spot = analysis.killSpot;
+        const rounds = [...new Set(spot.killRounds)];
+        reviewNotes.push({
+            id: `kill-spot-${spot.name}`,
+            tone: "good",
+            label: `Your kills come from ${spot.name}`,
+            copy: `You got ${spot.kills} kills there. Keep using that position.`,
+            chips: [statCount(spot.kills, "kill"), roundList(rounds)],
+            x: spot.killXTotal / Math.max(1, spot.kills),
+            y: spot.killYTotal / Math.max(1, spot.kills),
+            events: analysis.points.filter((point) => point.type === "kill" && point.area === spot.name).map((point) => point.event),
+        });
+    }
     // The area whose results changed most when the sides swapped at the half.
     const firstSide = analysis.sideOf(0);
     const secondSide = firstSide === "attack" ? "defense" : "attack";
@@ -4012,47 +4027,6 @@ export function MatchMapAnalytics({
                             })}
                         </div>
                     </div>
-                    {(analysis.killSpot || analysis.deathSpot) && <div className={s.mapHotspotSummary}>
-                        <div className={s.mapInsightSectionHeading}>
-                            <span>Repeat positions</span>
-                            <small>Select to isolate</small>
-                        </div>
-                        {([{ type: "kill", spot: analysis.killSpot }, { type: "death", spot: analysis.deathSpot }] as const).map(({ type, spot }) => {
-                            if (!spot) return null;
-                            const count = type === "kill" ? spot.kills : spot.deaths;
-                            const rounds = type === "kill" ? spot.killRounds : spot.deathRounds;
-                            const uniqueRounds = [...new Set(rounds)];
-                            const averageX = (type === "kill" ? spot.killXTotal : spot.deathXTotal) / Math.max(1, count);
-                            const averageY = (type === "kill" ? spot.killYTotal : spot.deathYTotal) / Math.max(1, count);
-                            const markerLeft = canPlot ? Math.max(0, Math.min(1, averageY * map!.xMultiplier! + map!.xScalarToAdd!)) : 0.5;
-                            const markerTop = canPlot ? Math.max(0, Math.min(1, averageX * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
-                            const hotspotEvents = analysis.points
-                                .filter((point) => point.type === type && point.area === spot.name)
-                                .map((point) => point.event);
-                            const duelId = `hotspot-${type}-${spot.name}`;
-                            const isDuelFocused = duelFocus?.id === duelId;
-                            return (
-                                <button
-                                    key={type}
-                                    type="button"
-                                    className={`${s.mapHotspotItem} ${type === "kill" ? s.mapHotspotKill : s.mapHotspotDeath} ${isDuelFocused ? s.mapHotspotItemActive : ""}`}
-                                    aria-label={`${type === "kill" ? `Got ${count} kills` : `Died ${count} times`} at ${spot.name}; select to isolate on the map`}
-                                    aria-pressed={isDuelFocused}
-                                    onClick={() => selectDuelGroup(duelId, `${type === "kill" ? "Kills" : "Deaths"} at ${spot.name}`, hotspotEvents)}
-                                >
-                                    <span className={s.mapHotspotThumb} aria-hidden="true">
-                                        {map?.displayIcon ? <Image src={map.displayIcon} alt="" fill sizes="58px" unoptimized /> : null}
-                                        <i style={{ left: `${markerLeft * 100}%`, top: `${markerTop * 100}%` }} />
-                                    </span>
-                                    <span>
-                                        <strong>{type === "kill" ? `Got ${count} kills here` : `Died here ${count} times`}</strong>
-                                        <small>{spot.name} · {type === "kill" ? "Kill hotspot" : "Death hotspot"}</small>
-                                    </span>
-                                    <span><small>{uniqueRounds.length === 1 ? `Round ${uniqueRounds[0]}` : `Rounds ${uniqueRounds.join(", ")}`}</small></span>
-                                </button>
-                            );
-                        })}
-                    </div>}
                 </section>
             </div>
         </section>
