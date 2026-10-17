@@ -1,5 +1,5 @@
 /**
- * Share cards: 1200x630 images (the size Discord and X preview well) drawn on a canvas from real data,
+ * Share cards: 1200x630 images (the size Discord and X preview well, drawn at 2x) made on a canvas from real data,
  * then copied to the clipboard or saved. Game art is fetched as bytes so the canvas stays exportable:
  * through Tauri's HTTP plugin in the app (no cross-origin limits), or plain fetch for same-origin art.
  */
@@ -28,12 +28,17 @@ export async function loadShareImage(url?: string): Promise<ImageBitmap | null> 
     }
 }
 
+/** Drawn at twice the size so the image stays sharp when it is pasted and zoomed; code works in 1200x630 units. */
+export const SHARE_SCALE = 2;
+
 export function shareCanvas() {
     const canvas = document.createElement("canvas");
-    canvas.width = SHARE_W;
-    canvas.height = SHARE_H;
+    canvas.width = SHARE_W * SHARE_SCALE;
+    canvas.height = SHARE_H * SHARE_SCALE;
     const ctx = canvas.getContext("2d")!;
+    ctx.scale(SHARE_SCALE, SHARE_SCALE);
     ctx.textBaseline = "alphabetic";
+    ctx.imageSmoothingQuality = "high";
     return { canvas, ctx };
 }
 
@@ -78,24 +83,51 @@ export function wrap(ctx: CanvasRenderingContext2D, text: string, maxWidth: numb
     return out;
 }
 
-/** Background art, darkened from the left so text stays readable, plus the page ground. */
-export function drawBackdrop(ctx: CanvasRenderingContext2D, art: ImageBitmap | null) {
+/** Background art at full colour, darkened from the left so text stays readable. */
+export function drawBackdrop(ctx: CanvasRenderingContext2D, art: ImageBitmap | null, focusY = 0.4) {
     ctx.fillStyle = SHARE_COLORS.bg;
     ctx.fillRect(0, 0, SHARE_W, SHARE_H);
-    if (art) {
-        ctx.globalAlpha = 0.55;
-        cover(ctx, art, 0, 0, SHARE_W, SHARE_H, 0.4);
-        ctx.globalAlpha = 1;
-    }
+    if (art) cover(ctx, art, 0, 0, SHARE_W, SHARE_H, focusY);
     const shade = ctx.createLinearGradient(0, 0, SHARE_W, 0);
-    shade.addColorStop(0, "rgba(6,11,15,0.94)");
-    shade.addColorStop(0.55, "rgba(6,11,15,0.78)");
-    shade.addColorStop(1, "rgba(6,11,15,0.55)");
+    shade.addColorStop(0, "rgba(6,11,15,0.92)");
+    shade.addColorStop(0.42, "rgba(6,11,15,0.72)");
+    shade.addColorStop(1, "rgba(6,11,15,0.2)");
     ctx.fillStyle = shade;
     ctx.fillRect(0, 0, SHARE_W, SHARE_H);
 }
 
-/** Brand line top-left and the site bottom-right, the same on every card. */
+/** A soft pool of colour, used to tint a card by result or player. Takes a #rrggbb colour. */
+export function wash(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string, alpha: number) {
+    const hex = Math.round(alpha * 255).toString(16).padStart(2, "0");
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    glow.addColorStop(0, `${color}${hex}`);
+    glow.addColorStop(1, `${color}00`);
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+}
+
+/** Fades the card into the ground colour between two heights. */
+export function fade(ctx: CanvasRenderingContext2D, from: number, to: number, alpha: number) {
+    const g = ctx.createLinearGradient(0, from, 0, to);
+    g.addColorStop(0, "rgba(6,11,15,0)");
+    g.addColorStop(1, `rgba(6,11,15,${alpha})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, Math.min(from, to), SHARE_W, Math.abs(to - from));
+}
+
+/** Letter spacing for labels; ignored where the canvas doesn't support it. */
+export function track(ctx: CanvasRenderingContext2D, px: number) {
+    (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${px}px`;
+}
+
+/** A soft shadow under text that sits on art. */
+export function lift(ctx: CanvasRenderingContext2D, on = true) {
+    ctx.shadowColor = on ? "rgba(0,0,0,0.6)" : "transparent";
+    ctx.shadowBlur = on ? 16 : 0;
+    ctx.shadowOffsetY = on ? 2 : 0;
+}
+
+/** Brand lockup top-left, the same on every card. */
 export function drawBrand(ctx: CanvasRenderingContext2D, kicker: string, logo: ImageBitmap | null) {
     if (logo) ctx.drawImage(logo, 56, 44, 34, 34);
     ctx.font = font(700, 22);
@@ -105,15 +137,21 @@ export function drawBrand(ctx: CanvasRenderingContext2D, kicker: string, logo: I
     ctx.fillStyle = SHARE_COLORS.coral;
     ctx.fillText("VAULT", 100 + w, 69);
     const brandW = w + ctx.measureText("VAULT").width;
-    ctx.font = font(600, 18);
-    ctx.fillStyle = SHARE_COLORS.soft;
-    ctx.fillText(kicker.toUpperCase(), 100 + brandW + 18, 68);
-    ctx.fillStyle = SHARE_COLORS.line;
-    ctx.fillRect(56, SHARE_H - 70, SHARE_W - 112, 1);
-    ctx.font = font(600, 20);
+    ctx.fillStyle = "rgba(237,240,242,0.3)";
+    ctx.fillRect(100 + brandW + 16, 50, 1, 24);
+    ctx.font = font(600, 15);
+    track(ctx, 2);
+    ctx.fillStyle = SHARE_COLORS.muted;
+    ctx.fillText(kicker.toUpperCase(), 100 + brandW + 33, 68);
+    track(ctx, 0);
+}
+
+/** The site, small, at a spot each card chooses. */
+export function drawSite(ctx: CanvasRenderingContext2D, x: number, y: number, align: CanvasTextAlign = "right") {
+    ctx.font = font(600, 17);
+    ctx.textAlign = align;
     ctx.fillStyle = SHARE_COLORS.win;
-    ctx.textAlign = "right";
-    ctx.fillText(SITE, SHARE_W - 56, SHARE_H - 34);
+    ctx.fillText(SITE, x, y);
     ctx.textAlign = "left";
 }
 

@@ -420,7 +420,7 @@ export function MatchRow({
                                             resultLabel: standing ? (standing === 1 ? "1st place" : `${standing} of ${standingOf}`) : !roundBased ? "Completed" : match.win ? "Victory" : "Defeat",
                                             ownRounds: roundBased ? ownRounds : undefined, enemyRounds: roundBased ? enemyRounds : undefined,
                                             queue: queueName, date: fmtDate(match.gameStartMillis), length: fmtLength(match.gameLengthMillis),
-                                            agentName, agentIcon: agentMeta?.icon, rankIcon: match.isRanked && matchTier ? matchRRIcon || undefined : undefined,
+                                            agentName, agentIcon: agentMeta?.icon, agentPortrait: agentMeta?.full, rankIcon: match.isRanked && matchTier ? matchRRIcon || undefined : undefined,
                                             rankLabel: match.isRanked && matchTier ? matchRRLabel : undefined, rr: match.isRanked ? rrEarned : undefined, mvp: match.localPlayer.teamMvp,
                                             player: match.localPlayer.gameName ? `${match.localPlayer.gameName}#${match.localPlayer.tagLine}` : "You",
                                             stats: [

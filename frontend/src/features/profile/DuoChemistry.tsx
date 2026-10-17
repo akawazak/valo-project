@@ -213,7 +213,7 @@ export default function DuoChemistry({ you, region, agents, mapNames, mapVisuals
                     <p>{mapId && mapNames[mapId] ? <>Most played together lately: <b>{mapNames[mapId]}</b></> : "Everyone you queued with in 5v5 games"}</p>
                     <span className={d.grow} />
                     {mate && data && data.games > 0 ? <ShareButton filename={`vantavault-duo-${(mate.gameName || "duo").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`} build={() => drawDuoShare({
-                        you: { name: you.name, cardUrl: CARD(you.cardId) }, them: { name: them.name, cardUrl: CARD(them.cardId) },
+                        you: { name: you.name, cardUrl: CARD(you.cardId), agent: tops?.you ? agents[tops.you]?.full : undefined }, them: { name: them.name, cardUrl: CARD(them.cardId), agent: tops?.them ? agents[tops.them]?.full : undefined },
                         colours: { you: colours.palette.you, them: colours.palette.them }, verdict: verdict(data, them.name), games: data.games, wins: data.wins, mapArt,
                         rows: [
                             { label: "Avenged the other", you: data.youTradedThem.count, them: data.theyTradedYou.count },
