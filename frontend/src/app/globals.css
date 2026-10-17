@@ -466,6 +466,8 @@ div#__next>div {
 
 /* Headline features: real art, a title and one plain sentence. */
 .release-notes-highlights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.release-notes-highlights:has(> :nth-child(2):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.release-notes-highlights:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
 
 .release-notes-highlight {
   --tone: #ff8a3d;
@@ -22630,3 +22632,23 @@ input:focus,
 .profile-pill-attention { position: absolute; top: 2px; left: 4px; z-index: 1; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border: 2px solid var(--bg-base, #0b0e12); border-radius: 9px; background: #ffb03a; color: #1a1205; font-size: 0.68rem; font-weight: 800; line-height: 1; }
 .profile-pill-attention[data-tone="soon"] { background: #1a1f27; color: #ffb03a; box-shadow: inset 0 0 0 1.5px #ffb03a; }
 .account-switcher-attention { margin: 0.75rem 0 0; padding: 0.65rem 0.9rem; border: 1px solid color-mix(in srgb, #ffb03a 40%, transparent); border-radius: 8px; background: color-mix(in srgb, #ffb03a 9%, transparent); color: var(--text-primary); font-size: 0.85rem; line-height: 1.45; }
+
+/* 0.5.32 previews: the account badge and list, and a kill-spot takeaway. */
+.rn-accounts { flex-direction: column; justify-content: center; align-items: stretch; gap: 10px; padding: 0 16px; }
+.rn-pill { position: relative; display: inline-flex; align-items: center; gap: 8px; align-self: center; padding: 5px 14px 5px 6px; border: 1px solid rgba(255, 64, 85, 0.45); border-radius: 8px; background: #11161c; font-size: 13px; font-weight: 700; animation: rn-fade 0.4s ease both; }
+.rn-pill b { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #5a6a7a, #2a333e); }
+.rn-pill em { color: #93a0ad; font-style: normal; font-weight: 500; }
+.rn-pill i { position: absolute; top: 1px; left: 3px; display: grid; place-items: center; min-width: 16px; height: 16px; border: 2px solid #11161c; border-radius: 8px; background: #ffb03a; color: #1a1205; font-size: 9.5px; font-style: normal; font-weight: 800; animation: rn-pop 0.4s 0.3s cubic-bezier(0.3, 1.4, 0.5, 1) both; }
+.rn-accounts ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.rn-accounts li { display: flex; align-items: baseline; gap: 4px; padding: 6px 10px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 7px; background: #12161c; font-size: 12px; animation: rn-slide 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) both; --from: -8px; }
+.rn-accounts li:nth-child(2) { animation-delay: 0.1s; }
+.rn-accounts li em { color: #93a0ad; font-style: normal; }
+.rn-accounts li span { margin-left: auto; color: #ffb03a; font-size: 11px; font-weight: 700; }
+.rn-accounts li[data-state="sign-in"] { border-color: color-mix(in srgb, #ffb03a 40%, transparent); }
+.rn-killspot { gap: 12px; padding: 0 16px; }
+.rn-killspot svg { flex: none; width: 120px; height: 92px; }
+.rn-preview svg .rn-zone { fill: color-mix(in srgb, #22d3a3 12%, transparent); stroke: #22d3a3; stroke-width: 1; stroke-dasharray: 3 2; animation: rn-grow 0.6s 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both; transform-box: fill-box; transform-origin: center; }
+.rn-killspot p { display: grid; gap: 3px; margin: 0; padding: 9px 11px; border: 1px solid color-mix(in srgb, #22d3a3 30%, transparent); border-left: 3px solid #22d3a3; border-radius: 6px; background: #12161c; animation: rn-slide 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; --from: 10px; }
+.rn-killspot small { color: #22d3a3; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.rn-killspot b { color: #eef1f4; font-size: 12.5px; font-weight: 600; }
+.rn-killspot em { color: #93a0ad; font-size: 11px; font-style: normal; }

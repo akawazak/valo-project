@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 
-export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways";
+export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot";
 
 const ROUNDS = ["W", "W", "L", "W", "L", "W", "W"];
 
@@ -64,6 +64,26 @@ export default function ReleasePreview({ kind }: { kind: ReleasePreviewKind }) {
             <text className="rn-label rn-dim" x="92" y="18">10 m trade range</text>
         </svg>
         <span className="rn-verdict">Traded</span>
+    </div>;
+
+    if (kind === "accounts") return <div className="rn-preview rn-accounts">
+        <span className="rn-pill"><i>2</i><b /> Vanta<em>#DEMO</em></span>
+        <ul>
+            <li data-state="sign-in"><b>Alt</b><em>#ONE</em><span>Sign-in required</span></li>
+            <li data-state="soon"><b>Alt</b><em>#TWO</em><span>Riot login ends in 2 days</span></li>
+        </ul>
+    </div>;
+
+    if (kind === "killspot") return <div className="rn-preview rn-killspot">
+        <svg viewBox="0 0 120 92" aria-hidden="true">
+            <path className="rn-map" d="M12 10h40v14h26V8h30v40H92v30H56V62H34v18H12z" />
+            <circle className="rn-ally" cx="82" cy="24" r="3.4" />
+            <circle className="rn-ally" cx="90" cy="30" r="3.4" />
+            <circle className="rn-ally" cx="78" cy="34" r="3.4" />
+            <circle className="rn-ally" cx="94" cy="20" r="3.4" />
+            <circle className="rn-zone" cx="86" cy="27" r="16" />
+        </svg>
+        <p><small>Keep doing</small><b>Your kills come from A Site</b><em>6 kills this match</em></p>
     </div>;
 
     if (kind === "takeaways") return <div className="rn-preview rn-takeaways">
