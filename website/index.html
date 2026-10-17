@@ -181,19 +181,24 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>
         Download for Windows
       </a>
-      <a class="btn btn-line" href="#app" data-trailer-sound>
+      <a class="btn btn-line try-live" href="#loadouts" data-open-tab="loadouts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg>
+        Try it live
+      </a>
+      <a class="btn btn-line trailer-btn" href="#app" data-trailer-sound>
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
         Watch the trailer
       </a>
+      <a class="trailer-link" href="#app" data-trailer-sound>or watch the trailer</a>
     </div>
-    <p class="hero-meta"><strong id="hero-version">Latest</strong> · Windows 10 and 11 · Portable, no setup</p>
+    <p class="hero-meta"><strong id="hero-version">Latest</strong> · Windows 10 and 11 · Portable, no setup<span class="try-note"> · Try the real app below, no download needed</span></p>
   </div>
 </section>
 
 <section class="tour shell" id="app" aria-label="VantaVault app tour">
   <div class="window">
     <div class="titlebar">
-      <span class="titlebar-name"><img src="assets/app-icon.png" width="16" height="16" alt="">VantaVault</span>
+      <span class="titlebar-name"><img src="assets/app-icon.png" width="16" height="16" alt="">VantaVault<span class="live-label"><i></i>Live demo · click anything</span></span>
       <span class="titlebar-controls" aria-hidden="true">
         <svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg>
         <svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7"/></svg>
@@ -217,7 +222,7 @@
     </div>
 
     <div class="panels">
-      <div class="demo-frame" id="demo-frame" hidden><div class="demo-scale"><iframe id="demo-iframe" title="VantaVault live demo with demo data" width="1280" height="720" loading="lazy"></iframe></div><div class="demo-loading" role="status">Starting the live demo…</div></div>
+      <div class="demo-frame" id="demo-frame" hidden><div class="demo-scale"><iframe id="demo-iframe" title="VantaVault live demo with demo data" width="1280" height="720" loading="lazy"></iframe></div><div class="demo-loading" role="status">Starting the live demo…</div><div class="demo-coach" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>This is the real app.</b> Click anything. Demo data only.</span></div></div>
       <section class="panel is-active" id="panel-trailer" role="tabpanel" aria-labelledby="tab-trailer" tabindex="0">
         <div class="screen screen-video" id="trailer">
           <video id="trailer-video" src="assets/vantavault-trailer.mp4" poster="assets/vantavault-trailer-poster.jpg" width="1920" height="1080" muted loop playsinline preload="metadata" aria-label="VantaVault trailer: loadouts, profile, round and map review, live match, store, career insights, sessions, compare, Duos and accolades"><track kind="captions" src="assets/vantavault-trailer.vtt" srclang="en" label="English"></video>
@@ -230,7 +235,7 @@
             Play with sound
           </button>
           <p class="fine">Demo account. Names, stats and store offers are made up. Captions included.</p>
-          <p class="fine demo-hint">The other tabs run the real app with demo data. Click around.</p>
+          <button class="btn btn-line btn-block demo-hint" type="button" data-open-tab="loadouts">Try the app instead</button>
         </aside>
       </section>
 
@@ -238,6 +243,7 @@
         <div class="screen"><img src="assets/tab-loadouts.webp" width="1800" height="1054" loading="lazy" decoding="async" alt="VantaVault loadout screen with a skin for every weapon and saved presets, demo account"></div>
         <aside class="notes">
           <h2>Build it. Apply it. Play it.</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Open the hett preset, swap a skin, then hit Apply.</span></p>
           <ul>
             <li>Every weapon, variant, buddy, card, spray and title on one screen.</li>
             <li>Save full loadouts as presets.</li>
@@ -254,6 +260,7 @@
         </div>
         <aside class="notes">
           <h2>Your daily store, a click away</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Click a skin to see its levels and variants.</span></p>
           <div class="segmented" role="group" aria-label="Store view">
             <button type="button" aria-pressed="true" data-src="assets/tab-store-detail.webp" data-alt="VantaVault skin details for the CYRAX Vandal with its variants, demo account">Skin details</button>
             <button type="button" aria-pressed="false" data-src="assets/tab-store.webp" data-alt="VantaVault daily store with four skin offers, demo account">Daily offers</button>
@@ -271,6 +278,7 @@
         <div class="screen"><img src="assets/tab-history.webp" width="1800" height="1054" loading="lazy" decoding="async" alt="VantaVault match history grouped by day, demo account"></div>
         <aside class="notes">
           <h2>Your whole journey</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Click any match to open its scoreboard, round review and map.</span></p>
           <ul>
             <li>Rank and RR over time, with your peak.</li>
             <li>Every match saved on your PC, grouped by day.</li>
@@ -286,6 +294,7 @@
         </div>
         <aside class="notes">
           <h2>Every round, kill by kill</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Pick a round, or switch to Map and filter kills and deaths.</span></p>
           <div class="segmented" role="group" aria-label="Match review view">
             <button type="button" aria-pressed="true" data-src="assets/tab-rounds.webp" data-alt="VantaVault round review with the map, kill feed and economy for one round, demo data">Round review</button>
             <button type="button" aria-pressed="false" data-src="assets/tab-map.webp" data-alt="VantaVault map review showing where fights happened, demo data">Map</button>
@@ -302,6 +311,7 @@
         <div class="screen"><img src="assets/tab-live.webp" width="1800" height="1126" loading="lazy" decoding="async" alt="VantaVault live match with both teams, agents and ranks, demo players"></div>
         <aside class="notes">
           <h2>Every rank in your lobby</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Open a player to see their details.</span></p>
           <ul>
             <li>Map, score, agents and ranks for both teams.</li>
             <li>See who's partied up.</li>
@@ -317,6 +327,7 @@
         </div>
         <aside class="notes">
           <h2>Who backs who up</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Hit Compare stats to put the two players side by side.</span></p>
           <div class="segmented" role="group" aria-label="Duos view">
             <button type="button" aria-pressed="true" data-src="assets/tab-duos.webp" data-alt="VantaVault Duos screen comparing how often two demo players avenge each other">Duos</button>
             <button type="button" aria-pressed="false" data-src="assets/tab-compare.webp" data-alt="VantaVault comparing two demo players' playstyle and match stats">Compare</button>
@@ -333,6 +344,7 @@
         <div class="screen"><img src="assets/tab-insights.webp" width="1800" height="1082" loading="lazy" decoding="async" alt="VantaVault career insights with a playstyle chart, demo data"></div>
         <aside class="notes">
           <h2>Know your game</h2>
+          <p class="try"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 7-6 2-2 6z"/></svg><span><b>Try it:</b> Hover a stat to see how it's measured.</span></p>
           <ul>
             <li>Your playstyle across aim, entry, clutch, teamplay, economy and consistency.</li>
             <li>Ranked against the players in your own matches.</li>
@@ -575,6 +587,7 @@ function appWindow(){
       e.preventDefault();select(tabs[n],{focus:true});
     });
   });
+  $$("[data-open-tab]").forEach(b=>b.addEventListener("click",e=>{e.preventDefault();const t=tabs.find(x=>x.dataset.tab===b.dataset.openTab);if(!t)return;select(t);$("#app").scrollIntoView({behavior:reduce?"auto":"smooth",block:"start"});const send=window.va;if(typeof send==="function")send("event",{name:"Try it live",data:{location:b.closest(".hero")?"hero":"window"}})}));
   $$(".segmented").forEach(group=>{
     const img=group.closest(".panel").querySelector(".screen img");
     group.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
@@ -612,7 +625,7 @@ function liveDemo(){
   const scale=()=>{if(frame.clientWidth)box.style.transform="scale("+(frame.clientWidth/1280)+")"};
   if("ResizeObserver"in window)new ResizeObserver(scale).observe(frame);
   const post=v=>{if(ready&&v&&v!=="trailer")iframe.contentWindow.postMessage({type:"vv-demo",view:v},location.origin)};
-  iframe.addEventListener("load",()=>{if(!started)return;setTimeout(()=>{ready=true;frame.classList.add("is-ready");post(current)},700)});
+  iframe.addEventListener("load",()=>{if(!started)return;setTimeout(()=>{ready=true;frame.classList.add("is-ready");post(current);setTimeout(()=>frame.classList.add("touched"),15000)},700)});
   const show=id=>{
     current=id;const on=wide.matches&&id!=="trailer";
     frame.hidden=!on;panels.classList.toggle("has-live",on);
@@ -621,6 +634,7 @@ function liveDemo(){
     scale();
   };
   wide.addEventListener("change",()=>show(current));
+  window.addEventListener("blur",()=>setTimeout(()=>{if(document.activeElement===iframe)frame.classList.add("touched")},0));
   return{show};
 }
 function siteThemes(){

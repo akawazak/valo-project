@@ -318,3 +318,31 @@ main{position:relative}
   .notes ul{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
   .notes-link{align-self:center}
 }
+
+/* Make it obvious the window is usable */
+.try-live,.trailer-link,.try-note,.live-label,.try,.demo-coach{display:none}
+.trailer-link{align-self:center;padding:0 6px;color:var(--muted);font-size:14px;font-weight:600;text-decoration:underline;text-decoration-color:var(--line2);text-underline-offset:5px}
+.trailer-link:hover{color:var(--text);text-decoration-color:var(--coral)}
+.live-label{align-items:center;gap:7px;margin-left:14px;padding:2px 9px;border:1px solid rgba(34,211,163,.35);border-radius:6px;color:#7fe6c6;font-size:11px;font-weight:600}
+.live-label i{position:relative;width:6px;height:6px;border-radius:50%;background:var(--mint)}
+.live-label i:after{content:"";position:absolute;inset:-3px;border:1px solid var(--mint);border-radius:50%;animation:ping 2.4s var(--ease) infinite}
+.try{align-items:flex-start;gap:9px;padding:8px 12px;border:1px solid rgba(34,211,163,.3);border-radius:6px;background:rgba(34,211,163,.07);color:var(--text)!important;font-size:14px!important;line-height:1.45}
+.try svg,.demo-coach svg{flex:none;width:16px;height:16px;margin-top:2px;fill:var(--mint)}
+.try b{color:#7fe6c6;font-weight:600}
+.demo-coach{position:absolute;z-index:4;left:50%;bottom:22px;align-items:center;gap:10px;padding:10px 16px;border:1px solid rgba(34,211,163,.45);border-radius:10px;background:rgba(6,11,15,.94);color:var(--text);font-size:14px;pointer-events:none;transform:translateX(-50%);opacity:0;transition:opacity .4s var(--ease),transform .4s var(--ease)}
+.demo-coach b{color:#7fe6c6;font-weight:600}
+@media (min-width:1121px){
+  .trailer-btn{display:none}
+  .try-live,.trailer-link{display:inline-flex}
+  .try-note{display:inline}
+  .live-label{display:inline-flex}
+  .try{display:flex;grid-column:1/-1}
+  .notes .try{order:-1}
+  .demo-coach{display:flex}
+  .demo-frame.is-ready:not(.touched) .demo-coach{opacity:1;animation:coach 2.6s var(--ease) .4s infinite}
+  .try-live{border-color:rgba(34,211,163,.55);color:#bff3e2}
+  .try-live:hover{background:rgba(34,211,163,.1);border-color:var(--mint)}
+  .try-live svg{color:var(--mint)}
+}
+@keyframes coach{0%,100%{transform:translateX(-50%)}50%{transform:translateX(-50%) translateY(-4px)}}
+@media (prefers-reduced-motion:reduce){.demo-coach{animation:none!important}.live-label i:after{display:none}}
