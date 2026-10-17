@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+PackageIdentifier: akawazak.VantaVault
+PackageVersion: 0.5.31
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+UpgradeBehavior: install
+ReleaseDate: 2026-10-17
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.EdgeWebView2Runtime
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/akawazak/valo-project/releases/download/v0.5.31/VantaVault_0.5.31_x64-setup.exe
+    InstallerSha256: B2CDA2FF0B8690A912AED8BC0FB94FFFE1C8A5E25840850B15F0EA66E89D9ED4
+ManifestType: installer
+ManifestVersion: 1.9.0

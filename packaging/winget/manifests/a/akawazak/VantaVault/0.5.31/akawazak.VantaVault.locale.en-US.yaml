@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+PackageIdentifier: akawazak.VantaVault
+PackageVersion: 0.5.31
+PackageLocale: en-US
+Publisher: akawazak
+PublisherUrl: https://github.com/akawazak
+PublisherSupportUrl: https://github.com/akawazak/valo-project/issues
+PackageName: VantaVault
+PackageUrl: https://vanta-vault-app.vercel.app/
+License: Apache-2.0
+LicenseUrl: https://github.com/akawazak/valo-project/blob/main/LICENSE
+ShortDescription: Free, open-source Windows companion for VALORANT.
+Description: |-
+  VantaVault puts your VALORANT store, loadouts and presets, rank and match history,
+  round-by-round match review, live match, Duos and career insights in one desktop app.
+  Account sessions and match history stay on your PC. It is not endorsed by Riot Games.
+Moniker: vantavault
+Tags:
+  - valorant
+  - game-companion
+  - loadout-manager
+  - store-checker
+  - match-history
+ReleaseNotesUrl: https://github.com/akawazak/valo-project/releases/tag/v0.5.31
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0
