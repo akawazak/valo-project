@@ -371,6 +371,8 @@ type AuthTokenResponse struct {
 	GameName          string `json:"game_name"`
 	TagLine           string `json:"tag_line"`
 	Cookies           string `json:"cookies,omitempty"`
+	// When Riot's login cookie ends, in Unix ms, if Riot sent an expiry with it.
+	SessionExpiresAt int64 `json:"session_expires_at,omitempty"`
 }
 
 type extractedTokens struct {
@@ -721,7 +723,25 @@ func (h *Handler) PostSsidReauth(w http.ResponseWriter, r *http.Request) {
 		GameName:          userInfo.Acct.GameName,
 		TagLine:           userInfo.Acct.TagLine,
 		Cookies:           rotatedCookies,
+		SessionExpiresAt:  ssidExpiry(newCookies, time.Now()),
 	})
+}
+
+// ssidExpiry reads when Riot's ssid login cookie expires from its Max-Age or
+// Expires attribute; 0 when Riot did not send one.
+func ssidExpiry(cookies []*http.Cookie, now time.Time) int64 {
+	for _, cookie := range cookies {
+		if cookie.Name != "ssid" {
+			continue
+		}
+		if cookie.MaxAge > 0 {
+			return now.Add(time.Duration(cookie.MaxAge) * time.Second).UnixMilli()
+		}
+		if !cookie.Expires.IsZero() && cookie.Expires.After(now) {
+			return cookie.Expires.UnixMilli()
+		}
+	}
+	return 0
 }
 
 func mergeCookies(oldCookiesStr string, newCookies []*http.Cookie) string {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accountRequiresManualRepair, isLockfileAccount, PlayerCardAsset, RiotAccount } from "@/lib/types";
+import { accountNeedsSignIn, accountsNeedingAttention, loginEndsInDays } from "@/lib/accountHealth";
 import { buildAuthDebugSnapshot } from "@/lib/authDebug";
 import { saveStoredAccountPlayerCard } from "@/lib/accountStorage";
 import { accountOrderForOpen, reconcileOpenAccountOrder } from "@/lib/accountSelection";
@@ -449,19 +450,25 @@ export default function AccountManagerModal({
                         </p>
                     )}
 
+                    {(() => {
+                        const attention = accountsNeedingAttention(accounts);
+                        if (!attention.total) return null;
+                        const parts = [
+                            attention.signIn.length ? `${attention.signIn.length} ${attention.signIn.length === 1 ? "account needs" : "accounts need"} a new sign-in` : "",
+                            attention.endingSoon.length ? `${attention.endingSoon.length} ${attention.endingSoon.length === 1 ? "login ends" : "logins end"} within 3 days` : "",
+                        ].filter(Boolean);
+                        return <p className="account-switcher-attention" role="status">
+                            {parts.join(" · ")}. Use Sign in or Renew on {attention.total === 1 ? "it" : "each one"} below; Riot ends logins that go a few days without renewing.
+                        </p>;
+                    })()}
+
                     <div className="account-switcher-list" ref={accountListRef}>
                         {visibleAccounts.length > 0 ? visibleAccounts.map((account) => {
                             const isActive = account.puuid === activeAccount?.puuid;
                             const isLocal = isLockfileAccount(account);
                             const isExpired = isAccountTokenExpired(account);
-                            const needsRepair = accountRequiresManualRepair(account) || [
-                                "cookies_expired",
-                                "account_mismatch",
-                            ].includes(account.lastRefreshErrorCode || "");
-                            const needsSignIn = needsRepair || [
-                                "missing_cookies",
-                                "login_required",
-                            ].includes(account.lastRefreshErrorCode || "");
+                            const needsSignIn = accountNeedsSignIn(account);
+                            const endsInDays = loginEndsInDays(account);
                             const isRefreshing = !!refreshingPuuids[account.puuid];
                             const renewalFailed = Boolean(account.lastRefreshError) || refreshResults[account.puuid] === "failed";
                             const needsRenewalAction = isExpired || renewalFailed || isRefreshing;
@@ -475,8 +482,10 @@ export default function AccountManagerModal({
                                             ? "Renewal failed"
                                         : isExpired
                                             ? "Session expired"
+                                        : endsInDays !== null
+                                            ? endsInDays === 0 ? "Riot login ends today" : `Riot login ends in ${endsInDays} ${endsInDays === 1 ? "day" : "days"}`
                                             : "Ready";
-                            const stateTone = isRefreshing ? "pending" : needsSignIn || renewalFailed ? "repair" : isExpired ? "expired" : "ready";
+                            const stateTone = isRefreshing ? "pending" : needsSignIn || renewalFailed ? "repair" : isExpired || endsInDays !== null ? "expired" : "ready";
                             const cachedCardId = (account.playerCardId || accountCardIds[account.puuid.toLowerCase()])?.toLowerCase() || "";
                             const cachedCard = cachedCardId ? playerCardById.get(cachedCardId) : undefined;
                             const accountCardIcon = isActive && activePlayerCardIcon

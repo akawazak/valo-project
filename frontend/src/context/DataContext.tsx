@@ -1003,6 +1003,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                             lastCookieRotatedAt: hasSsidCookie(data.cookies)
                                 ? Date.now()
                                 : acc.lastCookieRotatedAt,
+                            // A rotated cookie without an expiry makes the old date meaningless.
+                            sessionExpiresAt: data.session_expires_at || (hasSsidCookie(data.cookies) ? undefined : acc.sessionExpiresAt),
                             lastRefreshAttemptAt: Date.now(),
                             lastRefreshError: undefined,
                             lastRefreshErrorCode: undefined,

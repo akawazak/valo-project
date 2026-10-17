@@ -6,6 +6,7 @@ import { RiotAccount } from "@/lib/types";
 import { useData } from "@/context/DataContext";
 import { getProfileOverview } from "@/services/api";
 import type { AppTab } from "@/lib/appTabs";
+import { accountsNeedingAttention } from "@/lib/accountHealth";
 
 interface AppTopbarProps {
     activeTab: AppTab;
@@ -43,7 +44,8 @@ export default function AppTopbar({
     notificationControl,
     updateControl,
 }: AppTopbarProps) {
-    const { playerCards } = useData();
+    const { playerCards, accounts } = useData();
+    const attention = useMemo(() => accountsNeedingAttention(accounts), [accounts]);
     const [profileCardId, setProfileCardId] = useState(playerCardId || "");
     const navRef = useRef<HTMLElement>(null);
     const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
@@ -114,7 +116,8 @@ export default function AppTopbar({
                     {updateControl}
                     {socialControl && <div className="topbar-social-slot" data-slot="social-status">{socialControl}</div>}
 
-                    <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title="Manage Accounts">
+                    <button type="button" className={`profile-pill-trigger ${activeAccount ? "has-account" : ""}`} onClick={onOpenAccounts} title={attention.total ? `Manage Accounts · ${attention.signIn.length ? `${attention.signIn.length} need a new sign-in` : ""}${attention.signIn.length && attention.endingSoon.length ? ", " : ""}${attention.endingSoon.length ? `${attention.endingSoon.length} ending soon` : ""}` : "Manage Accounts"}>
+                        {attention.total > 0 && <span className="profile-pill-attention" data-tone={attention.signIn.length ? "sign-in" : "soon"} aria-label={`${attention.total} saved ${attention.total === 1 ? "account needs" : "accounts need"} attention`}>{attention.total}</span>}
                         <div className="profile-pill-avatar">
                             {playerCard?.displayIcon ? (
                                 <img src={playerCard.displayIcon} alt="" />

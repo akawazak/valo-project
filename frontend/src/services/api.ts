@@ -554,6 +554,8 @@ export interface ReauthTokenResponse {
     game_name: string;
     tag_line: string;
     cookies?: string;
+    /** When Riot's login cookie ends (Unix ms), if Riot sent one. */
+    session_expires_at?: number;
 }
 
 export async function submitTokenUrl(url: string): Promise<AuthTokenResponse> {

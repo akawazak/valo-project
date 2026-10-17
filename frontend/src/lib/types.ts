@@ -27,6 +27,8 @@ export interface RiotAccount {
       lastRefreshAttemptAt?: number;
     lastRefreshError?: string;
     lastRefreshErrorCode?: string;
+    /** When Riot says this login ends, from the last renewal (Unix ms). Missing when Riot did not say. */
+    sessionExpiresAt?: number;
 }
 
 export function isLockfileAccount(account: RiotAccount) {
