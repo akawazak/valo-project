@@ -301,7 +301,7 @@ export default function SettingsModal({
                             <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Launch at Login</div>
-                                    <div className="settings-item-desc">Start VantaVault automatically when you sign in to Windows.</div>
+                                    <div className="settings-item-desc">Start VantaVault when you sign in to Windows. This also keeps your saved accounts signed in, since Riot ends logins that go a few days without renewing.</div>
                                 </div>
                                 <div className="settings-item-control">
                                     <label className="switch-control">

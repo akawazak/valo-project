@@ -42,10 +42,17 @@ type LoginRedirectPayload = { sessionId: string; url: string };
 type LoginCookiesPayload = { sessionId: string; cookies: string };
 type LoginSessionPayload = { sessionId: string };
 
-const COOKIE_MAINTENANCE_AGE_MS = 24 * 60 * 60 * 1000;
+// Riot drops a saved login that goes unrenewed for a few days (seen: dead after
+// 4-5 idle days), so keep every saved account fresh while the app is running.
+const COOKIE_MAINTENANCE_AGE_MS = 6 * 60 * 60 * 1000;
 const COOKIE_MAINTENANCE_POLL_MS = 60 * 60 * 1000;
 const COOKIE_MAINTENANCE_START_DELAY_MS = 30_000;
 const COOKIE_MAINTENANCE_SPACING_MS = 3_000;
+// Riot cookie reauth fails now and then even for a healthy session (7-9% in
+// community long-run tests), and a retry usually works. Retry quickly; only
+// Riot's own answers below end the attempt early.
+const REAUTH_RETRY_DELAYS_MS = [500, 1_500] as const;
+const FINAL_REAUTH_CODES = new Set(["login_required", "missing_cookies", "cookies_expired", "account_mismatch"]);
 const INVENTORY_CACHE_VERSION = 1;
 const USER_LOAD_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000] as const;
 const INTERACTIVE_RENEWAL_TIMEOUT_MS = 5 * 60_000;
@@ -928,14 +935,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     body: JSON.stringify({ cookies: cookies || "" }),
                     signal: reauthController.signal,
                 });
-                let res = await requestReauth(reauthCookies);
-                let responseBody = res.ok ? "" : await res.text().catch(() => "");
-                let responseCode = "";
-                try {
-                    responseCode = responseBody ? JSON.parse(responseBody).error || "" : "";
-                } catch {
-                    responseCode = "";
-                }
+                const requestReauthWithRetry = async (cookies: string | undefined) => {
+                    for (let attempt = 1; ; attempt += 1) {
+                        try {
+                            const response = await requestReauth(cookies);
+                            if (response.ok) return { res: response, responseBody: "", responseCode: "" };
+                            const body = await response.text().catch(() => "");
+                            let code = "";
+                            try {
+                                code = body ? JSON.parse(body).error || "" : "";
+                            } catch {
+                                code = "";
+                            }
+                            if (FINAL_REAUTH_CODES.has(code) || attempt > REAUTH_RETRY_DELAYS_MS.length) {
+                                return { res: response, responseBody: body, responseCode: code };
+                            }
+                        } catch (error) {
+                            if (cancelled || reauthController.signal.aborted || attempt > REAUTH_RETRY_DELAYS_MS.length) throw error;
+                        }
+                        pushAuthDebugEvent("refresh.ssid_reauth_retry", acc, { outcome: "info", attempt: attempt + 1 });
+                        await new Promise<void>((resolve) => window.setTimeout(resolve, REAUTH_RETRY_DELAYS_MS[attempt - 1]));
+                        if (cancelled) throw new Error("Account renewal was cancelled.");
+                    }
+                };
+                let { res, responseBody, responseCode } = await requestReauthWithRetry(reauthCookies);
 
                 // Pre-Credential-Manager installs kept the reusable cookie only in
                 // the claimed per-account WebView2 profile. Use that profile only
@@ -950,8 +973,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                         if (hasSsidCookie(sessionCookies)) {
                             reauthCookies = sessionCookies;
                             pushAuthDebugEvent("refresh.session_cookie_read", acc, { outcome: "success" });
-                            res = await requestReauth(reauthCookies);
-                            responseBody = res.ok ? "" : await res.text().catch(() => "");
+                            ({ res, responseBody, responseCode } = await requestReauthWithRetry(reauthCookies));
                         }
                     } catch {
                         pushAuthDebugEvent("refresh.session_cookie_read", acc, { outcome: "failed", code: "ssid_missing" });

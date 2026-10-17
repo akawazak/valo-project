@@ -236,6 +236,31 @@ describe('interactive account renewal', () => {
         expect(mocks.activate).not.toHaveBeenCalled();
     });
 
+    it('retries a temporary reauth failure quickly before giving up', async () => {
+        mocks.appFetch.mockResolvedValueOnce(new Response('{"errorCode":"VV-BACKEND"}', { status: 500 }));
+        mocks.appFetch.mockRejectedValueOnce(new TypeError('network down'));
+        mocks.appFetch.mockResolvedValueOnce(new Response(JSON.stringify(tokenResult('account-a'))));
+        const renewing = captureProvider().refreshAccountToken({ ...renewalAccount }, false, false);
+        await vi.advanceTimersByTimeAsync(2_500);
+        await expect(renewing).resolves.toBe(true);
+        expect(mocks.appFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops after three temporary failures and keeps the saved session', async () => {
+        mocks.appFetch.mockImplementation(async () => new Response('{"errorCode":"VV-BACKEND"}', { status: 500 }));
+        const renewing = captureProvider().refreshAccountToken({ ...renewalAccount }, false, false);
+        await vi.advanceTimersByTimeAsync(2_500);
+        await expect(renewing).resolves.toBe(false);
+        expect(mocks.appFetch).toHaveBeenCalledTimes(3);
+        expect(mocks.accounts[0]).toMatchObject({ ssid: renewalAccount.ssid, lastRefreshErrorCode: 'temporary' });
+    });
+
+    it('does not retry when Riot asks for a new sign-in', async () => {
+        mocks.appFetch.mockResolvedValueOnce(new Response('{"error":"login_required"}', { status: 401 }));
+        await expect(captureProvider().refreshAccountToken({ ...renewalAccount }, false, false)).resolves.toBe(false);
+        expect(mocks.appFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps MFA open beyond 30 seconds after failed silent auth and times out at five minutes', async () => {
         const data = captureProvider();
         const startedAt = Date.now();
