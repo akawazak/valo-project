@@ -115,8 +115,9 @@ await esbuild.build({
       if (args.path === '@/services/api') return { path: path.join(here, 'api-stub.ts') };
       if (args.path === '@/context/DataContext') return { path: path.join(here, 'context-stub.ts') };
       const rel = args.path.slice(2);
-      const ext = path.extname(rel) ? '' : ((rel.includes('features/') || rel.includes('components/')) && !rel.endsWith('/reviewStats') && !rel.endsWith('/accoladeCatalog') ? '.tsx' : '.ts');
-      return { path: path.join(src, rel) + ext };
+      const base = path.join(src, rel);
+      const file = ['', '.tsx', '.ts', '/index.tsx', '/index.ts'].map(ext => base + ext).find(p => path.extname(p) && existsSync(p));
+      return { path: file || base + '.ts' };
     });
     build.onResolve({ filter: /^next\/image$/ }, () => ({ path: path.join(here, 'image-stub.tsx') }));
     build.onResolve({ filter: /^next\/navigation$/ }, () => ({ path: path.join(here, 'navigation-stub.ts') }));
@@ -131,5 +132,5 @@ await fs.writeFile(path.join(out, 'index.html'), `<!doctype html>
 `);
 // Static app assets the components reference by absolute path.
 for (const dir of ['themes', 'accolades']) await fs.cp(path.join(front, 'public', dir), path.join(site, dir), { recursive: true });
-await fs.copyFile(path.join(front, 'public', 'brand-mark.svg'), path.join(site, 'brand-mark.svg'));
+for (const f of ['brand-mark.svg', 'brand-mark.png']) await fs.copyFile(path.join(front, 'public', f), path.join(site, f));
 console.log(`Demo built into website/demo (${mediaCount} art files).`);

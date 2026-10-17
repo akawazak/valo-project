@@ -20,6 +20,13 @@ type Tab = 'store' | 'profile' | 'skins';
 type Overlay = null | 'live' | 'review' | 'duo' | 'compare' | 'insights';
 const no = () => {};
 try { localStorage.setItem('riot_puuid', 'demo-vanta'); } catch { /* storage unavailable */ }
+// Share images: map public art URLs to the demo's bundled copies (same naming as build.mjs).
+(window as any).__vvDemoMedia = async (url: string) => {
+  if (!/^https:\/\/media\.valorant-api\.com\//.test(url)) return null;
+  const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url)))].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 20);
+  for (const ext of ['.webp', '.png', '.jpg']) { const path = `/demo/media/${hash}${ext}`; try { if ((await fetch(path, { method: 'HEAD' })).ok) return path; } catch { /* try the next */ } }
+  return null;
+};
 const account = { puuid: 'demo-vanta', gameName: 'Vanta', tagLine: 'DEMO', region: 'eu', accessToken: '', entitlementsToken: '' };
 
 // Website tab -> demo state.

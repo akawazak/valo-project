@@ -7919,3 +7919,15 @@ button.mapEvent .mapPoint { left: 50%; top: 50%; transform: translate(-50%, -50%
     font-size: 0.62rem;
     pointer-events: none;
 }
+
+/* Share button beside the match popup's close button */
+.matchMetaShare {
+    display: inline-flex;
+    margin-left: 4px;
+}
+.matchMetaShare button {
+    height: 26px;
+    padding: 0 10px;
+    background: rgba(4, 10, 16, 0.68);
+    border-color: rgba(255, 255, 255, 0.18);
+}

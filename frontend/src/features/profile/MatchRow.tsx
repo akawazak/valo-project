@@ -12,6 +12,8 @@ import { type AgentMeta, type MapMeta, tierLabel, rankIconUrl, fmtDate, fmtLengt
 import { RoundReview } from "./RoundReview";
 import { MatchMapAnalytics } from "./MatchMap";
 import { RoundHistory, Scoreboard } from "./MatchScoreboard";
+import ShareButton from "@/components/ShareButton";
+import { drawMatchShare } from "./shareCards";
 
 export function MatchRow({
     match,
@@ -412,6 +414,23 @@ export function MatchRow({
                                     {unusualCompletion ? <span className={s.matchMetaWarn}>{completionState}</span> : null}
                                     {!unusualCompletion && detail?.matchInfo.earlyCompletion ? <span className={s.matchMetaWarn} title="Riot marked this match as ended early">Ended early</span> : null}
                                     {detailedLocalPlayer?.partyRRPenalty ? <span className={s.matchMetaWarn} title="Riot applied a party-size RR penalty to your party in this match">Party RR penalty {detailedLocalPlayer.partyRRPenalty}</span> : null}
+                                    <span className={s.matchMetaShare}>
+                                        <ShareButton filename={`vantavault-${mapName.toLowerCase()}-${ownRounds}-${enemyRounds}.png`} build={() => drawMatchShare({
+                                            mapName, mapArt: mapMeta?.splash, result: !decided ? "neutral" : (standing ? ffaWin : match.win) ? "win" : "loss",
+                                            resultLabel: standing ? (standing === 1 ? "1st place" : `${standing} of ${standingOf}`) : !roundBased ? "Completed" : match.win ? "Victory" : "Defeat",
+                                            ownRounds: roundBased ? ownRounds : undefined, enemyRounds: roundBased ? enemyRounds : undefined,
+                                            queue: queueName, date: fmtDate(match.gameStartMillis), length: fmtLength(match.gameLengthMillis),
+                                            agentName, agentIcon: agentMeta?.icon, rankIcon: match.isRanked && matchTier ? matchRRIcon || undefined : undefined,
+                                            rankLabel: match.isRanked && matchTier ? matchRRLabel : undefined, rr: match.isRanked ? rrEarned : undefined, mvp: match.localPlayer.teamMvp,
+                                            player: match.localPlayer.gameName ? `${match.localPlayer.gameName}#${match.localPlayer.tagLine}` : "You",
+                                            stats: [
+                                                { label: "K / D / A", value: `${match.localPlayer.kills} / ${match.localPlayer.deaths} / ${match.localPlayer.assists}` },
+                                                ...(perRoundStats ? [{ label: "ACS", value: String(Math.round(match.localPlayer.acs)) }, { label: "ADR", value: String(Math.round(match.localPlayer.adr)) }] : []),
+                                                { label: "HS %", value: `${Math.round(match.localPlayer.hsPct)}%` },
+                                                { label: "K/D", value: match.localPlayer.kd.toFixed(2) },
+                                            ],
+                                        })} />
+                                    </span>
                                 </div>
                             </div>
                             {roundBased ? (
