@@ -127,13 +127,13 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.30
+## What's new in 0.5.31
 
-- Party controls in the friends panel: choose the queue, ready up, start or cancel the queue, open or close the party and invite friends from a list of who can join right now. Each action is a single click that VantaVault re-checks against the current party first.
-- Account standing next to the party: good standing, active penalties or a queue restriction with the time left.
-- New profile tools: Duos, Accolades, a rebuilt Insights, face-to-face Compare and badges earned from your stats.
-- Undo the last loadout change after applying a preset or skin, and a short session recap when VALORANT closes.
-- Reopening after a long break keeps the selected account and reloads its loadout after renewing the session.
+- Round review with a replay of every round: everyone's position at each kill, the shot line, the kill feed and the turning points.
+- The match map shows the 10 m trade range on your deaths, your nearest teammate and whether you were traded, plus takeaways you can select to see on the map.
+- Zoom and drag the match map, and filter fights by attack or defense.
+- Saved accounts renew every 6 hours while VantaVault runs, and brief Riot hiccups are retried instead of signing you out.
+- Updates download in the background and install on restart, with a top-bar button that shows what's new.
 
 ## Development
 
