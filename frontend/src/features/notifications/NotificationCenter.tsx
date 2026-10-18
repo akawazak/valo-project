@@ -15,15 +15,22 @@ const KIND_LABEL: Record<AppNotificationKind, string> = {
     error: "Problem",
 };
 
-// Outline glyphs, one per kind; the chat bubble matches the friends list.
+// Drawn for VantaVault, one per kind: the store's wishlist heart, the friends list's chat bubble,
+// a crosshair for matches, rank-up chevrons, an update arrow and a plain "!" for problems.
 const KIND_ICON: Record<AppNotificationKind, string> = {
-    wishlist: "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z",
+    wishlist: "M12 20.5 4.2 13A5.2 5.2 0 0 1 11.6 5.7l.4.4.4-.4A5.2 5.2 0 0 1 19.8 13L12 20.5Z",
     message: "M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.4-4.6A7.5 7.5 0 1 1 20 11.5z",
-    match: "M5 4l8 8M13 12l-2 6 9-9-6 2M4 20l5-5",
-    progression: "M4 17l5-5 4 4 7-8M15 8h5v5",
-    system: "M12 3v12M7 10l5 5 5-5M5 20h14",
-    error: "M12 4l9 16H3zM12 10v4M12 17h.01",
+    match: "M12 3.5v5M12 15.5v5M3.5 12h5M15.5 12h5M12 12h.01",
+    progression: "M6.5 12.5 12 7l5.5 5.5M6.5 18 12 12.5l5.5 5.5",
+    system: "M12 19.5V5M6 11l6-6 6 6",
+    error: "M12 5v9M12 19h.01",
 };
+
+// Real art where there is some: the skin itself, or the VantaVault mark for the app's own news and problems.
+function artFor(item: AppNotification) {
+    if (item.image) return item.image;
+    return item.kind === "system" || item.kind === "error" ? "/brand-mark.png" : "";
+}
 
 function startOfToday() {
     const now = new Date();
@@ -117,9 +124,12 @@ export default function NotificationCenter({
                                 if (item.action) onNavigate(item.action);
                                 setOpen(false);
                             }}>
-                                <span className={styles.media} data-art={Boolean(item.image)}>
-                                    {item.image
-                                        ? <img src={item.image} alt="" loading="lazy" />
+                                <span className={styles.media} data-art={Boolean(artFor(item))}>
+                                    {artFor(item)
+                                        ? <>
+                                            <img src={artFor(item)} alt="" loading="lazy" data-brand={!item.image} />
+                                            <i className={styles.badge} aria-hidden="true"><svg viewBox="0 0 24 24"><path d={KIND_ICON[item.kind]} /></svg></i>
+                                        </>
                                         : <svg viewBox="0 0 24 24" aria-hidden="true"><path d={KIND_ICON[item.kind]} /></svg>}
                                 </span>
                                 <span className={styles.text}>
