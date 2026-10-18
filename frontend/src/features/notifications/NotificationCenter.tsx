@@ -26,7 +26,7 @@ const KIND_ICON: Record<AppNotificationKind, string> = {
     error: "M12 5v9M12 19h.01",
 };
 
-// Real art where there is some: the skin itself, or the VantaVault mark for the app's own news and problems.
+// Real art where there is some: the skin itself, the sender's player card, or the VantaVault mark for the app's own news and problems.
 function artFor(item: AppNotification) {
     if (item.image) return item.image;
     return item.kind === "system" || item.kind === "error" ? "/brand-mark.png" : "";
@@ -127,7 +127,7 @@ export default function NotificationCenter({
                                 <span className={styles.media} data-art={Boolean(artFor(item))}>
                                     {artFor(item)
                                         ? <>
-                                            <img src={artFor(item)} alt="" loading="lazy" data-brand={!item.image} />
+                                            <img src={artFor(item)} alt="" loading="lazy" data-brand={!item.image} onError={(event) => { event.currentTarget.style.visibility = "hidden"; }} />
                                             <i className={styles.badge} aria-hidden="true"><svg viewBox="0 0 24 24"><path d={KIND_ICON[item.kind]} /></svg></i>
                                         </>
                                         : <svg viewBox="0 0 24 24" aria-hidden="true"><path d={KIND_ICON[item.kind]} /></svg>}

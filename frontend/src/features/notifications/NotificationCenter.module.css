@@ -27,13 +27,19 @@
 .item[data-kind="error"] { --kind:#f5a524; }
 .item[data-kind="system"],.item[data-kind="progression"] { --kind:#22d3a3; }
 .item:hover,.item:focus-within { background:#0c1a23; }
-.open { display:grid; grid-template-columns:52px 1fr; gap:12px; align-items:start; min-width:0; padding:10px 4px 10px 10px; border:0; background:none; text-align:left; cursor:pointer; border-radius:8px; }
+.open { display:grid; grid-template-columns:76px 1fr; gap:12px; align-items:start; min-width:0; padding:10px 4px 10px 10px; border:0; background:none; text-align:left; cursor:pointer; border-radius:8px; }
 .open:focus-visible,.dismiss:focus-visible { outline:2px solid var(--accent-primary); outline-offset:-2px; }
-.media { position:relative; width:52px; height:44px; display:grid; place-items:center; border-radius:8px; background:color-mix(in srgb,var(--kind) 12%,#0b1720); border:1px solid color-mix(in srgb,var(--kind) 30%,transparent); color:var(--kind); }
+.media { position:relative; width:76px; height:52px; display:grid; place-items:center; border-radius:8px; background:color-mix(in srgb,var(--kind) 12%,#0b1720); border:1px solid color-mix(in srgb,var(--kind) 30%,transparent); color:var(--kind); }
 .media>svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .media[data-art="true"] { background:radial-gradient(circle at 50% 50%,color-mix(in srgb,var(--kind) 20%,transparent),transparent 72%),#0a151d; }
-.media img { width:100%; height:100%; padding:3px 2px; object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,.6)); }
-.media img[data-brand="true"] { padding:9px; }
+.media img { width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,.6)); }
+.media img[data-brand="true"] { padding:10px; }
+/* The skin itself, tilted like the store shows it and allowed past the tile edge so it reads at this size. */
+.item[data-kind="wishlist"] .media[data-art="true"] { background:radial-gradient(ellipse 70% 80% at 50% 55%,color-mix(in srgb,var(--kind) 38%,transparent),transparent 75%),#15222c; border-color:color-mix(in srgb,var(--kind) 45%,transparent); }
+.item[data-kind="wishlist"] .media img:not([data-brand="true"]) { width:128%; max-width:none; transform:rotate(-12deg); filter:brightness(1.12) drop-shadow(0 3px 5px rgba(0,0,0,.75)); }
+/* The sender's player card fills the tile like a photo. */
+.item[data-kind="message"] .media[data-art="true"] { overflow:visible; }
+.item[data-kind="message"] .media img:not([data-brand="true"]) { border-radius:7px; object-fit:cover; object-position:50% 30%; filter:none; }
 /* The kind, as a small coin on the art's corner. */
 .badge { position:absolute; right:-5px; bottom:-5px; width:18px; height:18px; display:grid; place-items:center; border-radius:50%; background:var(--kind); box-shadow:0 0 0 2px #061019; transition:box-shadow .12s; }
 .item:hover .badge,.item:focus-within .badge { box-shadow:0 0 0 2px #0c1a23; }
