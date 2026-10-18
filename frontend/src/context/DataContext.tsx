@@ -6,6 +6,7 @@ import { activateAccount as activateRemoteAccount, appFetch, clearActiveAccount,
 import { pushAuthDebugEvent } from '@/lib/authDebug';
 import { deleteStoredAccountSecrets, getStoredAccounts, hydrateStoredAccounts, removeStoredAccount, saveStoredAccounts } from '@/lib/accountStorage';
 import { isAndroidRuntime } from '@/lib/platform';
+import { RENEWAL_AGE_MS } from '@/lib/accountHealth';
 import { AppRequestError } from '@/lib/errors';
 import { DISMISSED_LOCAL_ACCOUNT_KEY, selectPersistedAccount, selectedAccountCanUseLocalClient, shouldOfferLocalAccount } from '@/lib/accountSelection';
 
@@ -44,7 +45,7 @@ type LoginSessionPayload = { sessionId: string };
 
 // Riot drops a saved login that goes unrenewed for a few days (seen: dead after
 // 4-5 idle days), so keep every saved account fresh while the app is running.
-const COOKIE_MAINTENANCE_AGE_MS = 6 * 60 * 60 * 1000;
+const COOKIE_MAINTENANCE_AGE_MS = RENEWAL_AGE_MS;
 const COOKIE_MAINTENANCE_POLL_MS = 60 * 60 * 1000;
 const COOKIE_MAINTENANCE_START_DELAY_MS = 30_000;
 const COOKIE_MAINTENANCE_SPACING_MS = 3_000;

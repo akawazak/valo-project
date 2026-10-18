@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RiotAccount } from './types';
-import { accountNeedsSignIn, accountsNeedingAttention, loginEndsInDays } from './accountHealth';
+import { accountNeedsRenewal, accountNeedsSignIn, accountsNeedingAttention, loginEndsInDays } from './accountHealth';
 
 const DAY = 24 * 60 * 60 * 1000;
 const acc = (over: Partial<RiotAccount> = {}): RiotAccount => ({
@@ -32,5 +32,21 @@ describe('account health', () => {
         expect(result).toMatchObject({ total: 2 });
         expect(result.signIn).toHaveLength(1);
         expect(result.endingSoon).toHaveLength(1);
+    });
+});
+
+describe("accountNeedsRenewal", () => {
+    const now = Date.UTC(2026, 9, 18, 12);
+    const base = { puuid: "p", gameName: "g", tagLine: "t", region: "eu", accessToken: "", entitlementsToken: "", sessionId: "s", expiresAt: now - 1 } as RiotAccount;
+    it("skips accounts renewed in the last 6 hours, even with an expired access token", () => {
+        expect(accountNeedsRenewal({ ...base, lastRenewedAt: now - 60 * 60 * 1000 }, now)).toBe(false);
+    });
+    it("renews accounts that are 6 hours old, failed last time, or end soon", () => {
+        expect(accountNeedsRenewal({ ...base, lastRenewedAt: now - 7 * 60 * 60 * 1000 }, now)).toBe(true);
+        expect(accountNeedsRenewal({ ...base, lastRenewedAt: now, lastRefreshError: "Network" }, now)).toBe(true);
+        expect(accountNeedsRenewal({ ...base, lastRenewedAt: now, sessionExpiresAt: now + 24 * 60 * 60 * 1000 }, now)).toBe(true);
+    });
+    it("leaves signed-out accounts to Sign in", () => {
+        expect(accountNeedsRenewal({ ...base, lastRefreshErrorCode: "login_required", lastRefreshError: "x" }, now)).toBe(false);
     });
 });
