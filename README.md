@@ -22,6 +22,8 @@
     &nbsp;&middot;&nbsp;
     <a href="https://discord.gg/gxGQwWyECE">Discord</a>
   </p>
+  <p><a href="https://vanta-vault-app.vercel.app/#loadouts"><strong>▶ Try it in your browser</strong></a>: the real app with demo data, no download needed.</p>
+  <a href="https://vanta-vault-app.vercel.app/#loadouts"><img src="docs/assets/readme/live-demo.gif" alt="The VantaVault live demo: store, skin details, match history, a match popup with round review, Duos and loadouts, using a demo account" width="800" /></a>
 </div>
 
 > [!IMPORTANT]
@@ -127,13 +129,11 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.31
+## What's new in 0.5.32
 
-- Round review with a replay of every round: everyone's position at each kill, the shot line, the kill feed and the turning points.
-- The match map shows the 10 m trade range on your deaths, your nearest teammate and whether you were traded, plus takeaways you can select to see on the map.
-- Zoom and drag the match map, and filter fights by attack or defense.
-- Saved accounts renew every 6 hours while VantaVault runs, and brief Riot hiccups are retried instead of signing you out.
-- Updates download in the background and install on restart, with a top-bar button that shows what's new.
+- The account button shows a badge when a saved account needs a new sign-in or its Riot login ends within 3 days, and the account list says which.
+- Map tab Takeaways now point out where your kills come from, and Repeat positions are folded into them.
+- Updated to the latest Tauri, Next.js and React.
 
 ## Development
 

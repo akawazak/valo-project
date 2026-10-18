@@ -30,6 +30,8 @@ vi.mock('@/lib/contentTiers', () => import('../../lib/contentTiers'));
 vi.mock('@/lib/gameMeta', () => ({ weaponCategoryKey: () => '' }));
 vi.mock('@/lib/spraySlots', () => import('../../lib/spraySlots'));
 vi.mock('@/lib/presetShare', () => ({ exportPreset: vi.fn(), importPreset: vi.fn() }));
+vi.mock('@/components/ShareButton', () => ({ default: () => null }));
+vi.mock('@/features/arsenal/loadoutShare', () => ({ drawLoadoutShare: vi.fn(), loadoutShareSlots: () => [] }));
 vi.mock('@/services/api', () => ({
     applyLoadout: vi.fn(), captureAccountRequest: vi.fn(), getPlayerLoadoutData: vi.fn(), getPresets: vi.fn(), savePresets: vi.fn(),
 }));

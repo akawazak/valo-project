@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { accountRequiresManualRepair, isLockfileAccount, PlayerCardAsset, RiotAccount } from "@/lib/types";
+import { accountNeedsRenewal, accountNeedsSignIn, accountsNeedingAttention, loginEndsInDays } from "@/lib/accountHealth";
 import { buildAuthDebugSnapshot } from "@/lib/authDebug";
 import { saveStoredAccountPlayerCard } from "@/lib/accountStorage";
 import { accountOrderForOpen, reconcileOpenAccountOrder } from "@/lib/accountSelection";
@@ -263,6 +264,8 @@ export default function AccountManagerModal({
     const renewableAccounts = accounts.filter((account) => !isLockfileAccount(account));
     const attentionAccounts = new Set(renewableAccounts.filter((account) => isAccountTokenExpired(account) || Boolean(account.lastRefreshError) || accountRequiresManualRepair(account)).map((account) => account.puuid));
     const attentionCount = attentionAccounts.size;
+    // Only accounts that are due; healthy ones are left alone.
+    const dueAccounts = renewableAccounts.filter((account) => accountNeedsRenewal(account));
     const renewalBusy = isBulkRefreshing || Object.values(refreshingPuuids).some(Boolean);
 
     const refreshWithTimeout = async (acc: RiotAccount, allowPopup: boolean) => {
@@ -308,21 +311,21 @@ export default function AccountManagerModal({
 
     const handleRefreshAllAccounts = async (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (renewalBusy || renewableAccounts.length === 0) return;
+        if (renewalBusy || dueAccounts.length === 0) return;
         const run = ++bulkRunRef.current;
         bulkCancelRef.current = false;
         setBulkSummary("");
         setIsBulkRefreshing(true);
-        setBulkProgressTotal(renewableAccounts.length);
+        setBulkProgressTotal(dueAccounts.length);
         setBulkProgressCurrent(0);
         setBulkCurrentAccount("");
         let renewed = 0;
         let failed = 0;
 
-        for (let i = 0; i < renewableAccounts.length; i++) {
+        for (let i = 0; i < dueAccounts.length; i++) {
             if (run !== bulkRunRef.current) return;
             if (bulkCancelRef.current) break;
-            const acc = renewableAccounts[i];
+            const acc = dueAccounts[i];
             const attemptStartedAt = Date.now();
             setBulkProgressCurrent(i + 1);
             setBulkCurrentAccount(`${acc.gameName}#${acc.tagLine}`);
@@ -341,7 +344,7 @@ export default function AccountManagerModal({
             } finally {
                 if (run === bulkRunRef.current) setRefreshingPuuids((prev) => ({ ...prev, [acc.puuid]: false }));
             }
-            if (!bulkCancelRef.current && i < renewableAccounts.length - 1) {
+            if (!bulkCancelRef.current && i < dueAccounts.length - 1) {
                 const remainingInterval = bulkAttemptIntervalMs - (Date.now() - attemptStartedAt);
                 if (remainingInterval > 0) {
                     await new Promise((resolve) => window.setTimeout(resolve, remainingInterval));
@@ -352,10 +355,10 @@ export default function AccountManagerModal({
         setIsBulkRefreshing(false);
         setBulkCurrentAccount("");
         const checked = renewed + failed;
-        const remaining = Math.max(0, renewableAccounts.length - checked);
+        const remaining = Math.max(0, dueAccounts.length - checked);
         setBulkSummary(
             bulkCancelRef.current
-                ? `Stopped at ${checked}/${renewableAccounts.length} · ${renewed} renewed · ${failed} not renewed · ${remaining} remaining`
+                ? `Stopped at ${checked}/${dueAccounts.length} · ${renewed} renewed · ${failed} not renewed · ${remaining} remaining`
                 : `${renewed} renewed · ${failed} need attention${failed ? " — use Sign in or Retry on those accounts" : ""}`,
         );
     };
@@ -449,19 +452,25 @@ export default function AccountManagerModal({
                         </p>
                     )}
 
+                    {(() => {
+                        const attention = accountsNeedingAttention(accounts);
+                        if (!attention.total) return null;
+                        const parts = [
+                            attention.signIn.length ? `${attention.signIn.length} ${attention.signIn.length === 1 ? "account needs" : "accounts need"} a new sign-in` : "",
+                            attention.endingSoon.length ? `${attention.endingSoon.length} ${attention.endingSoon.length === 1 ? "login ends" : "logins end"} within 3 days` : "",
+                        ].filter(Boolean);
+                        return <p className="account-switcher-attention" role="status">
+                            {parts.join(" · ")}. Use Sign in or Renew on {attention.total === 1 ? "it" : "each one"} below; Riot ends logins that go a few days without renewing.
+                        </p>;
+                    })()}
+
                     <div className="account-switcher-list" ref={accountListRef}>
                         {visibleAccounts.length > 0 ? visibleAccounts.map((account) => {
                             const isActive = account.puuid === activeAccount?.puuid;
                             const isLocal = isLockfileAccount(account);
                             const isExpired = isAccountTokenExpired(account);
-                            const needsRepair = accountRequiresManualRepair(account) || [
-                                "cookies_expired",
-                                "account_mismatch",
-                            ].includes(account.lastRefreshErrorCode || "");
-                            const needsSignIn = needsRepair || [
-                                "missing_cookies",
-                                "login_required",
-                            ].includes(account.lastRefreshErrorCode || "");
+                            const needsSignIn = accountNeedsSignIn(account);
+                            const endsInDays = loginEndsInDays(account);
                             const isRefreshing = !!refreshingPuuids[account.puuid];
                             const renewalFailed = Boolean(account.lastRefreshError) || refreshResults[account.puuid] === "failed";
                             const needsRenewalAction = isExpired || renewalFailed || isRefreshing;
@@ -475,8 +484,10 @@ export default function AccountManagerModal({
                                             ? "Renewal failed"
                                         : isExpired
                                             ? "Session expired"
+                                        : endsInDays !== null
+                                            ? endsInDays === 0 ? "Riot login ends today" : `Riot login ends in ${endsInDays} ${endsInDays === 1 ? "day" : "days"}`
                                             : "Ready";
-                            const stateTone = isRefreshing ? "pending" : needsSignIn || renewalFailed ? "repair" : isExpired ? "expired" : "ready";
+                            const stateTone = isRefreshing ? "pending" : needsSignIn || renewalFailed ? "repair" : isExpired || endsInDays !== null ? "expired" : "ready";
                             const cachedCardId = (account.playerCardId || accountCardIds[account.puuid.toLowerCase()])?.toLowerCase() || "";
                             const cachedCard = cachedCardId ? playerCardById.get(cachedCardId) : undefined;
                             const accountCardIcon = isActive && activePlayerCardIcon
@@ -588,10 +599,11 @@ export default function AccountManagerModal({
                             type="button"
                             className="account-switcher-manage"
                             onClick={isBulkRefreshing ? handleCancelRefreshAll : handleRefreshAllAccounts}
-                            disabled={!isBulkRefreshing && (renewalBusy || !renewableAccounts.length)}
+                            disabled={!isBulkRefreshing && (renewalBusy || !dueAccounts.length)}
+                            title={!isBulkRefreshing && !dueAccounts.length ? "Every saved login was renewed in the last 6 hours" : undefined}
                         >
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M18.5 10a7 7 0 0 0-12-3L4 11M5.5 14a7 7 0 0 0 12 3l2.5-4" /></svg>
-                            {isBulkRefreshing ? "Stop renewal" : "Renew all accounts"}
+                            {isBulkRefreshing ? "Stop renewal" : dueAccounts.length ? `Renew ${dueAccounts.length} due` : "All renewed"}
                         </button>
                         <span className="account-switcher-count">{visibleAccounts.length} of {accounts.length} accounts</span>
                         <button

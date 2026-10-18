@@ -1,6 +1,6 @@
 // Shared by the build (What's new popup) and the app (update notice), so both read release notes the same way.
 
-const PREVIEWS = new Set(["insights", "compare", "badges"]);
+const PREVIEWS = new Set(["insights", "compare", "badges", "replay", "trade", "takeaways", "accounts", "killspot"]);
 const LISTS = { added: "added", improved: "improved", fixed: "fixed" };
 
 const plain = (text) => text.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").trim();

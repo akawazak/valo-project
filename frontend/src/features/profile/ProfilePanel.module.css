@@ -2120,8 +2120,6 @@
 }
 
 .mapPlotToolbar,
-.mapHotspotsHeader,
-.mapHotspotRow,
 .mapLegend {
     display: flex;
     align-items: center;
@@ -2133,8 +2131,7 @@
     margin-bottom: 10px;
 }
 
-.mapPlotToolbar > strong,
-.mapHotspotsHeader > strong {
+.mapPlotToolbar > strong {
     font-size: 0.78rem;
 }
 
@@ -2413,17 +2410,6 @@
     outline: 1px solid currentColor;
 }
 
-.mapHeat {
-    position: absolute;
-    inset: -24px;
-    border-radius: 50%;
-    background: radial-gradient(circle, currentColor 0, color-mix(in srgb, currentColor 52%, transparent) 23%, transparent 69%);
-    opacity: 0.32;
-    filter: blur(5px);
-    transform: scale(1.15);
-    pointer-events: none;
-}
-
 .mapPoint {
     position: absolute;
     left: -7px;
@@ -2448,7 +2434,6 @@
 .mapEventMuted { opacity: 0.12; }
 
 .mapEvent:hover { z-index: 4; }
-.mapEvent:hover .mapHeat { opacity: 0.62; transform: scale(1.45); }
 .mapEvent:hover .mapPoint { background: currentColor; color: #071018; }
 
 .mapDuelLine {
@@ -2646,65 +2631,6 @@
 
 .mapKillText { color: #54c8ff !important; }
 .mapDeathText { color: #ff9a5c !important; }
-
-.mapHotspots {
-    padding: 18px 18px 16px;
-    background: #091219;
-}
-
-.mapHotspotsHeader {
-    min-height: 34px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid rgba(140, 160, 177, 0.16);
-}
-
-.mapHotspotsHeader span {
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    font-size: 0.6rem;
-}
-
-.mapHotspotRow {
-    min-height: 46px;
-    padding: 8px 2px;
-    border-bottom: 1px solid rgba(140, 160, 177, 0.1);
-}
-
-.mapHotspotName {
-    min-width: 0;
-    flex: 1;
-    display: grid;
-    gap: 6px;
-    margin-right: 18px;
-}
-
-.mapHotspotName > span {
-    overflow: hidden;
-    color: var(--text-primary);
-    font-size: 0.7rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.mapHotspotName > i {
-    width: 100%;
-    height: 2px;
-    display: block;
-    background: rgba(140, 160, 177, 0.1);
-}
-
-.mapHotspotName > i > b {
-    height: 100%;
-    display: block;
-    background: linear-gradient(90deg, #54c8ff, #ff9a5c);
-}
-
-.mapHotspotScore {
-    display: flex;
-    gap: 10px;
-    font-family: var(--font-mono);
-    font-size: 0.64rem;
-}
 
 .mapAnalyticsNote {
     margin: 16px 2px 0;
@@ -5290,13 +5216,6 @@
     z-index: 7;
 }
 
-.mapHeat {
-    inset: -46px;
-    background: radial-gradient(circle, currentColor 0, color-mix(in srgb, currentColor 72%, transparent) 18%, color-mix(in srgb, currentColor 32%, transparent) 42%, transparent 72%);
-    opacity: 0.38;
-    filter: blur(12px);
-}
-
 .mapPoint {
     left: -3px;
     top: -3px;
@@ -5571,137 +5490,12 @@
     grid-row: 1;
 }
 
-.mapHotspotSummary {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-    padding: 8px 10px 10px;
-    border-bottom: 1px solid rgba(137, 158, 174, 0.12);
-}
-
 .mapInsightSectionHeading {
     grid-column: 1 / -1;
     min-height: 22px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-}
-
-.mapHotspotItem {
-    --hotspot-color: #22d3a3;
-    min-width: 0;
-    min-height: 62px;
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    align-items: center;
-    column-gap: 8px;
-    row-gap: 2px;
-    padding: 6px 7px;
-    border: 1px solid #202a32;
-    border-radius: 6px;
-    color: var(--text-primary);
-    background: #070b0f;
-    text-align: left;
-    cursor: pointer;
-}
-
-.mapHotspotDeath {
-    --hotspot-color: #ff4f68;
-}
-
-.mapHotspotItem:hover,
-.mapHotspotItem:focus-visible,
-.mapHotspotItemActive {
-    border-color: color-mix(in srgb, var(--hotspot-color) 65%, transparent);
-    background: color-mix(in srgb, var(--hotspot-color) 8%, #0c161e);
-    outline: none;
-}
-
-.mapHotspotItem:focus-visible {
-    box-shadow: inset 0 0 0 1px var(--hotspot-color);
-}
-
-.mapHotspotThumb {
-    position: relative;
-    width: 48px;
-    height: 46px;
-    grid-row: 1 / 3;
-    overflow: hidden;
-    border: 1px solid rgba(137, 158, 174, 0.16);
-    border-radius: 5px;
-    background: #020406;
-}
-
-.mapHotspotThumb img {
-    object-fit: contain;
-    opacity: 0.82;
-    filter: grayscale(0.05) contrast(1.22) brightness(1.04);
-}
-
-.mapHotspotThumb i {
-    position: absolute;
-    z-index: 1;
-    width: 8px;
-    height: 8px;
-    border: 1px solid #061018;
-    border-radius: 50%;
-    background: var(--hotspot-color);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--hotspot-color) 34%, transparent), 0 0 12px var(--hotspot-color);
-    transform: translate(-50%, -50%);
-}
-
-.mapHotspotItem > span:nth-child(2) {
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-}
-
-.mapHotspotItem small {
-    color: #718493;
-    font-family: var(--match-font);
-    font-size: 0.62rem;
-}
-
-.mapHotspotItem strong {
-    overflow: hidden;
-    font-family: var(--match-font);
-    font-size: 0.76rem;
-    font-weight: 680;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.mapHotspotItem > span:last-child {
-    grid-column: 2;
-    grid-row: 2;
-    display: grid;
-    justify-items: start;
-    gap: 2px;
-}
-
-.mapHotspotItem > span:last-child b {
-    color: var(--hotspot-color);
-    font-family: var(--match-compact);
-    font-size: 0.82rem;
-}
-
-.mapHotspotItem:last-child:nth-child(2) {
-    grid-column: 1 / -1;
-    grid-template-columns: 58px minmax(0, 1fr) auto;
-    grid-template-rows: auto;
-}
-
-.mapHotspotItem:last-child:nth-child(2) .mapHotspotThumb {
-    width: 58px;
-    height: 50px;
-    grid-row: 1;
-}
-
-.mapHotspotItem:last-child:nth-child(2) > span:last-child {
-    grid-column: 3;
-    grid-row: 1;
-    justify-items: end;
 }
 
 .mapMatchInsight {
@@ -7451,7 +7245,6 @@ button.rvMarker { width: 24px; height: 24px; padding: 0; border: 0; cursor: poin
 button.rvMarker:focus-visible, button.mapEvent:focus-visible, .rvInspect:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
 button.mapEvent { width: 24px; height: 24px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 button.mapEvent .mapPoint { left: 50%; top: 50%; transform: translate(-50%, -50%); }
-button.mapEvent .mapHeat { inset: -34px; }
 .mapDuelControls .mapBackToRound { width: auto; padding: 0 10px; white-space: nowrap; }
 .mapInsights { overflow-y: auto; }
 .mapFightDetail { padding: 18px 16px; border-bottom: 1px solid var(--border-strong); background: var(--bg-surface); color: var(--text-primary); }
@@ -7770,7 +7563,6 @@ button.mapEvent .mapHeat { inset: -34px; }
 }
 
 .mapAnalytics .mapZoneThumb i,
-.mapAnalytics .mapHotspotThumb i,
 .mapAnalytics .mapReviewThumb > i {
     box-shadow: 0 0 0 2px #05080b;
 }
@@ -8126,4 +7918,16 @@ button.mapEvent .mapHeat { inset: -34px; }
     font-family: var(--match-font);
     font-size: 0.62rem;
     pointer-events: none;
+}
+
+/* Share button beside the match popup's close button */
+.matchMetaShare {
+    display: inline-flex;
+    margin-left: 4px;
+}
+.matchMetaShare button {
+    height: 26px;
+    padding: 0 10px;
+    background: rgba(4, 10, 16, 0.68);
+    border-color: rgba(255, 255, 255, 0.18);
 }

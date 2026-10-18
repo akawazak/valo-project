@@ -14,6 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: mocks.listen }));
 vi.mock('@/lib/types', () => import('../lib/types'));
 vi.mock('@/lib/errors', () => import('../lib/errors'));
 vi.mock('@/lib/accountSelection', () => import('../lib/accountSelection'));
+vi.mock('@/lib/accountHealth', () => import('../lib/accountHealth'));
 vi.mock('@/lib/platform', () => ({ isAndroidRuntime: () => false }));
 vi.mock('@/lib/authDebug', () => ({ pushAuthDebugEvent: vi.fn() }));
 vi.mock('@/lib/accountStorage', () => ({

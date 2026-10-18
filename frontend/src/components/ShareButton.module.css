@@ -1,0 +1,108 @@
+.wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.button:hover {
+    background: var(--bg-overlay);
+}
+
+.button svg {
+    width: 15px;
+    height: 15px;
+}
+
+.button[aria-busy] {
+    cursor: progress;
+    opacity: 0.8;
+}
+
+.pop {
+    position: fixed;
+    z-index: 4000;
+    width: 330px;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-surface);
+    box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.7);
+    color: var(--text-primary);
+}
+
+.pop img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.pop p {
+    margin: 10px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.pop p b {
+    color: var(--color-success, #22d3a3);
+    font-weight: 600;
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.save,
+.done {
+    flex: 1;
+    height: 32px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.save {
+    border: 0;
+    background: var(--accent);
+    color: #fff;
+}
+
+.save:hover {
+    filter: brightness(0.92);
+}
+
+.done {
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-primary);
+}
+
+.done:hover {
+    background: var(--bg-overlay);
+}
+
+.wrap > .pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+}

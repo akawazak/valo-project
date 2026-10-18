@@ -1,9 +1,13 @@
 version: 2
+# Tauri is updated by hand: its npm packages and Rust crates must share a major/minor
+# version, and Dependabot can only bump one side per PR, which fails the Tauri build.
 updates:
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@tauri-apps/*'
     groups:
       frontend-minor-patches:
         update-types: [minor, patch]
@@ -11,6 +15,9 @@ updates:
     directory: /frontend/src-tauri
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: 'tauri'
+      - dependency-name: 'tauri-*'
     groups:
       tauri-rust-minor-patches:
         update-types: [minor, patch]

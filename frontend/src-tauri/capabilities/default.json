@@ -18,6 +18,9 @@
         },
         {
           "url": "https://valorant-api.com/v1/*"
+        },
+        {
+          "url": "https://media.valorant-api.com/*"
         }
       ]
     },

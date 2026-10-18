@@ -12,6 +12,8 @@ import UnifiedSkinSelectorModal from "@/features/gun-skins/UnifiedSkinSelectorMo
 import { useData } from "@/context/DataContext";
 import { buildPresetApplyRequest, DEFAULT_PRESET_ID } from "@/lib/effectivePreset";
 import { weaponCategoryKey } from "@/lib/gameMeta";
+import ShareButton from "@/components/ShareButton";
+import { drawLoadoutShare, loadoutShareSlots } from "@/features/arsenal/loadoutShare";
 
 // Board columns keyed by valorant-api's EEquippableCategory, so new weapons
 // (e.g. Warden) land in the right column without code changes.
@@ -184,6 +186,13 @@ export default function ArsenalView({
     const identity: IdentityV1 = isViewingDefault
         ? (editingPreset?.identity || gameIdentity || { playerCardId: currentCardId || "", playerTitleId: currentTitleId || "" })
         : (presetRequest?.identity || { playerCardId: "", playerTitleId: "" });
+
+    const shareLoadout = () => drawLoadoutShare({
+        title: isViewingDefault ? (accountName?.split("#")[0] || "My loadout") : (activePreset?.name || "Preset"),
+        player: isViewingDefault ? "Current loadout" : accountName?.split("#")[0],
+        cardId: identity.playerCardId || undefined,
+        slots: loadoutShareSlots(weapons, currentLoadout),
+    });
 
     const spraysList: SpraySlot[] = isViewingDefault
         ? (editingPreset?.sprays || gameSprays || currentSprays || [])
@@ -418,6 +427,7 @@ export default function ArsenalView({
                         </p>
                     </div>
                     <div className="workspace-actions workspace-builder-actions">
+                        {loadoutAvailable && !loading ? <ShareButton build={shareLoadout} filename="vantavault-loadout.png" /> : null}
                         <button type="button" className="btn-tactical btn-tactical-secondary" onClick={onRefresh} disabled={loading || !onRefresh}>Refresh</button>
                         <button type="button" className="btn-tactical btn-tactical-accent" onClick={onNewPreset} disabled={loading || !loadoutAvailable}>Save as preset</button>
                     </div>
@@ -431,6 +441,7 @@ export default function ArsenalView({
                         </div>
                     </div>
                     <div className="workspace-actions workspace-builder-actions">
+                        <ShareButton build={shareLoadout} filename="vantavault-preset.png" />
                         <button
                             type="button"
                             className="btn-tactical btn-tactical-secondary"
@@ -635,6 +646,7 @@ export default function ArsenalView({
                                 <button type="button" className="preset-editor-btn" onClick={onSaveAsNew}>
                                     Save as new
                                 </button>
+                                <ShareButton build={shareLoadout} filename="vantavault-preset.png" className="preset-editor-btn" />
                             </div>
                             <button type="button" className="preset-loadout-editor-close preset-locker-close" onClick={() => void closePresetEditor()} aria-label="Close preset editor" title="Close">
                                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>

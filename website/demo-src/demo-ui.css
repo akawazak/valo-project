@@ -1,0 +1,12 @@
+/* Web demo chrome: dialogs over the app and the demo label. Uses the app's own theme tokens. */
+html,body{height:100%}
+body{overflow:hidden}
+.app-container{height:100vh}
+.demo-overlay{position:fixed;inset:0;z-index:2000;display:grid;place-items:center;padding:24px;background:rgba(2,5,8,.72);backdrop-filter:blur(6px)}
+.demo-dialog{width:min(1380px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column}
+.demo-body{flex:1;min-height:0;overflow:auto}
+.demo-close{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--border-color);border-radius:8px;background:var(--bg-elevated);color:var(--text-primary);font-size:20px;line-height:1;cursor:pointer}
+.demo-close:hover{background:var(--bg-overlay)}
+.demo-live{display:block;padding:0;overflow:auto;background:var(--bg-base);backdrop-filter:none}
+.demo-close-fixed{position:fixed;top:14px;right:16px;z-index:2001}
+.demo-badge{position:fixed;left:12px;bottom:10px;z-index:3000;padding:5px 10px;border:1px solid var(--border-color);border-radius:6px;background:rgba(6,11,15,.9);color:var(--text-secondary);font-size:12px;pointer-events:none}
