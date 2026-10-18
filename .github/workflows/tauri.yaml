@@ -113,8 +113,8 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.86.0 --profile minimal --component rustfmt
-          rustup default 1.86.0
+          rustup toolchain install 1.90.0 --profile minimal --component rustfmt
+          rustup default 1.90.0
 
       - name: Install frontend dependencies
         working-directory: frontend
