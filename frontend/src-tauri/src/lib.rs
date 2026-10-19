@@ -2968,6 +2968,74 @@ fn set_tray_settings(app_handle: AppHandle, settings: TraySettings) -> Result<()
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Anonymous usage count: a random install id and the app version, once a day
+// ---------------------------------------------------------------------------
+
+const USAGE_PING_URL: &str = "https://vanta-vault-app.vercel.app/api/ping";
+const USAGE_PING_INTERVAL_SECS: u64 = 20 * 60 * 60;
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct UsagePingState {
+    id: String,
+    last_sent: u64,
+}
+
+#[tauri::command]
+async fn send_usage_ping(app_handle: AppHandle) -> Result<(), String> {
+    let path = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("usage-ping.json");
+    let mut state: UsagePingState = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    if uuid::Uuid::parse_str(&state.id).is_err() {
+        state.id = uuid::Uuid::new_v4().to_string();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(state.last_sent) < USAGE_PING_INTERVAL_SECS {
+        return Ok(());
+    }
+
+    let platform = if cfg!(target_os = "android") { "android" } else { "windows" };
+    // Regular use: this install also checked in within the last 8 days
+    let returning = state.last_sent > 0 && now.saturating_sub(state.last_sent) <= 8 * 24 * 60 * 60;
+    let body = serde_json::json!({
+        "id": state.id,
+        "version": app_handle.package_info().version.to_string(),
+        "platform": platform,
+        "returning": returning,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(USAGE_PING_URL)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Usage ping returned {}", response.status()));
+    }
+
+    state.last_sent = now;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string(&state).map_err(|e| e.to_string())?;
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
 /// Brings the main window back from the tray, a minimise, or a hotkey peek.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn reveal_main_window(app: &AppHandle) {
@@ -3053,6 +3121,7 @@ pub fn run() {
         toggle_live_match_overlay,
         get_tray_settings,
         set_tray_settings,
+        send_usage_ping,
         show_main_window,
     ]);
 

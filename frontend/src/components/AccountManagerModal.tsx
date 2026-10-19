@@ -224,13 +224,20 @@ export default function AccountManagerModal({
         setDisplayOrder((current) => reconcileOpenAccountOrder(current, accounts));
     }, [accounts, isOpen]);
 
+    const orderReady = displayOrder.length > 0;
     useEffect(() => {
         if (!isOpen || !activeAccount?.puuid) return;
+        // Center the current account in the list (scrolling only the list,
+        // never the page) so it is not stuck at the bottom edge.
         const frame = window.requestAnimationFrame(() => {
-            currentAccountRowRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+            const list = accountListRef.current;
+            const row = currentAccountRowRef.current;
+            if (!list || !row) return;
+            const offset = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+            list.scrollTop = Math.max(0, offset - (list.clientHeight - row.offsetHeight) / 2);
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [activeAccount?.puuid, isOpen]);
+    }, [activeAccount?.puuid, isOpen, orderReady]);
 
     useEffect(() => {
         if (!isOpen) return;

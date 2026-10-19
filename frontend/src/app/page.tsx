@@ -45,6 +45,7 @@ import { getDesktopNotificationsEnabled, setDesktopNotificationsEnabled } from '
 import { getTraySettings, setTraySettings, type TraySettings } from '@/services/tray';
 import type { AppTab } from '@/lib/appTabs';
 import MobileApp from '@/mobile/MobileAppV2';
+import { sendUsagePing } from '@/lib/usagePing';
 
 // Built from .github/release-notes/v{version}.md (see next.config.ts); null when this version has no notes.
 const CURRENT_RELEASE: ReleaseNotes | null = JSON.parse(process.env.VANTAVAULT_RELEASE_NOTES || "null");
@@ -90,6 +91,8 @@ export default function Home() {
 
     useEffect(() => {
         setAndroid(isAndroidRuntime());
+        const ping = window.setTimeout(sendUsagePing, 15000);
+        return () => window.clearTimeout(ping);
     }, []);
 
     if (android === null) {

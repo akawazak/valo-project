@@ -7,6 +7,7 @@ import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/service
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
 import { playUiSound, UI_SOUND_LABELS, type UiSound } from "@/lib/uiSounds";
+import { setUsageCountEnabled, usageCountEnabled } from "@/lib/usagePing";
 
 const RIOT_WALLPAPERS = [
     { id: 'evolution', name: 'Evolution', url: '/themes/evolution.jpg' },
@@ -183,6 +184,7 @@ export default function SettingsModal({
     const [storageMessage, setStorageMessage] = useState("");
     const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [recoveryMessage, setRecoveryMessage] = useState("");
+    const [usageCount, setUsageCount] = useState(true);
     const [secureStorageFailed, setSecureStorageFailed] = useState(false);
     const [projectLinkCopied, setProjectLinkCopied] = useState(false);
     const [activeSection, setActiveSection] = useState<SettingsSection>("general");
@@ -221,6 +223,7 @@ export default function SettingsModal({
     useEffect(() => {
         if (!isOpen) return;
         setSecureStorageFailed(localStorage.getItem("riot_secure_storage_error") === "1");
+        setUsageCount(usageCountEnabled());
         void refreshStorage().catch((error) => setStorageMessage(error instanceof Error ? error.message : String(error)));
     }, [isOpen, refreshStorage]);
 
@@ -735,6 +738,26 @@ export default function SettingsModal({
                                     >
                                         Download diagnostics
                                     </button>
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Anonymous Usage Count</div>
+                                    <div className="settings-item-desc">Once a day, send a random install ID and the app version so we can count how many people use VantaVault. No Riot account, name, or game data.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Anonymous Usage Count"
+                                            checked={usageCount}
+                                            onChange={(e) => {
+                                                setUsageCount(e.target.checked);
+                                                setUsageCountEnabled(e.target.checked);
+                                            }}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
                                 </div>
                             </div>
                             {recoveryMessage && <div className="settings-storage-message">{recoveryMessage}</div>}
