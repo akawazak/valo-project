@@ -7,6 +7,7 @@ import { clearMatchCache, getStorageStatus, type StorageStatus } from "@/service
 import { exportBackup, exportDiagnostics, importBackup } from "@/services/recovery";
 import { useTheme, type InterfaceTheme } from "@/context/ThemeContext";
 import { playUiSound, UI_SOUND_LABELS, type UiSound } from "@/lib/uiSounds";
+import { setUsageCountEnabled, usageCountEnabled } from "@/lib/usagePing";
 
 const RIOT_WALLPAPERS = [
     { id: 'evolution', name: 'Evolution', url: '/themes/evolution.jpg' },
@@ -68,6 +69,12 @@ interface SettingsModalProps {
 	onSoundVolumeChange: (v: number) => void;
     launchAtStartup: boolean;
     onLaunchAtStartupChange: (v: boolean) => void;
+    startMinimized: boolean;
+    onStartMinimizedChange: (v: boolean) => void;
+    closeToTray: boolean;
+    onCloseToTrayChange: (v: boolean) => void;
+    desktopNotifications: boolean;
+    onDesktopNotificationsChange: (v: boolean) => void;
     theme: string;
     accentTheme: string;
     interfaceTheme: InterfaceTheme;
@@ -141,6 +148,12 @@ export default function SettingsModal({
 	onSoundVolumeChange,
     launchAtStartup,
     onLaunchAtStartupChange,
+    startMinimized,
+    onStartMinimizedChange,
+    closeToTray,
+    onCloseToTrayChange,
+    desktopNotifications,
+    onDesktopNotificationsChange,
     theme,
     accentTheme,
     interfaceTheme,
@@ -171,6 +184,7 @@ export default function SettingsModal({
     const [storageMessage, setStorageMessage] = useState("");
     const [recoveryBusy, setRecoveryBusy] = useState(false);
     const [recoveryMessage, setRecoveryMessage] = useState("");
+    const [usageCount, setUsageCount] = useState(true);
     const [secureStorageFailed, setSecureStorageFailed] = useState(false);
     const [projectLinkCopied, setProjectLinkCopied] = useState(false);
     const [activeSection, setActiveSection] = useState<SettingsSection>("general");
@@ -209,6 +223,7 @@ export default function SettingsModal({
     useEffect(() => {
         if (!isOpen) return;
         setSecureStorageFailed(localStorage.getItem("riot_secure_storage_error") === "1");
+        setUsageCount(usageCountEnabled());
         void refreshStorage().catch((error) => setStorageMessage(error instanceof Error ? error.message : String(error)));
     }, [isOpen, refreshStorage]);
 
@@ -301,14 +316,69 @@ export default function SettingsModal({
                             <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
                                 <div className="settings-item-info">
                                     <div className="settings-item-label">Launch at Login</div>
-                                    <div className="settings-item-desc">Start VantaVault when you sign in to Windows. This also keeps your saved accounts signed in, since Riot ends logins that go a few days without renewing.</div>
+                                    <div className="settings-item-desc">Start VantaVault when you sign in to Windows. It keeps your saved accounts signed in and watches your store for wishlist skins.</div>
                                 </div>
                                 <div className="settings-item-control">
                                     <label className="switch-control">
                                         <input
                                             type="checkbox"
+                                            aria-label="Launch at Login"
                                             checked={launchAtStartup}
                                             onChange={(e) => onLaunchAtStartupChange(e.target.checked)}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="settings-item settings-item--nested" hidden={activeSection !== "general" || isAndroid || !launchAtStartup}>
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Start in the Tray</div>
+                                    <div className="settings-item-desc">At login, open quietly in the system tray instead of showing the window.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Start in the Tray"
+                                            checked={startMinimized}
+                                            onChange={(e) => onStartMinimizedChange(e.target.checked)}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Keep Running When Closed</div>
+                                    <div className="settings-item-desc">Closing the window hides VantaVault to the tray so alerts keep working. Quit from the tray icon.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Keep Running When Closed"
+                                            checked={closeToTray}
+                                            onChange={(e) => onCloseToTrayChange(e.target.checked)}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="settings-item" hidden={activeSection !== "general" || isAndroid}>
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Windows Notifications</div>
+                                    <div className="settings-item-desc">Show a Windows notification when a wishlist skin is in your store and VantaVault isn't in front.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Windows Notifications"
+                                            checked={desktopNotifications}
+                                            onChange={(e) => onDesktopNotificationsChange(e.target.checked)}
                                         />
                                         <span className="switch-slider" />
                                     </label>
@@ -668,6 +738,26 @@ export default function SettingsModal({
                                     >
                                         Download diagnostics
                                     </button>
+                                </div>
+                            </div>
+                            <div className="settings-item">
+                                <div className="settings-item-info">
+                                    <div className="settings-item-label">Anonymous Usage Count</div>
+                                    <div className="settings-item-desc">Once a day, send a random install ID and the app version so we can count how many people use VantaVault. No Riot account, name, or game data.</div>
+                                </div>
+                                <div className="settings-item-control">
+                                    <label className="switch-control">
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Anonymous Usage Count"
+                                            checked={usageCount}
+                                            onChange={(e) => {
+                                                setUsageCount(e.target.checked);
+                                                setUsageCountEnabled(e.target.checked);
+                                            }}
+                                        />
+                                        <span className="switch-slider" />
+                                    </label>
                                 </div>
                             </div>
                             {recoveryMessage && <div className="settings-storage-message">{recoveryMessage}</div>}

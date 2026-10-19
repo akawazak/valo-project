@@ -40,8 +40,12 @@ import UpdateButton, { type UpdatePhase } from '@/components/UpdateButton';
 import { parseReleaseNotes } from '@/lib/releaseNotes.mjs';
 import NotificationCenter from '@/features/notifications/NotificationCenter';
 import { publishAppNotification, useAppNotifications } from '@/lib/appNotifications';
+import { useWishlistWatcher } from '@/hooks/useWishlistWatcher';
+import { getDesktopNotificationsEnabled, setDesktopNotificationsEnabled } from '@/services/desktopNotify';
+import { getTraySettings, setTraySettings, type TraySettings } from '@/services/tray';
 import type { AppTab } from '@/lib/appTabs';
 import MobileApp from '@/mobile/MobileAppV2';
+import { sendUsagePing } from '@/lib/usagePing';
 
 // Built from .github/release-notes/v{version}.md (see next.config.ts); null when this version has no notes.
 const CURRENT_RELEASE: ReleaseNotes | null = JSON.parse(process.env.VANTAVAULT_RELEASE_NOTES || "null");
@@ -87,6 +91,8 @@ export default function Home() {
 
     useEffect(() => {
         setAndroid(isAndroidRuntime());
+        const ping = window.setTimeout(sendUsagePing, 15000);
+        return () => window.clearTimeout(ping);
     }, []);
 
     if (android === null) {
@@ -154,6 +160,8 @@ function HomeApp() {
 	const [soundVolume, setSoundVolume] = useState<number | undefined>(undefined);
     const [profileIdentity, setProfileIdentity] = useState<{ currentRank: string; currentTier: number; accountLevel: number | null }>({ currentRank: "Unranked", currentTier: 0, accountLevel: null });
     const [launchAtStartup, setLaunchAtStartupState] = useState<boolean>(false);
+    const [traySettings, setTraySettingsState] = useState<TraySettings>({ startMinimized: false, closeToTray: false });
+    const [desktopNotifications, setDesktopNotificationsState] = useState(true);
     const [isLoading, setIsLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Loading your VantaVault data...');
     
@@ -172,6 +180,7 @@ function HomeApp() {
     }, []);
 
     const notifications = useAppNotifications(activeAccount?.puuid);
+    useWishlistWatcher(activeAccount?.puuid, !isLoading);
 
     useEffect(() => {
         setProfileTarget(null);
@@ -328,7 +337,7 @@ function HomeApp() {
             setToastMessage(message);
             setShowToast(true);
 			playUiSound("error");
-            publishAppNotification({ id: `error:${message}:${Math.floor(Date.now() / 60_000)}`, kind: "error", title: "VantaVault needs attention", body: message, action: activeTab, accountPuuid: activeAccount?.puuid });
+            publishAppNotification({ id: `error:${message}`, kind: "error", title: "VantaVault needs attention", body: message, action: activeTab, accountPuuid: activeAccount?.puuid });
         };
         window.addEventListener("vantavault:error", onAppError);
         return () => window.removeEventListener("vantavault:error", onAppError);
@@ -392,7 +401,39 @@ function HomeApp() {
             const enabled = await readLaunchAtStartupState();
             setLaunchAtStartupState(enabled);
         });
+        getTraySettings().then(setTraySettingsState).catch(() => {});
+        setDesktopNotificationsState(getDesktopNotificationsEnabled());
     }, [isAndroid]);
+
+    const changeLaunchAtStartup = useCallback(async (enabled: boolean) => {
+        setLaunchAtStartupState(enabled);
+        try {
+            const { setLaunchAtStartup } = await import('@/services/autostart');
+            await setLaunchAtStartup(enabled);
+        } catch {
+            setLaunchAtStartupState(!enabled);
+            setToastMessage("Windows didn't accept the startup change. Try again.");
+            setShowToast(true);
+        }
+    }, [setShowToast, setToastMessage]);
+
+    const changeTraySettings = useCallback(async (patch: Partial<TraySettings>) => {
+        const previous = traySettings;
+        const next = { ...previous, ...patch };
+        setTraySettingsState(next);
+        try {
+            await setTraySettings(next);
+        } catch {
+            setTraySettingsState(previous);
+            setToastMessage("That setting couldn't be saved. Try again.");
+            setShowToast(true);
+        }
+    }, [traySettings, setShowToast, setToastMessage]);
+
+    const changeDesktopNotifications = useCallback((enabled: boolean) => {
+        setDesktopNotificationsEnabled(enabled);
+        setDesktopNotificationsState(enabled);
+    }, []);
 
     useEffect(() => {
         if (!CURRENT_RELEASE || appVersion !== CURRENT_RELEASE.version) return;
@@ -960,7 +1001,7 @@ function HomeApp() {
                     onRetry={() => void installUpdate()}
                     onSeeAll={() => setShowUpdateNotes(true)}
                 /> : null}
-                notificationControl={<NotificationCenter items={notifications.items} unreadCount={notifications.unreadCount} onRead={notifications.markRead} onReadAll={notifications.markAllRead} onClear={notifications.clear} onNavigate={selectAppTab} />}
+                notificationControl={<NotificationCenter items={notifications.items} unreadCount={notifications.unreadCount} onRead={notifications.markRead} onReadAll={notifications.markAllRead} onClear={notifications.clear} onDismiss={notifications.dismiss} onNavigate={selectAppTab} />}
             />
 
             <div className="app-content-wrapper">
@@ -1145,7 +1186,13 @@ function HomeApp() {
 				soundVolume={soundVolume ?? 28}
 				onSoundVolumeChange={setSoundVolume}
                 launchAtStartup={launchAtStartup}
-                onLaunchAtStartupChange={(v) => setLaunchAtStartupState(v)}
+                onLaunchAtStartupChange={changeLaunchAtStartup}
+                startMinimized={traySettings.startMinimized}
+                onStartMinimizedChange={(v) => changeTraySettings({ startMinimized: v })}
+                closeToTray={traySettings.closeToTray}
+                onCloseToTrayChange={(v) => changeTraySettings({ closeToTray: v })}
+                desktopNotifications={desktopNotifications}
+                onDesktopNotificationsChange={changeDesktopNotifications}
                 theme={theme}
                 accentTheme={accentTheme}
                 interfaceTheme={interfaceTheme}

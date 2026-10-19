@@ -134,6 +134,8 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 	const chatOpenRef = useRef(false);
 	const chatNoticeTimerRef = useRef<number | null>(null);
 	const [rememberedCardIds, setRememberedCardIds] = useState<Record<string, string>>({});
+	// Friends' card ids by puuid, read when a message arrives so its notification shows the sender's player card.
+	const peerCardIdsRef = useRef<Record<string, string>>({});
 	const contextMenu = overlay?.kind === "context" ? overlay : null;
 	const profileTarget = overlay?.kind === "profile" ? overlay.profile : null;
 	const chatOpen = overlay?.kind === "chat";
@@ -151,6 +153,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 				.sort((a, b) => (b.latestMessage?.timestamp || 0) - (a.latestMessage?.timestamp || 0))[0];
 			if (newest?.peerPuuid && newest.latestMessage) {
 				const senderName = newest.latestMessage.senderName || newest.displayName || "Riot friend";
+				const senderCardId = peerCardIdsRef.current[newest.peerPuuid.toLowerCase()];
 				setChatNotice({
 					peer: newest.peerPuuid,
 					name: senderName,
@@ -165,6 +168,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 					body: "Open Riot chat to read it.",
 					action: "profile",
 					accountPuuid: activeAccount?.puuid,
+					image: senderCardId ? `https://media.valorant-api.com/playercards/${senderCardId}/displayicon.png` : undefined,
 				});
 				if (chatNoticeTimerRef.current) window.clearTimeout(chatNoticeTimerRef.current);
 				chatNoticeTimerRef.current = window.setTimeout(() => setChatNotice(null), 6000);
@@ -479,6 +483,7 @@ export default function LivePartyStatus({ showOfflineByDefault = false }: { show
 		...presence,
 		cardId: presence.cardId || rememberedCardIds[(presence.puuid || "").toLowerCase()],
 	})), [rawPresences, rememberedCardIds]);
+	peerCardIdsRef.current = { ...rememberedCardIds, ...Object.fromEntries(presences.filter((presence) => presence.puuid && presence.cardId).map((presence) => [presence.puuid!.toLowerCase(), presence.cardId!])) };
 	const cardForPlayer = useCallback((puuid: string, cardId?: string) => {
 		const resolved = cardId || rememberedCardIds[puuid.toLowerCase()];
 		return resolved ? cardCache[resolved.toLowerCase()] : undefined;

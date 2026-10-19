@@ -10,8 +10,7 @@ import {
 } from "@/lib/types";
 import { getStorefront, getWallet } from "@/services/api";
 import { useData } from "@/context/DataContext";
-import { publishAppNotification } from "@/lib/appNotifications";
-import { playUiSound } from "@/lib/uiSounds";
+import { announceWishlistMatches, storeRotation } from "@/lib/wishlistAlerts";
 import ResilientAssetImage from "@/components/ResilientAssetImage";
 import { chromaLabel, levelLabel } from "@/lib/skinLabels";
 import { AppRequestError } from "@/lib/errors";
@@ -508,7 +507,6 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
     const [storefrontError, setStorefrontError] = useState("");
     const [isLoadingStorefront, setIsLoadingStorefront] = useState(false);
     const [secondsUntilReset, setSecondsUntilReset] = useState(0);
-    const [storeResetAt, setStoreResetAt] = useState(0);
     const [bundleSeconds, setBundleSeconds] = useState<Record<string, number>>({});
     const [nightMarketSeconds, setNightMarketSeconds] = useState(0);
     const [accessorySeconds, setAccessorySeconds] = useState(0);
@@ -539,9 +537,6 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
             if (next[offer.wishlistId]) delete next[offer.wishlistId];
             else {
                 next[offer.wishlistId] = offer.name;
-                if (typeof Notification !== "undefined" && Notification.permission === "default") {
-                    void Notification.requestPermission();
-                }
             }
             window.localStorage.setItem(wishlistStorageKey, JSON.stringify(next));
             return next;
@@ -613,7 +608,6 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
                 setWallet(w);
                 const dailyRemaining = sf.SkinsPanelLayout?.SingleItemOffersRemainingDurationInSeconds || 0;
                 setSecondsUntilReset(dailyRemaining);
-                setStoreResetAt(Date.now() + dailyRemaining * 1000);
                 didAutoRefreshAtZeroRef.current = false;
                 const rawBundles = sf.FeaturedBundle?.Bundles?.length
                     ? sf.FeaturedBundle.Bundles
@@ -790,25 +784,12 @@ export default function StorePanels({ refreshKey = 0, onConnectAccount }: StoreP
         const visibleOffers = [...dailyOffers, ...nightMarket];
         const matches = visibleOffers.filter(offer => wishlist[offer.wishlistId]);
         if (!matches.length) return;
-        const signature = matches.map(offer => offer.wishlistId).sort().join(",");
-        const noticeKey = `${wishlistStorageKey}:notified:${signature}:${Math.round(storeResetAt / 60_000)}`;
-        if (window.sessionStorage.getItem(noticeKey)) return;
-        window.sessionStorage.setItem(noticeKey, "1");
-        const names = matches.map(offer => offer.name).join(", ");
-        publishAppNotification({
-            id: `wishlist:${activeAccount?.puuid || "guest"}:${Math.round(storeResetAt / 60_000)}:${signature}`,
-            kind: "wishlist",
-            title: matches.length === 1 ? `${matches[0].name} is available` : `${matches.length} wishlist items are available`,
-            body: names,
-            image: matches[0]?.image,
-            action: "store",
-            accountPuuid: activeAccount?.puuid,
-        });
-        playUiSound("wishlist");
-        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            new Notification("Wishlist item available", { body: names });
-        }
-    }, [activeAccount?.puuid, dailyOffers, nightMarket, storeResetAt, storefront, wishlist, wishlistStorageKey]);
+        announceWishlistMatches(
+            activeAccount?.puuid,
+            matches.map(offer => ({ id: offer.wishlistId, name: offer.name, image: offer.image })),
+            storeRotation(storefront),
+        );
+    }, [activeAccount?.puuid, dailyOffers, nightMarket, storefront, wishlist]);
 
     const vpBalance = wallet?.[VP_ID] ?? 0;
     const rpBalance = wallet?.[RP_ID] ?? 0;

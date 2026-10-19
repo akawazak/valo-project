@@ -1,6 +1,6 @@
 # VantaVault Privacy Notice
 
-Last updated: August 3, 2026
+Last updated: October 19, 2026
 
 VantaVault is a local-first desktop and Android application. The project does
 not operate an account-storage server. The public VantaVault website uses
@@ -22,6 +22,11 @@ data needed for features the user chooses to open.
 - Visits to the public website send limited usage and performance measurements
   to Vercel. Riot account identifiers, app credentials, game data, and chat
   content are not included in those website events.
+- Once a day, the app sends an anonymous usage count to the VantaVault website:
+  a random install ID made on the device, the app version, and the platform
+  (Windows or Android). It is only used to count how many people use the app.
+  It contains no Riot account, name, credentials, or game data, and IP addresses
+  are not stored. Turn it off in Settings > Data > Anonymous Usage Count.
 
 VantaVault does not sell personal data or include advertising trackers.
 

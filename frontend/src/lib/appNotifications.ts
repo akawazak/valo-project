@@ -24,6 +24,20 @@ export type AppNotificationInput = Omit<AppNotification, "read" | "createdAt"> &
 const EVENT_NAME = "vantavault:notification";
 const STORAGE_VERSION = "v1";
 const MAX_ITEMS = 80;
+// Problems are only worth showing while they are fresh; a day later they have either cleared or repeated.
+const ERROR_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isFresh(item: AppNotification, now = Date.now()) {
+    return item.kind !== "error" || now - item.createdAt < ERROR_TTL_MS;
+}
+
+/** Adds a notification. A repeat of the same problem moves the existing one back to the top instead of stacking. */
+function merge(current: AppNotification[], input: AppNotificationInput): AppNotification[] {
+    const existing = current.find((item) => item.id === input.id);
+    if (existing && input.kind !== "error") return current;
+    const item: AppNotification = { ...input, createdAt: input.createdAt || Date.now(), read: false };
+    return [item, ...current.filter((entry) => entry.id !== input.id)].slice(0, MAX_ITEMS);
+}
 
 function storageKey(accountPuuid?: string) {
     return `vantavault:notifications:${STORAGE_VERSION}:${accountPuuid || "guest"}`;
@@ -33,7 +47,7 @@ function readStored(accountPuuid?: string): AppNotification[] {
     if (typeof window === "undefined") return [];
     try {
         const parsed = JSON.parse(localStorage.getItem(storageKey(accountPuuid)) || "[]") as AppNotification[];
-        return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.title).slice(0, MAX_ITEMS) : [];
+        return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.title && isFresh(item)).slice(0, MAX_ITEMS) : [];
     } catch {
         return [];
     }
@@ -43,10 +57,8 @@ export function publishAppNotification(input: AppNotificationInput) {
     if (typeof window === "undefined") return;
     const key = storageKey(input.accountPuuid);
     const stored = readStored(input.accountPuuid);
-    if (!stored.some((item) => item.id === input.id)) {
-        const item: AppNotification = { ...input, createdAt: input.createdAt || Date.now(), read: false };
-        localStorage.setItem(key, JSON.stringify([item, ...stored].slice(0, MAX_ITEMS)));
-    }
+    const next = merge(stored, input);
+    if (next !== stored) localStorage.setItem(key, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent<AppNotificationInput>(EVENT_NAME, { detail: input }));
 }
 
@@ -62,10 +74,7 @@ export function useAppNotifications(accountPuuid?: string) {
             const input = (event as CustomEvent<AppNotificationInput>).detail;
             if (!input?.id || !input.title) return;
             if (input.accountPuuid && accountPuuid && input.accountPuuid !== accountPuuid) return;
-            setItems((current) => {
-                if (current.some((item) => item.id === input.id)) return current;
-                return [{ ...input, createdAt: input.createdAt || Date.now(), read: false }, ...current].slice(0, MAX_ITEMS);
-            });
+            setItems((current) => merge(current, input));
         };
         window.addEventListener(EVENT_NAME, onNotification);
         return () => window.removeEventListener(EVENT_NAME, onNotification);
@@ -79,8 +88,9 @@ export function useAppNotifications(accountPuuid?: string) {
         setItems((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
     }, []);
     const markAllRead = useCallback(() => setItems((current) => current.map((item) => ({ ...item, read: true }))), []);
+    const dismiss = useCallback((id: string) => setItems((current) => current.filter((item) => item.id !== id)), []);
     const clear = useCallback(() => setItems([]), []);
     const unreadCount = useMemo(() => items.filter((item) => !item.read).length, [items]);
 
-    return { items, unreadCount, markRead, markAllRead, clear };
+    return { items, unreadCount, markRead, markAllRead, dismiss, clear };
 }
