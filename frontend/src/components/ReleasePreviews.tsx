@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 
-export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot";
+export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot" | "notifications";
 
 const ROUNDS = ["W", "W", "L", "W", "L", "W", "W"];
 
@@ -84,6 +84,17 @@ export default function ReleasePreview({ kind }: { kind: ReleasePreviewKind }) {
             <circle className="rn-zone" cx="86" cy="27" r="16" />
         </svg>
         <p><small>Keep doing</small><b>Your kills come from A Site</b><em>6 kills this match</em></p>
+    </div>;
+
+    if (kind === "notifications") return <div className="rn-preview rn-notify">
+        <p data-kind="wishlist">
+            <span className="rn-tile"><svg viewBox="0 0 64 40" aria-hidden="true"><path className="rn-gun" d="M4 16h10l3 2h22l2-2h17v3H41l-1 2h-6l3 10h-5l-3-9h-5l-2 6h-5l1-6h-4L4 25z" /></svg><i><svg viewBox="0 0 24 24"><path d="M12 20.5 4.2 13A5.2 5.2 0 0 1 11.6 5.7l.4.4.4-.4A5.2 5.2 0 0 1 19.8 13L12 20.5Z" /></svg></i></span>
+            <span><small><b>Wishlist</b> · now</small><strong>A wishlist skin is in your store</strong></span>
+        </p>
+        <p data-kind="message">
+            <span className="rn-tile"><span className="rn-face" /><i><svg viewBox="0 0 24 24"><path d="M20 11.5a7.5 7.5 0 0 1-11 6.6L4 19.5l1.4-4.6A7.5 7.5 0 1 1 20 11.5z" /></svg></i></span>
+            <span><small><b>Message</b> · 2m</small><strong>Alt: one more?</strong></span>
+        </p>
     </div>;
 
     if (kind === "takeaways") return <div className="rn-preview rn-takeaways">

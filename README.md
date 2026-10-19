@@ -131,9 +131,10 @@ For the current architecture, supported API surface, and security boundaries, re
 
 ## What's new in 0.5.32
 
-- The account button shows a badge when a saved account needs a new sign-in or its Riot login ends within 3 days, and the account list says which.
-- Map tab Takeaways now point out where your kills come from, and Repeat positions are folded into them.
-- Updated to the latest Tauri, Next.js and React.
+- A new notification center, Windows alerts for wishlist skins, and startup options.
+- A badge on the account button when a saved account needs a new sign-in.
+- Map Takeaways show where your kills come from.
+- New share cards and an anonymous usage count you can turn off in Settings.
 
 ## Development
 
