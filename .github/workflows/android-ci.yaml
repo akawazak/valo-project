@@ -36,7 +36,7 @@ jobs:
         run: |
           rustup toolchain install 1.90.0 --profile minimal --target aarch64-linux-android
           rustup default 1.90.0
-      - uses: actions/setup-java@b36c23c0d998641eff861008f374ee103c25ac73 # v4.4.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "17"
