@@ -2,7 +2,31 @@
 
 import type { CSSProperties } from "react";
 
-export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot" | "notifications";
+export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot" | "notifications" | "recordedreplay" | "recordedtactics" | "recordedutility";
+
+type RecordedExample = { asset: string; caption: string; alt: string };
+
+const recordedExamples: Partial<Record<ReleasePreviewKind, RecordedExample>> = {
+    recordedreplay: {
+        asset: "/releases/0.5.33/retake",
+        caption: "Ascent · Round 7 at 0:27 · B-site retake",
+        alt: "Replay Theater showing the planted spike, player positions, and the playback timeline.",
+    },
+    recordedtactics: {
+        asset: "/releases/0.5.33/board",
+        caption: "Ascent · Round 7 at 0:27 · Retake route",
+        alt: "The same B-site retake on the Tactics Board, with an editable route, agent positions, and the spike.",
+    },
+    recordedutility: {
+        asset: "/releases/0.5.33/cloudburst",
+        caption: "Ascent · Round 2 at 5.6s · Cloudburst selected",
+        alt: "Jett’s blue Cloudburst and Clove’s purple Ruse at their recorded locations.",
+    },
+};
+
+export function getRecordedExample(kind: ReleasePreviewKind) {
+    return recordedExamples[kind];
+}
 
 const ROUNDS = ["W", "W", "L", "W", "L", "W", "W"];
 
@@ -11,6 +35,9 @@ const CARD = (id: string) => `url("https://media.valorant-api.com/playercards/${
 
 /** Small drawn previews of each headline feature, built in the app's own style so they never go stale with the art. */
 export default function ReleasePreview({ kind }: { kind: ReleasePreviewKind }) {
+    const example = getRecordedExample(kind);
+    if (example) return <div className="release-notes-example-image" style={{ backgroundImage: "url(" + example.asset + "-preview.webp)" }} />;
+
     if (kind === "insights") return <div className="rn-preview rn-insights">
         <svg viewBox="0 0 120 120" aria-hidden="true">
             <polygon className="rn-grid" points="60,10 103.3,35 103.3,85 60,110 16.7,85 16.7,35" />

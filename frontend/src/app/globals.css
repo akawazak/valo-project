@@ -574,6 +574,58 @@ div#__next>div {
 .release-notes-highlight h3 { margin: 0; font: 700 16px "Segoe UI Variable Display", "Segoe UI", sans-serif; }
 .release-notes-highlight p { margin: 6px 0 0; color: #b9c3cd; font-size: 13px; line-height: 1.45; }
 
+.release-notes-highlight > .release-notes-art-recorded { padding: 12px 12px 4px; mask-image: none; }
+.release-notes-example {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tone) 33%, #222930);
+  border-radius: 8px;
+  background: #101720;
+  cursor: zoom-in;
+}
+.release-notes-example:hover, .release-notes-example:focus-visible { border-color: var(--tone); }
+.release-notes-example:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; }
+.release-notes-example-image { position: absolute; inset: 0; background-position: center; background-size: cover; }
+.release-notes-expand {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border: 1px solid #a8b7ca60;
+  border-radius: 5px;
+  background: #0c111ae8;
+  color: #f2f6fb;
+}
+.release-notes-expand svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.release-notes-viewer {
+  width: min(1040px, calc(100vw - 36px));
+  max-height: calc(100dvh - 36px);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #465666;
+  border-radius: 12px;
+  background: #111922;
+  color: #edf2f6;
+}
+.release-notes-viewer::backdrop { background: #050910c9; }
+.release-notes-viewer header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid #425261; }
+.release-notes-viewer h3 { margin: 0; font-size: 17px; }
+.release-notes-viewer p { margin: 4px 0 0; color: #b3c4cf; font-size: 12px; }
+.release-notes-viewer img { display: block; width: auto; max-width: 100%; height: auto; max-height: calc(100dvh - 126px); margin: auto; }
+.vv-update-mini-scale .release-notes-example-image { inset: 5px; border-radius: 8px; }
+@media (min-width: 761px) and (max-height: 700px) {
+  .release-notes-dialog:has(.release-notes-art-recorded) .release-notes-header { padding-top: 18px; }
+  .release-notes-highlight > .release-notes-art-recorded { height: 130px; }
+  .release-notes-dialog:has(.release-notes-art-recorded) .release-notes-lists { margin-top: 15px; }
+}
+
 /* Smaller changes: two short lists. */
 .release-notes-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 22px; padding-bottom: 6px; }
 .release-notes-list h4 { margin: 0 0 8px; color: #eef1f4; font-size: 14px; font-weight: 600; }
