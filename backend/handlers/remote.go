@@ -908,3 +908,43 @@ func runRiotJSON(method, apiURL string, headers http.Header, body any, result an
 	}
 	return nil
 }
+
+// PreferLiveLocalSession lets the signed-in Riot Client serve a request whose
+// saved remote token has expired when both belong to the same account. The
+// frontend already treats that account as signed in; without this the backend
+// rejected every request and asked for a renewal the user did not need.
+func (h *Handler) PreferLiveLocalSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.liveLocalSessionCovers(r) {
+			for _, name := range []string{"X-Riot-Access-Token", "X-Riot-Entitlements-JWT", "X-Riot-Puuid", "X-Riot-Region"} {
+				r.Header.Del(name)
+			}
+			if selectedAccountPuuid(r) == "" {
+				r.Header.Set("X-Riot-Selected-Puuid", h.localPuuid())
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *Handler) localPuuid() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.Val == nil || h.Val.Player == nil {
+		return ""
+	}
+	return strings.ToLower(h.Val.Player.Uuid)
+}
+
+func (h *Handler) liveLocalSessionCovers(r *http.Request) bool {
+	token := r.Header.Get("X-Riot-Access-Token")
+	puuid := strings.TrimSpace(r.Header.Get("X-Riot-Puuid"))
+	if token == "" || puuid == "" {
+		return false
+	}
+	if expiresAt := jwtNumericClaim(token, "exp"); expiresAt == 0 || time.Now().Unix() < expiresAt {
+		return false
+	}
+	local := h.localPuuid()
+	return local != "" && strings.EqualFold(local, puuid)
+}

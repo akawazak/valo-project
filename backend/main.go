@@ -61,23 +61,12 @@ func runBackend(apiKey string, enableLocalClient bool, configDir string) error {
 			var local *valclient.ValClient
 			failures := 0
 			for {
-				if local == nil {
-					val, err := valclient.NewClient()
-					if err == nil {
-						local = val
-						failures = 0
-						slog.Info("valorant started locally")
-						h.SetLocalClient(val)
-						h.RestartTicker(val)
-					}
-					time.Sleep(10 * time.Second)
-					continue
-				}
-
-				var auth valclient.AuthenticateResponse
-				if err := local.RunLocalRequest(http.MethodGet, "/entitlements/v1/token", nil, &auth); err != nil {
+				// Re-read the lockfile on every probe. Riot can rotate both the
+				// port and password during a restart, including on HTTP 401.
+				fresh, err := discoverLocalClient(local)
+				if err != nil {
 					failures++
-					if failures >= 3 {
+					if local != nil && failures >= 3 {
 						slog.Info("valorant local client disconnected")
 						local.Close()
 						local = nil
@@ -87,16 +76,18 @@ func runBackend(apiKey string, enableLocalClient bool, configDir string) error {
 					}
 				} else {
 					failures = 0
-					if localClientAuthChanged(local, auth) {
-						refreshed := refreshedLocalClient(local, auth)
-						local = refreshed
-						h.SetLocalClient(refreshed)
-						h.RestartTicker(refreshed)
-						slog.Info("valorant local credentials refreshed")
+					if fresh != local {
+						local = fresh
+						h.SetLocalClient(fresh)
+						h.RestartTicker(fresh)
+						slog.Info("valorant local connection ready")
 					}
+					// A dropped event socket must recover even when the tokens
+					// have not changed. Start is idempotent while it is running.
+					h.StartLocalTicker()
 				}
 
-				time.Sleep(10 * time.Second)
+				time.Sleep(3 * time.Second)
 			}
 		}()
 	}
@@ -182,13 +173,17 @@ func runBackend(apiKey string, enableLocalClient bool, configDir string) error {
 	mux.HandleFunc("POST /v1/profile/sync", h.PostProfileSync)
 	mux.HandleFunc("GET /v1/profile/sync-status", h.GetProfileSyncStatus)
 	mux.HandleFunc("GET /v1/profile/leaderboard", h.GetProfileLeaderboard)
+	mux.HandleFunc("GET /v1/replays", h.GetReplays)
+	mux.HandleFunc("GET /v1/replays/{matchId}", h.GetReplay)
+	mux.HandleFunc("POST /v1/replays/{matchId}/import", h.PostReplayImport)
+	mux.HandleFunc("DELETE /v1/replays/{matchId}", h.DeleteReplay)
 
 	slog.Info("starting server")
 	// CORS must handle trusted browser preflights before API authentication:
 	// OPTIONS requests do not include the per-launch key. Actual API requests
 	// still pass through apiKeyMiddleware and require the desktop secret.
 	return serveBackendWithRetry(
-		bootstrapProofHandler(apiKey, corsMiddleware(apiKeyMiddleware(apiKey, mux))),
+		bootstrapProofHandler(apiKey, corsMiddleware(apiKeyMiddleware(apiKey, h.PreferLiveLocalSession(mux)))),
 		backendListenAddress(),
 	)
 }

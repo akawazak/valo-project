@@ -9,11 +9,12 @@ import PresetNameModal from '@/components/PresetNameModal';
 import ErrorModal from '@/components/ErrorModal';
 import Toast from '@/components/Toast';
 import ConfirmationModal from '@/components/ConfirmationModal';
-import { captureAccountRequest, getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
+import { captureAccountRequest, getLocalAccount, getPlayerLoadoutData, getPresets, getProfileOverview, reportAppError } from '@/services/api';
 import { getSettings, saveSettings, type Settings } from '@/services/settings';
 import { AppRequestError, LocalClientError } from '@/lib/errors';
-import { Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
+import { isLockfileAccount, Preset, LoadoutItemV1, RiotAccount } from '@/lib/types';
 import { getStoredAccounts, saveStoredAccounts } from '@/lib/accountStorage';
+import { selectedAccountCanUseLocalClient } from '@/lib/accountSelection';
 import { configureUiSounds, playUiSound } from '@/lib/uiSounds';
 import { isAndroidRuntime } from '@/lib/platform';
 import { queueLabel, useQueues } from '@/lib/gameMeta';
@@ -122,6 +123,7 @@ function HomeApp() {
         isLocalClientActive,
         localPuuid,
         accounts,
+        accountsHydrated,
         activeAccount,
         handleSwitchAccount,
         handleDeleteAccount,
@@ -150,6 +152,8 @@ function HomeApp() {
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
     const [useLocalSso, setUseLocalSso] = useState<boolean | undefined>(undefined);
+    const remoteAccountBeforeLocal = useRef<string | undefined>(undefined);
+    const localAccountReady = selectedAccountCanUseLocalClient(activeAccount?.puuid ?? null, localPuuid, isLocalClientActive);
     const [autoSyncMatches, setAutoSyncMatches] = useState<boolean | undefined>(undefined);
     const [matchRetentionDays, setMatchRetentionDays] = useState<Settings["matchRetentionDays"] | undefined>(undefined);
     const [showOfflineFriends, setShowOfflineFriends] = useState<boolean | undefined>(undefined);
@@ -181,6 +185,38 @@ function HomeApp() {
 
     const notifications = useAppNotifications(activeAccount?.puuid);
     useWishlistWatcher(activeAccount?.puuid, !isLoading);
+
+    useEffect(() => {
+        if (useLocalSso !== undefined) localStorage.setItem("use_local_sso", String(useLocalSso));
+    }, [useLocalSso]);
+
+    useEffect(() => {
+        if (!useLocalSso || !accountsHydrated || !isLocalClientActive || !localPuuid || localAccountReady) return;
+        let cancelled = false;
+        let retry = 0;
+        const shouldActivate = () => !cancelled && localStorage.getItem("use_local_sso") === "true";
+        const connect = async () => {
+            try {
+                const account = await getLocalAccount();
+                if (!shouldActivate()) return;
+                if (account.puuid.toLowerCase() !== localPuuid.toLowerCase()) {
+                    retry = window.setTimeout(connect, 1_500);
+                    return;
+                }
+                await handleAddNewAccount({
+                    puuid: account.puuid, region: account.region, gameName: account.game_name, tagLine: account.tag_line,
+                    authSource: "lockfile", expiresAt: 0, accessToken: "", entitlementsToken: "",
+                }, shouldActivate);
+                if (shouldActivate() && (localStorage.getItem("riot_puuid") || "").toLowerCase() !== localPuuid.toLowerCase()) {
+                    retry = window.setTimeout(connect, 3_000);
+                }
+            } catch {
+                if (shouldActivate()) retry = window.setTimeout(connect, 1_500);
+            }
+        };
+        void connect();
+        return () => { cancelled = true; window.clearTimeout(retry); };
+    }, [useLocalSso, accountsHydrated, isLocalClientActive, localPuuid, localAccountReady, handleAddNewAccount]);
 
     useEffect(() => {
         setProfileTarget(null);
@@ -708,7 +744,7 @@ function HomeApp() {
             setInitialData({ owner: ownerId, playerLoadout, presets: Array.isArray(fetchedPresets) ? fetchedPresets : [], gameMeta, loadoutAvailable, loadoutError });
             setDataRevision(r => r + 1);
             setAutoSelectAgent(settings.autoSelectAgent);
-            setUseLocalSso(settings.useLocalSso);
+            setUseLocalSso(current => current ?? settings.useLocalSso);
             setAutoSyncMatches(settings.autoSyncMatches);
             setMatchRetentionDays(settings.matchRetentionDays);
             setShowOfflineFriends(settings.showOfflineFriends);
@@ -736,7 +772,6 @@ function HomeApp() {
 			setInterfaceTheme(effectiveInterface);
 			setAppearance(effectiveAppearance);
             prevSettingsRef.current = settings;
-            localStorage.setItem("use_local_sso", settings.useLocalSso ? "true" : "false");
             setIsLoading(false);
         } catch (error) {
             if (!isCurrent()) return;
@@ -825,9 +860,20 @@ function HomeApp() {
         };
     }, [activeAccount?.puuid, activeAccount?.region, isClientHealthy]);
 
-    const handleToggleLocalSso = (val: boolean) => {
+    const setConnectionMode = (val: boolean) => {
         setUseLocalSso(val);
         localStorage.setItem("use_local_sso", val ? "true" : "false");
+    };
+
+    const handleToggleLocalSso = (val: boolean) => {
+        if (val === useLocalSso) return;
+        if (val && activeAccount && !isLockfileAccount(activeAccount)) remoteAccountBeforeLocal.current = activeAccount.puuid;
+        setConnectionMode(val);
+        if (!val) {
+            const remote = accounts.find(account => account.puuid === remoteAccountBeforeLocal.current && !isLockfileAccount(account))
+                ?? accounts.find(account => !isLockfileAccount(account));
+            if (remote && remote.puuid !== activeAccount?.puuid) handleSwitchAccount(remote);
+        }
     };
 
     const handleToggleFavorite = (puuid: string) => {
@@ -983,9 +1029,10 @@ function HomeApp() {
             <AppTopbar
                 activeTab={activeTab}
                 onTabChange={selectAppTab}
-                activeAccount={activeAccount}
+                activeAccount={useLocalSso && !localAccountReady ? null : activeAccount}
                 useLocalSso={useLocalSso || false}
                 isLocalClientActive={isLocalClientActive}
+                localAccountPending={Boolean(useLocalSso && isLocalClientActive && !localAccountReady)}
                 isBackendOnline={isBackendOnline}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenAccounts={() => setIsAccountsOpen(true)}
@@ -1146,7 +1193,11 @@ function HomeApp() {
                 onClose={() => setIsAccountsOpen(false)}
                 accounts={accounts.filter(account => !pendingAccountDeletes.some(item => item.puuid === account.puuid))}
                 activeAccount={activeAccount}
-                onSwitchAccount={handleSwitchAccount}
+                onSwitchAccount={(account) => {
+                    setConnectionMode(isLockfileAccount(account)
+                        || Boolean(useLocalSso && selectedAccountCanUseLocalClient(account.puuid, localPuuid, isLocalClientActive)));
+                    handleSwitchAccount(account);
+                }}
                 onRequestDeleteAccount={requestDeleteAccount}
                 onAddAccount={() => {
                     setIsAccountsOpen(false);
@@ -1200,6 +1251,7 @@ function HomeApp() {
                 onAccentThemeChange={setAccentTheme}
                 onInterfaceThemeChange={setInterfaceTheme}
                 isLocalClientActive={isLocalClientActive}
+                localAccountReady={localAccountReady}
                 activeAccount={activeAccount}
                 isAndroid={isAndroid}
                 appVersion={appVersion}
@@ -1224,7 +1276,8 @@ function HomeApp() {
                             setShowAddAccount(false);
                             if (!acc) return;
 
-                            handleAddNewAccount(acc);
+                            setConnectionMode(isLockfileAccount(acc));
+                            void handleAddNewAccount(acc);
                         }}
                         onCancel={() => setShowAddAccount(false)}
                     />
@@ -1241,10 +1294,13 @@ function HomeApp() {
             />
 
             <LocalAccountChooser
-                isOpen={showLocalAccountChooser}
+                isOpen={showLocalAccountChooser && !useLocalSso}
                 pending={pendingLocalAccount}
                 active={activeAccount}
-                onChooseLocal={(useLocal) => handleResolveLocalAccount(useLocal)}
+                onChooseLocal={(useLocal) => {
+                    if (useLocal) setConnectionMode(true);
+                    handleResolveLocalAccount(useLocal);
+                }}
                 onClose={() => handleResolveLocalAccount(false)}
             />
 

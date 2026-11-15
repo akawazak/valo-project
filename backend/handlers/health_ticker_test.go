@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"backend/tick"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +20,8 @@ func TestHealthReturnsWhileRestartedTickerKeepsRunning(t *testing.T) {
 	subscribed := make(chan struct{}, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/help" {
-			_, _ = w.Write([]byte(`{"Events":{},"Functions":{},"Types":{}}`))
+			t.Error("health must not make another local HTTP probe")
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -60,5 +62,20 @@ func TestHealthReturnsWhileRestartedTickerKeepsRunning(t *testing.T) {
 	case <-subscribed:
 	case <-time.After(time.Second):
 		t.Fatal("Health did not start the mock local ticker")
+	}
+}
+
+func TestHealthKeepsBackendOnlineWithoutLocalClient(t *testing.T) {
+	for _, local := range []*valclient.ValClient{nil, {}} {
+		h := NewHandler(local)
+		w := httptest.NewRecorder()
+		h.Health(w, httptest.NewRequest(http.MethodGet, "/v1/health", nil))
+		var health HealthResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &health); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != http.StatusOK || health.Status != "ok" || health.LocalClientActive {
+			t.Fatalf("unexpected health: %s", w.Body.String())
+		}
 	}
 }

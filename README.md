@@ -93,7 +93,7 @@ Most account information works through a connected remote session. Features tied
 | Automatic custom-match preset apply and restore | No | Yes |
 | Wishlist checks | No | While VantaVault and VALORANT are running |
 
-VantaVault never replaces the selected account with data from a different local account. If the remote session and Riot Client account do not match, local fallback is not used.
+Local Client mode follows the account signed into Riot Client. In Remote Accounts mode, local fallback is available when the selected account matches the Riot Client session.
 
 ## Download and installation
 
@@ -129,12 +129,14 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.32
+## What's new in 0.5.33
 
-- A new notification center, Windows alerts for wishlist skins, and startup options.
-- A badge on the account button when a saved account needs a new sign-in.
-- Map Takeaways show where your kills come from.
-- New share cards and an anonymous usage count you can turn off in Settings.
+- Download a replay from VALORANT and play full rounds in Replay Theater.
+- See recorded utility on the map, including smoke coverage and Chamber’s teleport.
+- Use **Plan from here** to turn a replay moment into an editable Tactics Board play.
+- Local Client mode follows the account signed in to Riot Client.
+
+[Read the release notes](.github/release-notes/v0.5.33.md) · [Try a recorded round in your browser](https://vanta-vault-app.vercel.app/#replay)
 
 ## Development
 

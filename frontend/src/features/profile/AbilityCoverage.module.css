@@ -1,0 +1,8 @@
+/* On-map ValoPlant textures shared by the Tactics Board and replay. */
+.texture { background-position: center; background-repeat: no-repeat; background-size: 100% 100%; }
+.texture[data-effect="Dark Cover"] { background-image: url("../../assets/ability-effects/dark-cover.png"); }
+.texture[data-effect="Sky Smoke"] { background-image: url("../../assets/ability-effects/sky-smoke.png"); }
+.texture[data-effect="Ruse"] { background-image: url("../../assets/ability-effects/ruse.webp"); }
+.texture[data-effect="Cloudburst"] { background-image: url("../../assets/ability-effects/cloudburst.png"); }
+.texture[data-effect="Incendiary"] { background-image: url("../../assets/ability-effects/incendiary.png"); }
+.texture[data-effect="Cyber Cage"] { background-image: repeating-radial-gradient(circle, #acdce230 0px 3px, #142f48c9 4px 8px); }

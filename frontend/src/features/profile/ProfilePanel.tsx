@@ -6,7 +6,7 @@ import Image from "next/image";
 import ProfileLoading from "./ProfileLoading";
 import { isProfileSyncReady, loadProfileSnapshot } from "./profileSnapshot";
 import { useData } from "@/context/DataContext";
-import { type AccountXPResponse, type ProfileTeammateStat, type ProfileQueueStat, getProfileMatchDetails, getProfileMatchHistory, getProfileSeasonSummary, getProfileSyncStatus, postProfileSync, fetchCachedPublicJson, type ProfileAgentStatsResponse, type ProfileMapStatsResponse, type ProfileMatchDetails, type ProfileMatchSummary, type ProfileOverview, type ProfileRRHistory, type ProfileSeasonSummary, type ProfileSyncStatus } from "@/services/api";
+import { type AccountXPResponse, type ProfileTeammateStat, type ProfileQueueStat, getProfileMatchDetails, getProfileMatchHistory, getReplays, getProfileSeasonSummary, getProfileSyncStatus, postProfileSync, fetchCachedPublicJson, type ProfileAgentStatsResponse, type ProfileMapStatsResponse, type ProfileMatchDetails, type ProfileMatchSummary, type ProfileOverview, type ProfileRRHistory, type ProfileSeasonSummary, type ProfileSyncStatus } from "@/services/api";
 import { matchModeLabel, useGameModes, useQueues } from "@/lib/gameMeta";
 import RRHistoryChart from "./RRHistoryChart";
 import ProfileBadges from "./ProfileBadges";
@@ -18,6 +18,7 @@ import { FEATURE_FLAGS } from "@/lib/features";
 import s from "./ProfilePanel.module.css";
 import { type AgentMeta, type PublicAgent, type PublicMap, type PublicTierSet, type PublicSeason, type MapMeta, type SeasonMeta, RANK_COLORS, PAGE_SIZES, SEASON_QUEUES, FALLBACK_RANK_ICON, tierLabel, rankIconUrl, orderCandidates, seasonLabel, fmtPct, fmtRatio, isRecent, fmtAgo, dayStart, dayHeadline, dayAgo, kdColor, hsColor, cleanError } from "./profileShared";
 import { MatchRow } from "./MatchRow";
+import { TacticsBoard, tacticsMaps } from "./TacticsBoard";
 
 export { RoundReview } from "./RoundReview";
 export { MatchMapAnalytics } from "./MatchMap";
@@ -228,6 +229,8 @@ export default function ProfilePanel({ onConnectAccount, ownPlayerCardId, reques
     const [loadingDetails, setLoadingDetails] = useState<Set<string>>(new Set());
     const [agents, setAgents] = useState<Record<string, AgentMeta>>({});
     const [maps, setMaps] = useState<Record<string, MapMeta>>({});
+    const [tacticsOpen, setTacticsOpen] = useState(false);
+    const boardMaps = useMemo(() => tacticsMaps(maps), [maps]);
     const [tierAssets, setTierAssets] = useState<Map<number, { smallIcon: string }>>(new Map());
     const [seasons, setSeasons] = useState<Record<string, SeasonMeta>>({});
     const [profileAssetsReady, setProfileAssetsReady] = useState(false);
@@ -355,6 +358,20 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
     }, []);
 
     const opts = useMemo(() => ({ puuid, region }), [puuid, region]);
+    // TEMPORARY: matches with a downloaded VALORANT replay, so they are quick to find while testing.
+    const [replayMatches, setReplayMatches] = useState<ProfileMatchSummary[]>([]);
+    useEffect(() => {
+        if (viewedProfile || !puuid) return;
+        let current = true;
+        void (async () => {
+            const list = await getReplays();
+            const ids = new Set(list.replays.map((replay) => replay.matchId));
+            if (!ids.size) return;
+            const page = await getProfileMatchHistory(0, 400, undefined, opts);
+            if (current) setReplayMatches(page.matches.filter((match) => ids.has(match.matchId.toLowerCase())));
+        })().catch(() => undefined);
+        return () => { current = false; };
+    }, [opts, puuid, viewedProfile]);
     useEffect(() => {
         profileStageRef.current?.closest<HTMLElement>(".app-main-content")?.scrollTo({ top: 0, behavior: "auto" });
     }, [puuid]);
@@ -817,7 +834,9 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     <button className={s.primaryBtn} onClick={onConnectAccount}>
                         Connect Riot Account
                     </button>
+                    {boardMaps.length ? <button type="button" className={s.primaryBtn} onClick={() => setTacticsOpen(true)}>Tactics board</button> : null}
                 </div>
+                {tacticsOpen ? <TacticsBoard maps={boardMaps} agents={agents} onClose={() => setTacticsOpen(false)} /> : null}
             </div>
         );
     }
@@ -948,6 +967,13 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                 <span className={s.railNavText}><strong>Insights</strong><small>{recentForm ? `Last ${recentForm.games}: ${recentForm.wins}W ${recentForm.losses}L${recentForm.rr !== null ? ` · ${recentForm.rr > 0 ? "+" : ""}${recentForm.rr} RR` : ""}` : "Trends from your matches"}</small></span>
                                 <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
                             </button>
+                            {!viewedProfile && boardMaps.length ? <button type="button" onClick={() => setTacticsOpen(true)} aria-haspopup="dialog">
+                                <i className={s.railNavIcon} data-tone="insights">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18l6-6 4 3 6-9M14 6h6v6" /><path d="M4 6h4M6 4v4" /></svg>
+                                </i>
+                                <span className={s.railNavText}><strong>Tactics board</strong><small>Plan plays on real maps</small></span>
+                                <svg className={s.railNavChevron} viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+                            </button> : null}
                             <div className={s.railNavGroup}>
                                 <button type="button" onClick={() => openProgression("missions")} aria-haspopup="dialog">
                                     <i className={s.railNavIcon} data-tone="pass">
@@ -1353,6 +1379,38 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                                         </div>
                                     ) : (
                                         <div className={s.matchList}>
+                                            {replayMatches.length ? (() => {
+                                                const shown = new Set(history.map((match) => match.matchId));
+                                                const extra = replayMatches.filter((match) => !shown.has(match.matchId));
+                                                return extra.length ? <section className={s.matchDayGroup} key="downloaded-replays">
+                                                    <header className={s.matchDayHeader}>
+                                                        <span className={s.matchDayDot} data-tone="even" aria-hidden="true" />
+                                                        <h3 className={s.matchDayTitle}>Downloaded replays</h3>
+                                                        <span className={s.matchDayAgo}>temporary · open Round review</span>
+                                                        <span className={s.matchDayRule} aria-hidden="true" />
+                                                        <small className={s.matchDayRounds}>{extra.length} {extra.length === 1 ? "match" : "matches"}</small>
+                                                    </header>
+                                                    <div className={s.matchDayList}>
+                                                        {extra.map((match) => (
+                                                            <MatchRow
+                                                                key={match.matchId}
+                                                                match={match}
+                                                                detail={details[match.matchId]}
+                                                                expanded={expanded.has(match.matchId)}
+                                                                loading={loadingDetails.has(match.matchId)}
+                                                                agents={agents}
+                                                                maps={maps}
+                                                                weapons={weapons}
+                                                                tierAssets={tierAssets}
+                                                                profilePuuid={puuid}
+                                                                region={region}
+                                                                onToggle={() => toggleDetails(match.matchId)}
+                                                                onViewProfile={viewProfile}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                </section> : null;
+                                            })() : null}
                                             {historyGroups.map((group) => (
                                                 <section className={s.matchDayGroup} key={`day-${group.key}`}>
                                                     <header className={s.matchDayHeader}>
@@ -1456,6 +1514,7 @@ fetchCachedPublicJson<{ data?: PublicSeason[] }>("https://valorant-api.com/v1/se
                     ...[...profileSnapshotCache.values()].filter(cached => !knownComparisonIds.has(cached.overview.puuid.toLowerCase())).map(cached => ({ puuid: cached.overview.puuid, gameName: cached.overview.gameName || "Player", tagLine: cached.overview.tagLine || "" })),
                 ].filter(player => player.puuid && player.puuid.toLowerCase() !== puuid.toLowerCase()).map(player => [player.puuid.toLowerCase(), player])).values()])}
             />
+            {tacticsOpen ? <TacticsBoard maps={boardMaps} agents={agents} onClose={() => setTacticsOpen(false)} /> : null}
         </div>
         </div>
         {showProfileFacade && (

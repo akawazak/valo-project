@@ -1,0 +1,128 @@
+/* Full-round replay: shared by the Round review panel and the big replay view.
+   Mint is your team, amber the enemy, white is you (no red for data). */
+.layer {
+    --ally: #34e3b8;
+    --enemy: #ffb03a;
+    --token: 22px;
+    --you: 28px;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+.layer[data-size="theater"] { --token: calc(32px / var(--z, 1)); --you: calc(38px / var(--z, 1)); }
+
+.svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* Vision: VALORANT's 103° field of view, about 14 m long. Flat tint with a crisp edge so it reads at a glance. */
+.cone { --c: var(--enemy); fill: color-mix(in srgb, var(--c) 17%, transparent); stroke: color-mix(in srgb, var(--c) 55%, transparent); stroke-width: 0.12; stroke-linejoin: round; transition: fill 0.2s ease; }
+.cone[data-side="ally"] { --c: var(--ally); }
+.cone[data-you] { --c: #fff; fill: rgba(255, 255, 255, 0.2); }
+.layer[data-focus] .cone { fill: color-mix(in srgb, var(--c) 7%, transparent); stroke: color-mix(in srgb, var(--c) 22%, transparent); }
+.layer[data-focus] .cone[data-focus] { fill: color-mix(in srgb, var(--c) 30%, transparent); stroke: var(--c); stroke-width: 0.2; }
+
+.shot { stroke: var(--enemy); stroke-width: 0.45; stroke-linecap: round; }
+.shot[data-side="ally"] { stroke: var(--ally); }
+.layer[data-size="theater"] .shot { stroke-width: 0.32; }
+
+.smoke {
+    --smoke-rim: #c6a6ff;
+    position: absolute;
+    z-index: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background-color: #6143ae99;
+    box-shadow: inset 0 0 0 calc(1.5px / var(--z, 1)) var(--smoke-rim);
+}
+.smoke[data-effect="Sky Smoke"] { background-color: #9a7547b3; }
+.smoke[data-effect="Ruse"] { background-color: #ad76b5a6; }
+.smoke[data-effect="Cloudburst"] { background-color: #91b3cbd9; }
+.smoke[data-effect="Cyber Cage"] { background-color: #548693bb; }
+.smoke[data-side="ally"] { --smoke-rim: #77f5d6; }
+.smoke[data-side="enemy"] { --smoke-rim: #ffd084; }
+.smoke[data-selected] { --smoke-rim: #f1e5ff; }
+.utilityPoint[data-effect], .track > button[data-kind="utility"] { --effect-color: #b49dff; }
+.utilityPoint[data-effect="molly"], .track > button[data-effect="molly"] { --effect-color: #ff885e; }
+.utilityPoint[data-effect="slow"], .track > button[data-effect="slow"] { --effect-color: #7bddfd; }
+.utilityPoint[data-effect="flash"], .track > button[data-effect="flash"] { --effect-color: #ffe694; }
+.utilityPoint[data-effect="impact"], .track > button[data-effect="impact"] { --effect-color: #f394a6; }
+.utilityPoint[data-effect="teleport"], .track > button[data-effect="teleport"] { --effect-color: #77ead4; }
+.utilityPoint {
+    fill: var(--effect-color);
+    stroke: #151922;
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+}
+.utilityPoint[data-side="ally"] { stroke: #54ebc0; }
+.utilityPoint[data-side="enemy"] { stroke: #ffc46f; }
+.teleportLine { stroke: #9fffe8; stroke-width: 0.52; stroke-dasharray: 1.25 0.6; }
+.teleportOrigin { fill: #152626; stroke: #9fffe8; stroke-width: 0.27; }
+
+.token {
+    --c: var(--enemy);
+    position: absolute;
+    z-index: 3;
+    width: var(--token);
+    height: var(--token);
+    border-radius: 30%;
+    background: #20262e center / cover;
+    box-shadow: 0 0 0 2px #0b0e12, 0 0 0 3.5px var(--c), 0 4px 12px rgba(0, 0, 0, 0.55);
+    transform: translate(-50%, -50%);
+}
+.token[data-side="ally"] { --c: var(--ally); }
+.token[data-you] { --c: #fff; z-index: 5; width: var(--you); height: var(--you); }
+.token[data-hot], .token[data-focus] { z-index: 6; box-shadow: 0 0 0 2px #0b0e12, 0 0 0 4.5px var(--c), 0 4px 14px rgba(0, 0, 0, 0.6); }
+.layer[data-focus] .token:not([data-focus]):not([data-dead]) { opacity: 0.55; }
+.token[data-dead] { z-index: 1; width: calc(var(--token) * 0.68); height: calc(var(--token) * 0.68); box-shadow: 0 0 0 2px #0b0e12; filter: grayscale(1) brightness(0.5); }
+.token[data-dead]::after { content: ""; position: absolute; inset: 18%; background: linear-gradient(45deg, transparent 43%, #fff 43%, #fff 57%, transparent 57%), linear-gradient(-45deg, transparent 43%, #fff 43%, #fff 57%, transparent 57%); }
+.token b { position: absolute; left: 50%; top: calc(100% + 5px); padding: 1px 6px; border-radius: 5px; background: rgba(6, 11, 15, 0.9); color: #fff; font: 700 10.5px/1.35 "Segoe UI", sans-serif; white-space: nowrap; transform: translateX(-50%); }
+.layer[data-size="theater"] .token b { top: calc(100% + 5px / var(--z, 1)); padding: 0 calc(6px / var(--z, 1)); border-radius: calc(5px / var(--z, 1)); font-size: calc(11.5px / var(--z, 1)); }
+.layer[data-size="theater"] .token { box-shadow: 0 0 0 calc(2px / var(--z, 1)) #0b0e12, 0 0 0 calc(3.5px / var(--z, 1)) var(--c); }
+.layer[data-size="theater"] .token[data-dead] { box-shadow: 0 0 0 calc(2px / var(--z, 1)) #0b0e12; }
+.token[data-side="ally"] b { color: color-mix(in srgb, var(--ally) 30%, #fff); }
+
+.spike { position: absolute; z-index: 2; width: 14px; height: 14px; border: 2px solid #0b0e12; border-radius: 3px; background: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); transform: translate(-50%, -50%) rotate(45deg); }
+.layer[data-size="theater"] .spike { width: calc(18px / var(--z, 1)); height: calc(18px / var(--z, 1)); border-width: calc(2px / var(--z, 1)); }
+
+/* Expand button on the Round review map */
+.expand { position: absolute; right: 2px; top: 2px; z-index: 7; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 9px; background: rgba(8, 11, 15, 0.82); color: #fff; cursor: pointer; backdrop-filter: blur(8px); }
+.expand:hover { background: rgba(255, 255, 255, 0.12); }
+.expand svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Timeline */
+.timeline { --ally: #34e3b8; --enemy: #ffb03a; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.timeline[data-compact] { padding: 0 14px 12px; }
+.play { display: grid; flex: none; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 11px; background: var(--ally); color: #062a20; cursor: pointer; }
+.timeline[data-compact] .play { width: 32px; height: 32px; border-radius: 9px; }
+.play svg { width: 18px; height: 18px; fill: currentColor; }
+.speed { flex: none; min-width: 40px; height: 32px; padding: 0 8px; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 9px; background: rgba(255, 255, 255, 0.05); color: #fff; font: 700 12.5px "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; cursor: pointer; }
+.speed:hover { background: rgba(255, 255, 255, 0.1); }
+.track { position: relative; flex: 1; min-width: 0; height: 30px; cursor: pointer; touch-action: none; }
+.track:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.6); outline-offset: 3px; border-radius: 6px; }
+.track::before { content: ""; position: absolute; left: 0; right: 0; top: 13px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); }
+.buy { position: absolute; left: 0; top: 13px; height: 4px; border-radius: 2px 0 0 2px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.16) 0 3px, transparent 3px 6px); }
+.progress { position: absolute; left: 0; top: 13px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, rgba(255, 255, 255, 0.3), #fff); }
+.thumb { position: absolute; top: 8px; width: 14px; height: 14px; border: 3px solid #fff; border-radius: 50%; background: #0b0e12; transform: translateX(-50%); pointer-events: none; }
+.track > button { position: absolute; top: 9px; width: 12px; height: 12px; padding: 0; border: 2px solid #0b0e12; border-radius: 50%; background: var(--enemy); transform: translateX(-50%); cursor: pointer; }
+.track > button[data-side="ally"] { background: var(--ally); }
+.track > button[data-kind="plant"], .track > button[data-kind="defuse"] { border-radius: 2px; background: #fff; transform: translateX(-50%) rotate(45deg); }
+.track > button[data-kind="smoke"] { top: 0; width: 10px; height: 10px; background: #c6a6ff; }
+.track > button[data-kind="utility"] { top: 0; width: 9px; height: 9px; border-radius: 2px; background: var(--effect-color); }
+.track > button:not([data-past]) { opacity: 0.55; }
+.track > button[data-active] { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); opacity: 1; }
+.clock { flex: none; min-width: 66px; color: #fff; font: 650 13px "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; text-align: right; }
+
+@media (prefers-reduced-motion: reduce) { .cone { transition: none; } }
+.layer[data-size="theater"] .token[data-hot], .layer[data-size="theater"] .token[data-focus] { box-shadow: 0 0 0 calc(2px / var(--z, 1)) #0b0e12, 0 0 0 calc(4.5px / var(--z, 1)) var(--c); }
+.skip { flex: none; height: 32px; padding: 0 11px; border: 1px solid color-mix(in srgb, var(--ally) 45%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--ally) 12%, transparent); color: var(--ally); font: 700 12px "Segoe UI", sans-serif; white-space: nowrap; cursor: pointer; }
+.skip:hover { background: color-mix(in srgb, var(--ally) 22%, transparent); }
+
+.smokeRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 14px 12px; color: #e0d3f7; font: 600 12px "Segoe UI", sans-serif; }
+.smokeTimes { display: flex; flex-wrap: wrap; gap: 5px; }
+.smokeTimes button { border: 1px solid #7157a0; border-radius: 6px; background: #2b203d; color: #f0e7ff; padding: 3px 8px; font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
+.smokeTimes button:hover, .smokeTimes button[data-active] { border-color: #d0b3ff; background: #493266; }
+.utilityRow { display: flex; gap: 6px; padding: 2px 1px 6px; overflow-x: auto; }
+.utilityRow button { flex: none; padding: 4px 8px; border: 1px solid #423654; border-radius: 6px; background: #1b1725; color: #eee5fc; font: 600 11px/1.4 "Segoe UI", sans-serif; white-space: nowrap; cursor: pointer; }
+.utilityRow button[aria-pressed="true"] { border-color: #bd9cf4; background: #38294c; }
+.utilityRow time { margin-right: 3px; color: #c5a9ec; font-variant-numeric: tabular-nums; }
+.smokeRow small { color: #c1b0d9; font-size: inherit; }

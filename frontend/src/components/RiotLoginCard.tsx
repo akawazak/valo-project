@@ -28,28 +28,66 @@ type Stage = "start" | "paste";
  * login because DataContext.startLoginFlow() will reject with an error.
  */
 export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCardProps) {
-    const { startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight } = useData();
+    const { startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight, isBackendOnline, isLocalClientActive, localPuuid } = useData();
 
     const [stage, setStage] = useState<Stage>("start");
     const [pastedUrl, setPastedUrl] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [localAccount, setLocalAccount] = useState<{ puuid: string; region: string; game_name: string; tag_line: string } | null>(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
+    const [connectingLocal, setConnectingLocal] = useState(false);
     const [phase, setPhase] = useState<"idle" | "opening" | "completing" | "persisting">("idle");
 
     // Belt-and-braces: track our OWN start to detect stale state where the
     // context has cleared `loginInFlight` but our local state hasn't caught up.
     const startedRef = useRef(false);
+    const localAttemptRef = useRef(0);
+    useEffect(() => () => { localAttemptRef.current++; }, []);
 
     useEffect(() => {
-        api.getLocalAccount()
-            .then((data) => {
-                if (data && data.puuid) {
-                    setLocalAccount(data);
-                }
-            })
-            .catch(() => {});
-    }, []);
+        let cancelled = false;
+        let retryTimer = 0;
+        setLocalAccount(null);
+        if (!isBackendOnline || !isLocalClientActive || !localPuuid) return;
+        const discover = async () => {
+            try {
+                const data = await api.getLocalAccount();
+                if (!cancelled && data.puuid.toLowerCase() === localPuuid.toLowerCase()) setLocalAccount(data);
+            } catch {
+                if (!cancelled) retryTimer = window.setTimeout(() => { void discover(); }, 3_000);
+            }
+        };
+        void discover();
+        return () => { cancelled = true; window.clearTimeout(retryTimer); };
+    }, [isBackendOnline, isLocalClientActive, localPuuid]);
+
+    async function handleLocalLogin() {
+        if (!localAccount || connectingLocal || loginInFlight || startedRef.current) return;
+        const attempt = ++localAttemptRef.current;
+        setConnectingLocal(true);
+        setError(null);
+        try {
+            const current = await api.getLocalAccount();
+            if (localAttemptRef.current !== attempt) return;
+            if (current.puuid.toLowerCase() !== localAccount.puuid.toLowerCase()) {
+                setLocalAccount(current);
+                throw new Error("The Riot Client account changed. Choose the current account to connect.");
+            }
+            const account: RiotAccount = {
+                puuid: current.puuid, region: current.region,
+                gameName: current.game_name, tagLine: current.tag_line,
+                accessToken: "", entitlementsToken: "", expiresAt: 0, authSource: "lockfile",
+            };
+            localStorage.setItem("use_local_sso", "true");
+            onLoginSuccess(account);
+        } catch (error) {
+            if (localAttemptRef.current === attempt) setError(error instanceof Error && error.message.startsWith("The Riot Client account changed")
+                ? error.message
+                : "The local Riot account could not connect. Check that VALORANT is signed in, then try again.");
+        } finally {
+            setConnectingLocal(false);
+        }
+    }
 
     // Drive the phase label from context state + an internal timer so the UI
     // tells the user what's happening even when the work is in C++ land.
@@ -74,7 +112,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
     }, [loginInFlight]);
 
     async function handleStartLogin() {
-        if (loginInFlight || startedRef.current) return;        // hard gate
+        if (connectingLocal || loginInFlight || startedRef.current) return;        // hard gate
         startedRef.current = true;
         setError(null);
         try {
@@ -128,9 +166,10 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
         }
     }
 
-    const isBusy = Boolean(loginInFlight) || startedRef.current;
+    const isBusy = Boolean(loginInFlight) || startedRef.current || connectingLocal;
 
     function handleCancel() {
+        localAttemptRef.current++;
         if (loginInFlight) {
             cancelLoginFlow();
         }
@@ -147,7 +186,7 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
             {/* Full-card loading overlay — shown while ANY part of the
                 login chain is in flight. The user can see exactly what is
                 happening and can still press Cancel to abort. */}
-            {isBusy && (
+            {isBusy && !connectingLocal && (
                 <div className="login-busy-overlay" role="status" aria-live="polite">
                     <div className="login-busy-card clip-tactical-sm">
                         <div className="login-busy-spinner" aria-hidden="true">
@@ -197,30 +236,14 @@ export default function RiotLoginCard({ onLoginSuccess, onCancel }: RiotLoginCar
                                 <button
                                     type="button"
                                     className="btn-tactical btn-tactical-success w-100"
-                                    onClick={() => {
-                                        const newAccount: RiotAccount = {
-                                            puuid: localAccount.puuid,
-                                            accessToken: "",
-                                            entitlementsToken: "",
-                                            expiresAt: 0,
-                                            region: localAccount.region,
-                                            gameName: localAccount.game_name,
-                                            tagLine: localAccount.tag_line,
-                                        };
-                                        // Mark this as a local-only account so
-                                        // fetchWithAuth won't try to send OAuth
-                                        // headers for it.
-                                        newAccount.sessionId = `session_${newAccount.puuid}`;
-                                        localStorage.setItem('use_local_sso', 'true');
-                                        api.activateAccount(newAccount);
-                                        onLoginSuccess(newAccount);
-                                    }}
+                                    onClick={handleLocalLogin}
+                                    disabled={isBusy}
                                 >
                                     <span className="btn-inner">
                                         <svg viewBox="0 0 24 24" className="btn-icon" fill="currentColor">
                                             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                                         </svg>
-                                        PLAY AS {localAccount.game_name.toUpperCase()}#{localAccount.tag_line.toUpperCase()}
+                                        {connectingLocal ? "CONNECTING…" : `PLAY AS ${localAccount.game_name.toUpperCase()}#${localAccount.tag_line.toUpperCase()}`}
                                     </span>
                                 </button>
                             ) : null}

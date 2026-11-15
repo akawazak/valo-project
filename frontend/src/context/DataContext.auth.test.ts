@@ -108,6 +108,21 @@ afterEach(async () => {
 });
 
 describe('saved account session migration', () => {
+    it('keeps a manually chosen local account temporary without inventing an OAuth session', async () => {
+        mocks.accounts = [];
+        const data = captureProvider();
+        await data.handleAddNewAccount({ puuid: 'local-a', gameName: 'Local', tagLine: 'TEST', region: 'eu', accessToken: '', entitlementsToken: '', authSource: 'lockfile', expiresAt: 0 });
+        expect(mocks.accounts).toEqual([expect.objectContaining({ authSource: 'lockfile', sessionId: undefined, ssid: undefined })]);
+        expect(mocks.activate).toHaveBeenCalledWith(mocks.accounts[0]);
+    });
+
+    it('preserves an existing renewable login when choosing the same account locally', async () => {
+        const data = captureProvider();
+        await data.handleAddNewAccount({ ...renewalAccount, accessToken: '', entitlementsToken: '', sessionId: undefined, ssid: undefined, authSource: 'lockfile', expiresAt: 0 });
+        expect(mocks.accounts).toEqual([renewalAccount]);
+        expect(mocks.activate).toHaveBeenCalledWith(renewalAccount);
+    });
+
     it('waits for migrated metadata to persist before reporting readiness', async () => {
         mocks.accounts = [{ ...renewalAccount, sessionId: undefined }];
         const saving = deferred<void>();

@@ -14,6 +14,7 @@ interface AppTopbarProps {
     activeAccount: RiotAccount | null;
     useLocalSso: boolean;
     isLocalClientActive: boolean;
+    localAccountPending?: boolean;
     isBackendOnline?: boolean;
     onOpenSettings: () => void;
     onOpenAccounts: () => void;
@@ -36,6 +37,7 @@ export default function AppTopbar({
     activeAccount,
     useLocalSso,
     isLocalClientActive,
+    localAccountPending = false,
     isBackendOnline = true,
     onOpenSettings,
     onOpenAccounts,
@@ -135,12 +137,12 @@ export default function AppTopbar({
                         <div className="profile-pill-info">
                             <span className="profile-pill-name">
                                 {useLocalSso
-                                    ? isLocalClientActive
+                                    ? localAccountPending ? "Connecting…" : isLocalClientActive
                                         ? activeAccount ? accountLabel(activeAccount) : "Local Client"
                                         : "Waiting for Client"
                                     : activeAccount ? accountLabel(activeAccount) : "Connect Account"}
                             </span>
-                            <span className={`profile-status-indicator ${useLocalSso ? isLocalClientActive ? "online" : "waiting" : activeAccount ? "online" : "offline"}`} />
+                            <span className={`profile-status-indicator ${useLocalSso ? isLocalClientActive && !localAccountPending ? "online" : "waiting" : activeAccount ? "online" : "offline"}`} />
                         </div>
                     </button>
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "VantaVault",
-  "version": "0.5.32",
+  "version": "0.5.33",
   "identifier": "com.akawazak.valovault",
   "build": {
     "frontendDist": "../out",
@@ -37,8 +37,10 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "externalBin": [
-      "binaries/valovault-backend"
+      "binaries/valovault-backend",
+      "binaries/vrfkit"
     ],
+    "resources": ["licenses/*"],
     "targets": ["nsis"],
     "windows": {
       "nsis": {

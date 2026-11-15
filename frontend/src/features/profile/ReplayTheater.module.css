@@ -1,0 +1,145 @@
+/* The big replay view: over the whole app, the map splash behind glass. Mint you team, amber enemy. */
+.root {
+    --ally: #34e3b8;
+    --enemy: #ffb03a;
+    --ink: #eef1f4;
+    --dim: #8e99a5;
+    --glass: rgba(9, 12, 16, 0.8);
+    --line: rgba(255, 255, 255, 0.09);
+    position: fixed;
+    inset: 0;
+    z-index: 1300;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 14px 18px 12px;
+    color: var(--ink);
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    background: #07090c;
+    outline: none;
+    isolation: isolate;
+}
+.root::before { content: ""; position: absolute; inset: 0; z-index: -2; background: var(--rt-map) center / cover; filter: saturate(1.15); }
+.root::after { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(ellipse at center, rgba(7, 9, 12, 0.72), rgba(7, 9, 12, 0.94) 70%); backdrop-filter: blur(6px); }
+
+/* Top bar */
+.top { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.title { display: grid; flex: none; gap: 1px; }
+.title small { color: var(--dim); font-size: 12px; font-weight: 600; }
+.title h2 { margin: 0; font: 800 22px/1.15 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+.title h2 span { color: var(--enemy); font-size: 16px; font-weight: 700; }
+.title h2 span[data-win] { color: var(--ally); }
+.title h2 em { margin-left: 10px; color: var(--dim); font-size: 15px; font-style: normal; font-weight: 650; font-variant-numeric: tabular-nums; }
+.rounds { display: flex; flex: 1; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.rounds button { position: relative; display: grid; flex: none; place-items: center; width: 40px; height: 42px; padding: 11px 0 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: rgba(10, 13, 17, 0.85); color: #fff; font: 700 13px "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; cursor: pointer; }
+.rounds button i { position: absolute; left: 0; right: 0; top: 0; height: 12px; background: var(--enemy); color: #2a1a04; font: 800 9px/12px "Segoe UI", sans-serif; font-style: normal; clip-path: polygon(0 0, 100% 0, 88% 100%, 0 100%); }
+.rounds button[data-win] i { background: var(--ally); color: #062a20; }
+.rounds button[aria-pressed="true"] { border-color: #fff; box-shadow: 0 0 0 1px #fff; }
+.rounds button:hover { background: rgba(255, 255, 255, 0.08); }
+.toggles { display: flex; flex: none; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: var(--glass); }
+.toggles button { height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--dim); font: 650 12.5px "Segoe UI", sans-serif; cursor: pointer; }
+.toggles button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.close { display: grid; flex: none; place-items: center; width: 38px; height: 38px; padding: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--glass); color: #fff; cursor: pointer; }
+.close:hover { background: rgba(255, 255, 255, 0.12); }
+.close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+
+/* Body: rosters either side, the map as large as fits */
+.body { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr) minmax(220px, 290px); gap: 14px; min-height: 0; }
+.side { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.stage { display: grid; place-items: center; min-width: 0; min-height: 0; }
+.board { position: relative; height: 100%; max-width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 14px; touch-action: none; }
+.board[data-zoomed] { cursor: grab; }
+.board[data-zoomed]:active { cursor: grabbing; }
+.zoom { position: absolute; inset: 0; transform-origin: 0 0; }
+.zoomControls { position: absolute; right: 8px; bottom: 8px; z-index: 8; display: flex; flex-direction: column; gap: 4px; }
+.zoomControls button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: rgba(8, 11, 15, 0.86); color: #fff; font: 700 16px/1 "Segoe UI", sans-serif; cursor: pointer; backdrop-filter: blur(8px); }
+.zoomControls button:last-child:not(:nth-child(-n+2)) { font-size: 11px; }
+.zoomControls button:disabled { opacity: 0.35; cursor: default; }
+.zoomControls button:not(:disabled):hover { background: rgba(255, 255, 255, 0.12); }
+.mapImage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0.85; user-select: none; -webkit-user-drag: none; }
+.callout { position: absolute; z-index: 1; color: rgba(230, 236, 242, 0.62); font: 700 calc(10px / var(--z, 1))/1 "Segoe UI", sans-serif; letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; transform: translate(-50%, -50%); pointer-events: none; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+
+.team, .moments { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--glass); backdrop-filter: blur(14px); }
+.team { --c: var(--enemy); flex: none; border-color: color-mix(in srgb, var(--c) 26%, var(--line)); }
+.team[data-side="ally"] { --c: var(--ally); }
+.team header, .moments header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.team header strong, .moments header strong { font-size: 13px; font-weight: 700; }
+.team header span { color: var(--c); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.moments header span { color: var(--dim); font-size: 12px; }
+.team ul, .moments ol { margin: 0; padding: 4px; list-style: none; }
+.team li button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 9px; background: none; color: inherit; text-align: left; cursor: pointer; }
+.team li button:hover, .team li button[data-focus] { background: color-mix(in srgb, var(--c) 13%, transparent); }
+.team li button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--c); }
+.team li i { flex: none; width: 34px; height: 34px; border-radius: 30%; background: #20262e center / cover; box-shadow: 0 0 0 2px #0b0e12, 0 0 0 3.5px var(--c); }
+.team li span { display: grid; flex: 1; min-width: 0; }
+.team li b { overflow: hidden; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.team li small { color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.team li em { flex: none; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); font: 750 12px "Segoe UI", sans-serif; font-style: normal; font-variant-numeric: tabular-nums; }
+.team li button[data-dead] i { filter: grayscale(1) brightness(0.5); box-shadow: 0 0 0 2px #0b0e12, 0 0 0 3.5px rgba(255, 255, 255, 0.18); }
+.team li button[data-dead] b { color: var(--dim); }
+/* What they are holding: the gun's silhouette, or the ability icon. */
+.held { flex: none; width: 22px; height: 22px; object-fit: contain; opacity: 0.9; user-select: none; }
+.held[data-gun] { width: 64px; height: 20px; }
+
+.moments { flex: 1; }
+.moments ol { overflow-y: auto; scrollbar-width: thin; }
+.moments li button { --c: var(--enemy); display: grid; grid-template-columns: 34px 24px auto 24px minmax(0, 1fr); align-items: center; gap: 6px; width: 100%; padding: 5px 8px; border: 0; border-radius: 8px; background: none; color: inherit; text-align: left; cursor: pointer; opacity: 0.45; }
+.moments li button[data-side="ally"] { --c: var(--ally); }
+.moments li button[data-kind="plant"], .moments li button[data-kind="defuse"] { --c: #fff; }
+.moments li button[data-kind="smoke"] { --c: #c6a6ff; grid-template-columns: 44px 10px minmax(0, 1fr); }
+.moments li button[data-kind="smoke"]:not([data-past]) { opacity: 0.8; }
+.moments li button[data-kind="utility"] { grid-template-columns: 44px 10px minmax(0, 1fr); }
+.moments li button[data-kind="utility"]:not([data-past]) { opacity: 0.8; }
+.smokeDot { width: 8px; height: 8px; border: 1px solid var(--c); border-radius: 50%; background: #6143ae; }
+.moments li button[data-past] { opacity: 1; }
+.moments li button[data-active] { background: color-mix(in srgb, var(--c) 15%, transparent); box-shadow: inset 2px 0 0 var(--c); }
+.moments li button:hover { background: rgba(255, 255, 255, 0.06); }
+.moments time { color: var(--dim); font: 650 11.5px "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+.moments i { width: 24px; height: 24px; border-radius: 30%; background: #20262e center / cover; box-shadow: 0 0 0 1.5px #0b0e12, 0 0 0 3px var(--c); }
+.moments i[data-victim] { filter: grayscale(0.7) brightness(0.8); box-shadow: 0 0 0 1.5px #0b0e12, 0 0 0 3px rgba(255, 255, 255, 0.2); }
+.moments svg { width: 14px; height: 14px; fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.objective { grid-column: span 2; color: var(--c); font-size: 10.5px; font-weight: 750; text-transform: uppercase; letter-spacing: 0.04em; }
+.who { display: grid; min-width: 0; line-height: 1.25; }
+.who b, .who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who b { color: var(--ink); font-size: 12px; font-weight: 650; }
+.who small { color: var(--dim); font-size: 11px; }
+.moments li button[data-kind="smoke"] .who { display: grid; }
+.moments li button[data-kind="utility"] .who { display: grid; }
+.smokeDot[data-effect="molly"] { background: #ff885e; }
+.smokeDot[data-effect="slow"] { background: #7bddfd; }
+.smokeDot[data-effect="flash"] { background: #ffe694; }
+.smokeDot[data-effect="impact"] { background: #f394a6; }
+.smokeDot[data-effect="teleport"] { background: #77ead4; }
+.moments li button[data-kind="smoke"] .who small { white-space: normal; }
+.smokeComparison { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 8px; color: #d7c5fb; font-size: 12px; }
+.smokeComparison strong { font-weight: 650; }
+.smokeComparison time { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.smokeComparison span { color: var(--dim); }
+.smokeComparison button { border: 1px solid #7157a0; border-radius: 6px; background: #2b203d; color: #f0e7ff; padding: 4px 8px; font: inherit; cursor: pointer; }
+.smokeComparison button:hover { border-color: #d0b3ff; background: #493266; }
+
+/* Bottom: the timeline */
+.bottom { display: grid; gap: 4px; padding: 10px 14px 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--glass); backdrop-filter: blur(14px); }
+.next { flex: none; height: 32px; padding: 0 12px; border: 1px solid color-mix(in srgb, var(--ally) 50%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--ally) 14%, transparent); color: var(--ally); font: 700 12.5px "Segoe UI", sans-serif; cursor: pointer; }
+.plan { flex: none; min-height: 32px; padding: 0 10px; border: 1px solid #5c4d81; border-radius: 8px; background: #252039; color: #e9dbff; font: 700 12px "Segoe UI", sans-serif; cursor: pointer; }
+.plan:hover { border-color: #ab94dd; }
+.keys { margin: 0; color: rgba(142, 153, 165, 0.75); font-size: 11px; text-align: center; }
+
+.loading { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--dim); font-size: 13px; grid-row: 2 / 4; }
+.loading span { width: 16px; height: 16px; border: 2px solid rgba(255, 255, 255, 0.18); border-top-color: var(--ally); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Smaller windows: rosters shrink, then stack under the map. */
+@media (max-width: 1200px) {
+    .body { grid-template-columns: minmax(190px, 230px) minmax(0, 1fr) minmax(190px, 230px); }
+    .moments li button { grid-template-columns: 32px 22px auto 22px; }
+    .who { display: none; }
+    .toggles button { padding: 0 9px; }
+}
+@media (max-width: 900px) {
+    .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(300px, 1fr) auto; overflow-y: auto; }
+    .stage { grid-row: 1; }
+    .side { display: grid; grid-template-columns: 1fr 1fr; }
+    .rounds { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .loading span { animation: none; } }

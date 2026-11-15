@@ -14,12 +14,11 @@ type HealthResponse struct {
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	h.mu.RLock()
 	val := h.Val
-	ticker := h.Ticker
 	h.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if val == nil {
+	if val == nil || val.Player == nil {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(HealthResponse{
 			Status:            "ok",
@@ -28,20 +27,10 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := val.GetHelp(); err != nil {
-		if ticker != nil {
-			ticker.Stop()
-		}
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(HealthResponse{
-			Status:            "error",
-			LocalClientActive: false,
-		})
-		return
-	}
-	if ticker != nil {
-		ticker.Start()
-	}
+	// The connection monitor owns liveness and its transient-failure grace
+	// period. Health must stay fast and must not turn a Riot outage into a
+	// backend outage (or mutate the shared client's lockfile credentials).
+	h.StartLocalTicker()
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(HealthResponse{
 		Status:            "ok",

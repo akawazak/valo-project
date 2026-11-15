@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+
+	"github.com/truearken/valclient/valclient"
 )
 
 func (h *Handler) GetAccounts(w http.ResponseWriter, r *http.Request) {
@@ -60,21 +63,39 @@ func (h *Handler) GetLocalAccount(w http.ResponseWriter, r *http.Request) {
 	val := h.Val
 	h.mu.RUnlock()
 
-	if val == nil {
+	if val == nil || val.Player == nil || val.Local == nil {
 		h.returnError(w, fmt.Errorf("local Valorant client is not running"))
 		return
 	}
 
-	names, err := val.GetNames([]string{val.Player.Uuid})
-	if err != nil || len(names) == 0 {
-		h.returnError(w, fmt.Errorf("failed to get local player details: %v", err))
+	result := LocalAccountResponse{
+		Puuid:  val.Player.Uuid,
+		Region: string(val.Region),
+	}
+	var session struct {
+		Puuid    string `json:"puuid"`
+		GameName string `json:"game_name"`
+		TagLine  string `json:"game_tag"`
+	}
+	local := *val.Local
+	// RunLocalRequest may refresh lockfile fields. Use a private snapshot.
+	probe := &valclient.ValClient{Local: &local}
+	if err := probe.RunLocalRequest(http.MethodGet, "/chat/v1/session", nil, &session); err == nil {
+		if session.Puuid != "" && !strings.EqualFold(session.Puuid, result.Puuid) {
+			http.Error(w, "Riot Client is switching accounts", http.StatusConflict)
+			return
+		}
+		if strings.EqualFold(session.Puuid, result.Puuid) && session.GameName != "" && session.TagLine != "" {
+			result.GameName, result.TagLine = session.GameName, session.TagLine
+			h.returnAny(w, result)
+			return
+		}
+	}
+	names, err := val.GetNames([]string{result.Puuid})
+	if err != nil || len(names) == 0 || names[0] == nil {
+		h.returnError(w, errors.New("local Riot account details are still loading"))
 		return
 	}
-
-	h.returnAny(w, &LocalAccountResponse{
-		Puuid:    val.Player.Uuid,
-		Region:   string(val.Region),
-		GameName: names[0].GameName,
-		TagLine:  names[0].TagLine,
-	})
+	result.GameName, result.TagLine = names[0].GameName, names[0].TagLine
+	h.returnAny(w, result)
 }

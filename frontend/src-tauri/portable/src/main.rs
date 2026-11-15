@@ -19,6 +19,7 @@ use std::{
 
 const APP: &[u8] = include_bytes!(env!("VV_APP_EXE"));
 const BACKEND: &[u8] = include_bytes!(env!("VV_BACKEND_EXE"));
+const REPLAY_PARSER: &[u8] = include_bytes!(env!("VV_REPLAY_EXE"));
 const VERSION: &str = env!("VV_VERSION");
 const BACKEND_TRIPLE_NAME: &str = "valovault-backend-x86_64-pc-windows-msvc.exe";
 const DEFAULT_PORTABLE_UPDATE_ENDPOINT: &str =
@@ -420,6 +421,7 @@ fn run_app() -> Result<(), String> {
     write_if_changed(&dir.join("valovault-backend.exe"), BACKEND)
         .map_err(|error| error.to_string())?;
     write_if_changed(&dir.join(BACKEND_TRIPLE_NAME), BACKEND).map_err(|error| error.to_string())?;
+    write_if_changed(&dir.join("vrfkit.exe"), REPLAY_PARSER).map_err(|error| error.to_string())?;
 
     let launcher_path = env::current_exe().map_err(|error| error.to_string())?;
     Command::new(app)

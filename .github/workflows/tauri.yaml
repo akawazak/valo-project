@@ -200,6 +200,9 @@ jobs:
           if (!$appExe) { throw "Portable app executable not found." }
           $env:VV_APP_EXE = $appExe.FullName
           $env:VV_BACKEND_EXE = $builtSidecar.FullName
+          $replayParser = Get-Item "$binariesDir/vrfkit-x86_64-pc-windows-msvc.exe" -ErrorAction SilentlyContinue
+          if (!$replayParser) { throw "Replay parser sidecar not found in $binariesDir." }
+          $env:VV_REPLAY_EXE = $replayParser.FullName
           $env:VV_VERSION = $version
           $previousRustFlags = $env:RUSTFLAGS
           $env:RUSTFLAGS = (($previousRustFlags, "-C target-feature=+crt-static") | Where-Object { ![string]::IsNullOrWhiteSpace($_) }) -join " "

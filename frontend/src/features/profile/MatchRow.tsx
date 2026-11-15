@@ -528,6 +528,7 @@ export function MatchRow({
                                     <RoundReview
                                         detail={loadedAnalytics ?? detail}
                                         map={mapMeta}
+                                        maps={maps}
                                         agents={agents}
                                         weapons={weapons}
                                         initialRoundNum={reviewFight?.roundNum}

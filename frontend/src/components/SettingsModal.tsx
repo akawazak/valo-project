@@ -84,6 +84,7 @@ interface SettingsModalProps {
     
     // Client health & active info
     isLocalClientActive: boolean;
+    localAccountReady: boolean;
     activeAccount: RiotAccount | null;
     isAndroid: boolean;
 
@@ -161,6 +162,7 @@ export default function SettingsModal({
     onAccentThemeChange,
     onInterfaceThemeChange,
     isLocalClientActive,
+    localAccountReady,
     activeAccount,
     isAndroid,
     appVersion,
@@ -847,7 +849,7 @@ export default function SettingsModal({
                                         {isAndroid ? "Android uses remote Riot accounts; local PC detection stays in the Windows app." : "Choose how VantaVault authenticates with Riot."}
                                     </div>
                                 </div>
-                                <div className={`conn-live-dot ${useLocalSso ? (isLocalClientActive ? 'dot-green' : 'dot-amber') : 'dot-blue'}`} />
+                                <div className={`conn-live-dot ${useLocalSso ? (localAccountReady ? 'dot-green' : 'dot-amber') : 'dot-blue'}`} />
                             </div>
 
                             <div className="connection-mode-picker">
@@ -880,17 +882,17 @@ export default function SettingsModal({
                                         </svg>
                                     </span>
                                     <span className="conn-mode-label">Local Client</span>
-                                    <span className="conn-mode-desc">Auto-detect Valorant</span>
+                                    <span className="conn-mode-desc">Follow your Riot Client account</span>
                                 </button>}
                             </div>
 
                             {!isAndroid && useLocalSso && (
-                                <div className={`connection-status-row ${isLocalClientActive ? 'status-online' : 'status-offline'}`}>
+                                <div role="status" className={`connection-status-row ${localAccountReady ? 'status-online' : 'status-offline'}`}>
                                     <span className="status-indicator-dot" />
                                     <span className="status-text">
-                                        {isLocalClientActive
+                                        {localAccountReady
                                             ? `Connected · ${activeAccount ? `${activeAccount.gameName}#${activeAccount.tagLine}` : 'Local Account'}`
-                                            : 'Waiting for Valorant to launch…'
+                                            : isLocalClientActive ? 'Connecting to the Riot Client account…' : 'Waiting for Riot Client sign-in…'
                                         }
                                     </span>
                                 </div>

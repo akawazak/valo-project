@@ -353,7 +353,8 @@ interface DataContextType {
     setIsTokenExpired: (expired: boolean) => void;
     handleSwitchAccount: (acc: RiotAccount) => void;
     handleDeleteAccount: (puuid: string) => Promise<void>;
-    handleAddNewAccount: (acc: RiotAccount) => Promise<void>;
+    handleAddNewAccount: (acc: RiotAccount, shouldActivate?: () => boolean) => Promise<void>;
+    accountsHydrated: boolean;
     refreshAccountsList: () => void;
     refreshAccountToken: (acc: RiotAccount, visible?: boolean, allowPopup?: boolean) => Promise<boolean>;
     cancelAccountRefresh: (acc: RiotAccount) => void;
@@ -784,20 +785,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
-    const handleAddNewAccount = useCallback(async (acc: RiotAccount) => {
+    const handleAddNewAccount = useCallback(async (acc: RiotAccount, shouldActivate?: () => boolean) => {
         // Keep the exact user-data folder created by the successful login.
         const stored = getStoredAccounts();
-        const existing = stored.find((account) => account.puuid === acc.puuid);
-        const stableAcc: RiotAccount = {
-            ...existing,
-            ...acc,
-            authSource: "oauth",
-            sessionId: acc.sessionId || existing?.sessionId || `session_${acc.puuid}`,
-            ssid: hasSsidCookie(acc.ssid)
-                ? acc.ssid
-                : existing && !accountRequiresManualRepair(existing) ? existing.ssid : undefined,
-        };
-        const updated = stored.filter(a => a.puuid !== stableAcc.puuid);
+        const existing = stored.find((account) => account.puuid.toLowerCase() === acc.puuid.toLowerCase());
+        // Using the running game must never turn a temporary local row
+        // into a saved OAuth login, or erase a real saved login for it.
+        let stableAcc: RiotAccount;
+        if (isLockfileAccount(acc)) {
+            stableAcc = existing && !isLockfileAccount(existing)
+                ? { ...existing, gameName: acc.gameName, tagLine: acc.tagLine, region: acc.region }
+                : { ...acc, authSource: "lockfile", sessionId: undefined, ssid: undefined };
+        } else {
+            stableAcc = {
+                ...existing,
+                ...acc,
+                authSource: "oauth",
+                sessionId: acc.sessionId || existing?.sessionId || `session_${acc.puuid}`,
+                ssid: hasSsidCookie(acc.ssid)
+                    ? acc.ssid
+                    : existing && !accountRequiresManualRepair(existing) ? existing.ssid : undefined,
+            };
+        }
+        const updated = stored.filter(a => a.puuid.toLowerCase() !== stableAcc.puuid.toLowerCase());
         updated.unshift(stableAcc);
         try {
             await saveStoredAccounts(updated);
@@ -811,6 +821,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 reportAppError("The old Riot login session could not be removed. Retry from Account Manager.");
             });
         }
+        if (shouldActivate && !shouldActivate()) return;
+        setPendingLocalAccount(null);
         activateAccount(stableAcc);
         setActiveAccount(stableAcc);
         setIsTokenExpired(false);
@@ -1592,7 +1604,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const autoImportedLocalRef = useRef<string>("");
     useEffect(() => {
         if (isAndroidRuntime()) return;
-        if (!accountsHydrated) return;
+        if (!accountsHydrated || localStorage.getItem("use_local_sso") === "true") return;
         if (!isLocalClientActive || !localPuuid) {
             autoImportedLocalRef.current = "";
             return;
@@ -1627,51 +1639,60 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         // No saved accounts yet — fetch the first account from the local client.
         let cancelled = false;
-        autoImportedLocalRef.current = localPuuid; // mark before async to avoid double-calls
-        getLocalAccount().then(async data => {
-            if (cancelled || !data?.puuid || data.puuid.toLowerCase() !== localPuuid.toLowerCase()) return;
-            const newAcc: RiotAccount = {
-                puuid: data.puuid,
-                accessToken: "",
-                entitlementsToken: "",
-                authSource: "lockfile",
-                expiresAt: 0,
-                region: data.region,
-                gameName: data.game_name,
-                tagLine: data.tag_line,
-            };
-            const current = getStoredAccounts();
-            const deduped = current.filter(a => a.puuid !== newAcc.puuid);
-            deduped.unshift(newAcc);
-            // Keep the discovered account in memory, but don't auto-activate when a remote SSO
-            // session or different active account exists — show chooser instead.
-            await saveStoredAccounts(deduped);
-            if (cancelled) return;
-            setAccounts(deduped);
+        let retryTimer = 0;
+        const discover = () => {
+            void getLocalAccount().then(async data => {
+                if (cancelled || !data?.puuid || data.puuid.toLowerCase() !== localPuuid.toLowerCase()) return;
+                const newAcc: RiotAccount = {
+                    puuid: data.puuid,
+                    accessToken: "",
+                    entitlementsToken: "",
+                    authSource: "lockfile",
+                    expiresAt: 0,
+                    region: data.region,
+                    gameName: data.game_name,
+                    tagLine: data.tag_line,
+                };
+                const current = getStoredAccounts();
+                // A manual login may have completed while discovery was pending.
+                if (current.length > 0) return;
+                const deduped = current.filter(a => a.puuid !== newAcc.puuid);
+                deduped.unshift(newAcc);
+                // Keep the discovered account in memory, but don't auto-activate when a remote SSO
+                // session or different active account exists — show chooser instead.
+                await saveStoredAccounts(deduped);
+                if (cancelled) return;
+                autoImportedLocalRef.current = localPuuid;
+                setAccounts(deduped);
 
-            const currentPuuid = localStorage.getItem("riot_puuid");
+                const currentPuuid = localStorage.getItem("riot_puuid");
 
-            if (shouldOfferLocalAccount(
-                currentPuuid,
-                newAcc.puuid,
-                localStorage.getItem(DISMISSED_LOCAL_ACCOUNT_KEY),
-            )) {
-                setPendingLocalAccount(newAcc);
-            } else {
-                // A discovered local account can remain available this session without
-                // replacing a deliberate selection or reopening a dismissed prompt.
-                if (!currentPuuid) {
-                    activateAccount(newAcc);
-                    setActiveAccount(newAcc);
-                    setIsTokenExpired(false);
-                    setStorefrontRefreshKey(k => k + 1);
+                if (shouldOfferLocalAccount(
+                    currentPuuid,
+                    newAcc.puuid,
+                    localStorage.getItem(DISMISSED_LOCAL_ACCOUNT_KEY),
+                )) {
+                    setPendingLocalAccount(newAcc);
+                } else {
+                    // A discovered local account can remain available this session without
+                    // replacing a deliberate selection or reopening a dismissed prompt.
+                    if (!currentPuuid) {
+                        activateAccount(newAcc);
+                        setActiveAccount(newAcc);
+                        setIsTokenExpired(false);
+                        setStorefrontRefreshKey(k => k + 1);
+                    }
                 }
-            }
-        }).catch(() => {
-            reportAppError("The local Riot account could not be stored securely.");
-        });
+            }).catch(() => {
+                // Riot may expose entitlements before name lookup is ready. Keep
+                // trying without requiring a client restart or another login.
+                if (!cancelled) retryTimer = window.setTimeout(discover, 3_000);
+            });
+        };
+        discover();
         return () => {
             cancelled = true;
+            window.clearTimeout(retryTimer);
             autoImportedLocalRef.current = "";
         };
     }, [accountsHydrated, isLocalClientActive, localPuuid]);
@@ -1682,6 +1703,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         if (isAndroidRuntime()) return;
         if (!accountsHydrated || !isBackendOnline) return;
+        let cancelled = false;
 
         const removeStaleLocalAccounts = async (currentLocalPuuid: string) => {
             const stored = getStoredAccounts();
@@ -1698,6 +1720,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     // sessions. Their chat/cache cleanup is best-effort and must
                     // not prevent the ephemeral row from disappearing.
                     await clearChatHistory(undefined, account.puuid).catch(() => undefined);
+                    if (cancelled) return;
                     deleteAccountScopedCaches(account.puuid);
                 }
                 updated = getStoredAccounts().filter((account) => !stalePuuids.has(account.puuid.toLowerCase()));
@@ -1706,6 +1729,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                 reportAppError("The signed-out local account could not be removed from the account list.");
                 return;
             }
+            if (cancelled) return;
             setAccounts(updated);
             setPendingLocalAccount((current) =>
                 current && stalePuuids.has(current.puuid.toLowerCase()) ? null : current
@@ -1730,20 +1754,27 @@ export function DataProvider({ children }: { children: ReactNode }) {
         };
 
         if (isLocalClientActive && localPuuid) {
-            void removeStaleLocalAccounts(localPuuid.toLowerCase());
-            return;
+            // The UI health snapshot may still name the previous account
+            // immediately after a successful local login. Confirm the current
+            // backend identity before deleting any newly connected local row.
+            void getHealth().then((health) => {
+                if (!cancelled && health.online && health.localClientActive && health.localPuuid) {
+                    void removeStaleLocalAccounts(health.localPuuid.toLowerCase());
+                }
+            });
+            return () => { cancelled = true; };
         }
 
         // A single negative health poll can happen while the backend is still
         // attaching to Riot. Confirm once more before deleting the local row.
         const confirmationTimer = window.setTimeout(() => {
             void getHealth().then((health) => {
-                if (health.online && !health.localClientActive) {
+                if (!cancelled && health.online && !health.localClientActive) {
                     void removeStaleLocalAccounts("");
                 }
             });
         }, 5_000);
-        return () => window.clearTimeout(confirmationTimer);
+        return () => { cancelled = true; window.clearTimeout(confirmationTimer); };
     }, [accountsHydrated, activeAccount, isBackendOnline, isLocalClientActive, localPuuid]);
 
     const handleResolveLocalAccount = useCallback((useLocal: boolean) => {
@@ -1774,7 +1805,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             setLocalPuuid(android ? "" : health.localPuuid);
 
             const selectedPuuid = localStorage.getItem("riot_puuid");
-            const hasRemoteSession = hasActiveRemoteAuth();
+            const hasRemoteSession = localStorage.getItem("use_local_sso") !== "true" && hasActiveRemoteAuth();
             const hasMatchingLocalSession = !android
                 && health.online
                 && selectedAccountCanUseLocalClient(selectedPuuid, health.localPuuid, health.localClientActive);
@@ -1811,7 +1842,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         <DataContext.Provider value={{
             agents: hasCurrentInventory ? agents : [], allAgents, ownedAgentIDs: hasCurrentInventory ? ownedAgentIDs : [], weapons, ownedBuddies: hasCurrentInventory ? ownedBuddies : [], allBuddies, contentTiers, ownedLevelIDs: hasCurrentInventory ? ownedLevelIDs : [], ownedChromaIDs: hasCurrentInventory ? ownedChromaIDs : [], ownedBuddyIDs: hasCurrentInventory ? ownedBuddyIDs : [], bundles, loading, isClientHealthy, isBackendOnline, isLocalClientActive, localPuuid, refreshLoadout,
             sprays, flexes, playerCards, playerTitles, ownedSprayIDs: hasCurrentInventory ? ownedSprayIDs : [], ownedCardIDs: hasCurrentInventory ? ownedCardIDs : [], ownedTitleIDs: hasCurrentInventory ? ownedTitleIDs : [], playerSpraySlots: hasCurrentInventory ? playerSpraySlots : [],
-            accounts, activeAccount, isTokenExpired, setIsTokenExpired,
+            accounts, accountsHydrated, activeAccount, isTokenExpired, setIsTokenExpired,
             handleSwitchAccount, handleDeleteAccount, handleAddNewAccount, refreshAccountsList, refreshAccountToken, cancelAccountRefresh,
             startLoginFlow, finalizePastedLogin, cancelLoginFlow, loginInFlight,
             storefrontRefreshKey,

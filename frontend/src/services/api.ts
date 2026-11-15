@@ -172,7 +172,8 @@ async function fetchWithAuth(
     }
     if (typeof window !== "undefined") {
         const android = isAndroidRuntime();
-        if (options.forceRemoteAuth || android) {
+        const useLocalClient = !android && localStorage.getItem("use_local_sso") === "true";
+        if (options.forceRemoteAuth || android || useLocalClient) {
             const selectedPuuid = localStorage.getItem("riot_puuid")?.trim();
             if (selectedPuuid && !headers.has("X-Riot-Selected-Puuid")) headers.set("X-Riot-Selected-Puuid", selectedPuuid);
         }
@@ -181,6 +182,9 @@ async function fetchWithAuth(
         if (activeRemoteAccount) {
             if (!headers.has("X-Riot-Selected-Puuid")) headers.set("X-Riot-Selected-Puuid", activeRemoteAccount.puuid);
             if (!headers.has("X-Riot-Region")) headers.set("X-Riot-Region", activeRemoteAccount.region);
+        }
+        if (useLocalClient && headers.has("X-Riot-Selected-Puuid")) {
+            headers.set("X-VantaVault-Local-Client", "1");
         }
     }
     // Capture before IPC/import awaits. An old response must not expire the
@@ -2101,4 +2105,96 @@ export async function clearChatHistory(conversationKey?: string, accountPuuid?: 
 
 export async function subscribeChatEvents(onChat: () => void, signal: AbortSignal): Promise<void> {
     return subscribeEventStream('/chat/events', new Set(['ready', 'chat']), onChat, signal);
+}
+
+// Round replays (PC only): .vrf files VALORANT saves when "Download replay" is pressed.
+export type ReplayStatus = "new" | "processing" | "ready" | "failed";
+
+export interface ReplayListEntry {
+    matchId: string;
+    sizeBytes: number;
+    modifiedAt: number;
+    inGame: boolean;
+    saved: boolean;
+    status: ReplayStatus;
+    error?: string;
+}
+
+export interface ReplayList {
+    folderFound: boolean;
+    parserReady: boolean;
+    savedBytes: number;
+    replays: ReplayListEntry[];
+}
+
+export interface ReplayTrack {
+    subject: string;
+    /** Flattened [x, y, yaw] per frame in game units; yaw -1 means not seen yet. */
+    samples: number[];
+    /** Milliseconds after the barrier drop, or -1 when the player survived. */
+    deathMs: number;
+    /** What they switched to in their hands and when: "gun:<weapon id>", "ability:<slot>", "melee", "spike", "defuser". */
+    held?: Array<{ ms: number; item: string }>;
+}
+
+export interface ReplayRound {
+    index: number;
+    buyMs: number;
+    startMs: number;
+    endMs: number;
+    /** First frame, relative to the barrier drop. */
+    frameMs: number;
+    frames: number;
+    tracks?: ReplayTrack[];
+    /** Dark Cover zones with observed start and end, relative to the barrier drop. */
+    smokes?: Array<{ subject?: string; startMs: number; endMs: number; x: number; y: number }>;
+    utility?: ReplayUtility[];
+}
+
+export interface ReplayUtility {
+    name: string;
+    kind: "molly" | "slow" | "smoke" | "flash" | "device" | "teleport" | "impact";
+    subject?: string;
+    startMs: number;
+    endMs?: number;
+    x: number;
+    y: number;
+    origin?: { x: number; y: number };
+}
+
+export interface ReplaySummary {
+    version: number;
+    matchId: string;
+    build: string;
+    durationMs: number;
+    subjects: string[];
+    rounds: ReplayRound[];
+}
+
+export const REPLAY_FRAME_MS = 125;
+
+async function replayRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetchWithAuth(`${LOCAL_URL}/replays${path}`, init);
+    if (!response.ok) throw await requestErrorFromResponse(response, "VV-REPLAY", "The replay could not be loaded.");
+    return response.json();
+}
+
+export function getReplays(): Promise<ReplayList> {
+    return replayRequest("");
+}
+
+export function importReplay(matchId: string): Promise<{ status: ReplayStatus }> {
+    return replayRequest(`/${encodeURIComponent(matchId)}/import`, { method: "POST" });
+}
+
+export function getReplaySummary(matchId: string): Promise<ReplaySummary> {
+    return replayRequest(`/${encodeURIComponent(matchId)}`);
+}
+
+export function getReplayRound(matchId: string, round: number): Promise<ReplayRound> {
+    return replayRequest(`/${encodeURIComponent(matchId)}?round=${round}`);
+}
+
+export function deleteReplay(matchId: string): Promise<{ deleted: boolean }> {
+    return replayRequest(`/${encodeURIComponent(matchId)}`, { method: "DELETE" });
 }

@@ -106,6 +106,61 @@ fn watch_backend_sources(directory: &Path) -> Option<SystemTime> {
     newest_change
 }
 
+// vrfkit (Apache-2.0) reads VALORANT .vrf replays for the round replay
+// player. It ships as a second sidecar, built once from a pinned commit.
+const VRFKIT_GIT: &str = "https://github.com/SunkenInTime/vrfkit";
+const VRFKIT_REV: &str = "4dfdd2137808b5a0cc6c35d7d0e178ec421b4110";
+
+fn ensure_replay_parser(project_dir: &Path, target_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=VANTAVAULT_VRFKIT_EXE");
+    let binary_path = target_dir.join("vrfkit-x86_64-pc-windows-msvc.exe");
+    let stamp_path = target_dir.join("vrfkit.rev");
+    let current = binary_path.exists()
+        && fs::read_to_string(&stamp_path).is_ok_and(|rev| rev.trim() == VRFKIT_REV);
+    if current {
+        return;
+    }
+    if let Ok(prebuilt) = std::env::var("VANTAVAULT_VRFKIT_EXE") {
+        fs::copy(&prebuilt, &binary_path).expect("failed to copy VANTAVAULT_VRFKIT_EXE");
+        fs::write(&stamp_path, VRFKIT_REV).expect("failed to record the replay parser revision");
+        return;
+    }
+
+    println!("cargo:warning=Building the replay parser (vrfkit) once; this takes a few minutes...");
+    let install_root = project_dir.join("target").join("vrfkit");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut command = Command::new(cargo);
+    command.args([
+        "install",
+        "vrfkit",
+        "--git",
+        VRFKIT_GIT,
+        "--rev",
+        VRFKIT_REV,
+        "--locked",
+        "--force",
+        "--root",
+        install_root.to_str().unwrap(),
+    ]);
+    // A nested cargo must not inherit this build's target or flags.
+    for (name, _) in std::env::vars() {
+        if (name.starts_with("CARGO_") && name != "CARGO_HOME")
+            || name == "RUSTFLAGS"
+            || name == "TARGET"
+        {
+            command.env_remove(name);
+        }
+    }
+    command.env("RUSTFLAGS", "-C target-feature=+crt-static");
+    let status = command.status();
+    if status.is_err() || !status.unwrap().success() {
+        panic!("failed to build the replay parser (vrfkit)");
+    }
+    fs::copy(install_root.join("bin").join("vrfkit.exe"), &binary_path)
+        .expect("failed to place the replay parser sidecar");
+    fs::write(&stamp_path, VRFKIT_REV).expect("failed to record the replay parser revision");
+}
+
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "android" {
@@ -167,6 +222,10 @@ fn main() {
         }
         let _ = fs::remove_file(&binary_path);
         fs::rename(&temp_binary_path, &binary_path).expect("failed to replace Go backend sidecar");
+    }
+
+    if target_os == "windows" {
+        ensure_replay_parser(project_dir, &target_dir);
     }
 
     tauri_build::build()

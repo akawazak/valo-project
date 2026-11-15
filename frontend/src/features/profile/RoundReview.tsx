@@ -4,13 +4,20 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import Image from "next/image";
 import rr from "./RoundReview.module.css";
 import type { Weapon } from "@/lib/types";
-import { type ProfileMatchDetails } from "@/services/api";
+import { type ProfileMatchDetails, type ReplayRound, type ReplaySummary } from "@/services/api";
+import { FullRoundReplay, type ReplayHeldLabel } from "./FullRoundReplay";
+import { ReplayTheater } from "./ReplayTheater";
+import { useMatchReplay } from "./useMatchReplay";
 import s from "./ProfilePanel.module.css";
 import { type AgentMeta, type MapMeta, mapCalloutLabel, mapCalloutPlotPosition, fmtLength, ROUND_CEREMONIES, statCount, type MatchKillEvent, fightEventKey, riotAbilitySlotKey } from "./profileShared";
+
+// Riot's knife: the "melee" a replay records when a player has it out.
+const KNIFE_WEAPON_ID = "2f59173c-4bed-b6c3-2191-dea9b58be9c7";
 
 export function RoundReview({
     detail,
     map,
+    maps,
     agents,
     weapons,
     initialRoundNum,
@@ -18,6 +25,7 @@ export function RoundReview({
 }: {
     detail: ProfileMatchDetails;
     map?: MapMeta;
+    maps?: Record<string, MapMeta>;
     agents: Record<string, AgentMeta>;
     weapons: Weapon[];
     initialRoundNum?: number;
@@ -31,8 +39,26 @@ export function RoundReview({
     // Which feed moment the map replays. It belongs to one round; another round starts at its first kill.
     const [moment, setMoment] = useState<{ round: number; id: string } | null>(null);
     const [replaying, setReplaying] = useState(false);
+    const fullReplay = useMatchReplay(detail.matchId);
+    const [loadedReplay, setLoadedReplay] = useState<{ summary: ReplaySummary; index: number; round: ReplayRound | null } | null>(null);
+    const [theater, setTheater] = useState<{ index: number; time: number } | null>(null);
     const weaponById = useMemo(() => new Map(weapons.map((weapon) => [weapon.uuid.toLowerCase(), weapon])), [weapons]);
     const selectedRound = rounds.find((round) => round.roundNum === selectedRoundNum) || rounds[0];
+    const replaySummary = fullReplay.state.phase === "ready" ? fullReplay.state.summary : null;
+    const replayRoundIndex = selectedRound ? rounds.indexOf(selectedRound) : -1;
+    const { loadRound } = fullReplay;
+    const requestedRound = loadedReplay?.summary === replaySummary && loadedReplay.index === replayRoundIndex ? loadedReplay : null;
+    const fullRound = requestedRound?.round;
+    useEffect(() => {
+        if (!replaySummary || replayRoundIndex < 0 || replayRoundIndex >= replaySummary.rounds.length) return;
+        let current = true;
+        const finish = (round: ReplayRound | null) => {
+            if (current) setLoadedReplay({ summary: replaySummary, index: replayRoundIndex, round });
+        };
+        void loadRound(replayRoundIndex).then(finish, () => finish(null));
+        return () => { current = false; };
+    }, [loadRound, replayRoundIndex, replaySummary]);
+
     const selectedStat = selectedRound?.playerStats?.find((stat) => stat.subject.toLowerCase() === localSubject);
     const selectedKills = (detail.kills || []).filter((event) => event.roundNum === selectedRound?.roundNum);
     const localKills = selectedKills.filter((event) => event.killer.toLowerCase() === localSubject);
@@ -359,6 +385,21 @@ export function RoundReview({
     })();
     const playerName = (subject?: string) => !subject ? "Unknown player" : subject === localSubject ? "You" : playerBySubject.get(subject)?.gameName || "Player";
     const agentIcon = (subject?: string) => agents[playerBySubject.get(subject || "")?.characterId.toLowerCase() || ""]?.icon;
+    const heldLabel = (subject: string, item: string): ReplayHeldLabel | undefined => {
+        if (item.startsWith("gun:")) {
+            const gun = weaponById.get(item.slice(4));
+            return gun ? { name: gun.displayName, icon: gun.displayIcon, gun: true } : undefined;
+        }
+        if (item.startsWith("ability:")) {
+            const ability = agents[playerBySubject.get(subject)?.characterId.toLowerCase() || ""]?.abilities?.[item.slice(8)];
+            return { name: ability?.name || "Ability", icon: ability?.icon || undefined, gun: false };
+        }
+        if (item === "melee") {
+            const knife = weaponById.get(KNIFE_WEAPON_ID);
+            return { name: "Knife", icon: knife?.displayIcon, gun: true };
+        }
+        return { name: item === "spike" ? "Spike" : "Defuser kit", gun: false };
+    };
     const selectedSignals = selectedFact ? [
         selectedFact.openingResult === "won" ? { tone: "good", label: "Opening kill" } : selectedFact.openingResult === "lost" ? { tone: "danger", label: "First death" } : null,
         selectedFact.kills.length >= 2 ? { tone: "good", label: `${selectedFact.kills.length}K multi-kill` } : null,
@@ -391,7 +432,8 @@ export function RoundReview({
 
     const activeMomentId = moment?.round === selectedRound?.roundNum && roundFeed.some((item) => item.id === moment.id)
         ? moment.id
-        : roundFeed.find((item) => item.kind === "kill")?.id ?? null;
+        // The full replay highlights what has happened by its clock, so nothing before the first event.
+        : fullRound?.tracks?.length && canPlot ? null : roundFeed.find((item) => item.kind === "kill")?.id ?? null;
     const activeMomentIndex = roundFeed.findIndex((item) => item.id === activeMomentId);
     const pickMoment = useCallback((id: string) => {
         if (selectedRound) setMoment({ round: selectedRound.roundNum, id });
@@ -403,7 +445,6 @@ export function RoundReview({
         return () => window.clearTimeout(timer);
     }, [replaying, activeMomentIndex, roundFeed, pickMoment]);
     useEffect(() => { setReplaying(false); }, [selectedRoundNum]);
-
     if (!rounds.length) return <div className={s.mapAnalyticsEmpty}><strong>Round evidence is not cached yet.</strong><span>Open this view while connected to refresh the match details.</span></div>;
 
     const round = selectedRound!;
@@ -439,19 +480,8 @@ export function RoundReview({
     // Deathmatch and other modes without rounds come back as one long round: skip the round tools for them.
     const singleRound = rounds.length <= 1;
 
-    return <section className={rr.root} style={map?.splash ? { "--rr-map": `url("${map.splash}")` } as CSSProperties : undefined}>
-        {reviewInsights.length && !singleRound ? <div className={rr.review} aria-label="Match review">
-            {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={`${insight.tip}${insight.evidence ? `\n${insight.evidence}` : ""}`}>
-                <svg viewBox="0 0 40 40" aria-hidden="true">
-                    <circle cx="20" cy="20" r="16" />
-                    {insight.ratio !== undefined ? <circle cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.max(1, Math.round(insight.ratio * 100))} 100`} transform="rotate(-90 20 20)" /> : null}
-                </svg>
-                <span><small>{insight.label}</small><b>{insight.value}</b></span>
-            </article>)}
-        </div> : null}
-        {!hasDetailedRounds && !singleRound ? <p className={rr.note}>Objective timeline only. Buys and damage need a refresh while connected.</p> : null}
-
-        {!singleRound ? <div className={rr.rounds} role="group" aria-label="Rounds">
+    const roundPicker = (
+        !singleRound ? <div className={rr.rounds} role="group" aria-label="Rounds">
             {halves.map((half) => <div key={half.key} className={rr.half} data-side={half.side} style={{ flexGrow: half.facts.length }}>
                 <span className={rr.halfLabel}>{half.label}</span>
                 <div>{half.facts.map((fact) => <button
@@ -469,41 +499,96 @@ export function RoundReview({
                 </button>)}</div>
             </div>)}
             {finalFact ? <div className={rr.final} title="Final score"><b>{finalFact.yourScore}</b><span>–</span><b data-them>{finalFact.enemyScore}</b></div> : null}
-        </div> : null}
-
-        <div className={rr.hero} data-win={(!singleRound && roundWon) || undefined}>
-            {yourAgent?.full ? <Image className={rr.agent} src={yourAgent.full} alt="" width={290} height={290} unoptimized /> : null}
-            <div className={rr.title}>
-                {singleRound ? <>
-                    <h3>Whole match</h3>
-                    <p>No rounds in this mode, so every fight is in one timeline</p>
-                </> : <>
-                <h3>Round {round.roundNum + 1} <em>· {roundWon ? "won" : "lost"}</em></h3>
-                <p>{outcome ? <>{outcome}{outcomeTime}</> : "Round recorded"}{selectedFact ? <> · score {selectedFact.yourScore}–{selectedFact.enemyScore}</> : null}{roundTags.map((tag) => <b key={tag}> · {tag}</b>)}</p>
-                </>}
+        </div> : null
+    );
+    const mapBackdrop = <>
+        {map?.displayIcon ? <Image className={rr.mapImage} src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="560px" unoptimized /> : null}
+        {canPlot && map!.callouts.map((callout, index) => {
+            const { left, top } = mapCalloutPlotPosition(map!, callout);
+            return <span key={`${callout.superRegion}-${callout.name}-${index}`} className={rr.callout} style={{ left: `${left * 100}%`, top: `${top * 100}%` }} aria-hidden="true">{mapCalloutLabel(callout)}</span>;
+        })}
+    </>;
+    const showFullRound = Boolean(canPlot && fullRound?.tracks?.length);
+    const isImporting = fullReplay.state.phase === "processing";
+    const isReplayLoading = canPlot && (isImporting || fullReplay.state.phase === "checking"
+        || Boolean(replaySummary && replayRoundIndex >= 0 && replayRoundIndex < replaySummary.rounds.length && !requestedRound));
+    const replayStatus = (() => {
+        const state = fullReplay.state;
+        if (state.phase === "off" || state.phase === "checking" || (state.phase === "ready" && showFullRound)) return null;
+        if (state.phase === "ready" && requestedRound?.round === null) return <p className={rr.replayStatus} data-tone="weak">This round could not be loaded.<button type="button" onClick={() => void fullReplay.check()}>Try again</button></p>;
+        if (state.phase === "ready") return <p className={rr.replayStatus}>The saved replay does not include this round.</p>;
+        if (state.phase === "processing") return null;
+        if (state.phase === "failed") return <p className={rr.replayStatus} data-tone="weak">{state.error}<button type="button" onClick={() => void fullReplay.check()}>Try again</button></p>;
+        return <p className={rr.replayStatus}>
+            <span title="In VALORANT, open this match in Career and press Download replay. VantaVault reads it from your replay folder.">Every player, all round: press <b>Download replay</b> in VALORANT</span>
+            <button type="button" onClick={() => void fullReplay.check()}>Check again</button>
+        </p>;
+    })();
+    const replayMoments = roundFeed.map((item) => ({
+        id: item.id,
+        time: item.time,
+        kind: item.kind,
+        ally: item.ally,
+        actor: item.actor,
+        target: item.target,
+        label: item.kind === "kill" ? `${playerName(item.actor)} eliminated ${playerName(item.target)}` : `${playerName(item.actor)} ${item.text}`,
+    }));
+    const replaySection = isReplayLoading ? (
+        <section className={rr.cell}>
+            <header className={rr.label}><b>01</b><span>Replay</span></header>
+            <div className={rr.mapWrap}>
+                <div className={rr.map} data-loading aria-busy="true">{mapBackdrop}</div>
             </div>
-            <dl className={rr.stats}>
-                <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
-                <div><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
-                <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
-                {!singleRound ? <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div> : null}
-                {selectedStat && !singleRound ? <div className={rr.gun}>
-                    <dt>{weapon?.displayName || "No weapon"}{selectedStat.economy.armor ? "" : " · no armor"}{headshots ? ` · ${headshots} HS` : ""}</dt>
-                    <dd>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={110} height={34} unoptimized /> : null}</dd>
-                </div> : null}
-            </dl>
-        </div>
-
-        <div className={rr.frame}>
+            <p className={rr.replayLoading} role="status">
+                <span className={rr.replaySpinner} aria-hidden="true" />
+                {isImporting ? "Reading the saved replay…" : "Loading round replay…"}
+            </p>
+        </section>
+    ) : showFullRound ? (
+            <section className={rr.cell}>
+                <header className={rr.label}><b>01</b><span>Replay</span><small className={rr.fullTag}>Full round</small></header>
+                <FullRoundReplay
+                    round={fullRound!}
+                    plot={plot}
+                    teamOf={teamOf}
+                    localSubject={localSubject}
+                    localTeam={localTeam}
+                    agentIcon={agentIcon}
+                    playerName={playerName}
+                    moments={replayMoments}
+                    activeMomentId={activeMomentId}
+                    onMoment={pickMoment}
+                    onExpand={(time) => setTheater({ index: replayRoundIndex, time })}
+                    plant={round.plantLocation && (round.plantLocation.x || round.plantLocation.y) ? { time: round.plantRoundTime || 0, x: round.plantLocation.x, y: round.plantLocation.y } : undefined}
+                >{mapBackdrop}</FullRoundReplay>
+                {theater && replaySummary ? <ReplayTheater
+                    detail={detail}
+                    map={map!}
+                    maps={maps}
+                    agents={agents}
+                    plot={plot}
+                    localSubject={localSubject}
+                    localTeam={localTeam}
+                    teamOf={teamOf}
+                    agentIcon={agentIcon}
+                    playerName={playerName}
+                    heldLabel={heldLabel}
+                    roundCount={Math.min(replaySummary.rounds.length, rounds.length)}
+                    loadRound={loadRound}
+                    initialIndex={theater.index}
+                    initialTime={theater.time}
+                    onClose={(index) => {
+                        setTheater(null);
+                        if (rounds[index]) setSelectedRoundNum(rounds[index].roundNum);
+                    }}
+                /> : null}
+            </section>
+    ) : (
             <section className={rr.cell}>
                 <header className={rr.label}><b>01</b><span>Replay</span><small>{activeMoment ? fmtLength(activeMoment.time) : ""}</small></header>
                 <div className={rr.mapWrap}>
                     <div className={rr.map} data-replay={replayReady || undefined}>
-                        {map?.displayIcon ? <Image className={rr.mapImage} src={map.displayIcon} alt={`${map.name} tactical map`} fill sizes="560px" unoptimized /> : null}
-                        {canPlot && map!.callouts.map((callout, index) => {
-                            const { left, top } = mapCalloutPlotPosition(map!, callout);
-                            return <span key={`${callout.superRegion}-${callout.name}-${index}`} className={rr.callout} style={{ left: `${left * 100}%`, top: `${top * 100}%` }} aria-hidden="true">{mapCalloutLabel(callout)}</span>;
-                        })}
+                        {mapBackdrop}
                         {replayReady && activeKill && killerSpot ? (() => {
                             const from = plot(killerSpot.x, killerSpot.y);
                             const to = plot(activeKill.victimX, activeKill.victimY);
@@ -547,7 +632,48 @@ export function RoundReview({
                     </div>
                     <button type="button" aria-label="Next moment" disabled={activeMomentIndex >= roundFeed.length - 1} onClick={() => { setReplaying(false); pickMoment(roundFeed[activeMomentIndex + 1].id); }}>›</button>
                 </div> : null}
+                {replayStatus}
             </section>
+    );
+    return <section className={rr.root} style={map?.splash ? { "--rr-map": `url("${map.splash}")` } as CSSProperties : undefined}>
+        {reviewInsights.length && !singleRound ? <div className={rr.review} aria-label="Match review">
+            {reviewInsights.map((insight) => <article key={insight.id} data-tone={insight.tone} title={`${insight.tip}${insight.evidence ? `\n${insight.evidence}` : ""}`}>
+                <svg viewBox="0 0 40 40" aria-hidden="true">
+                    <circle cx="20" cy="20" r="16" />
+                    {insight.ratio !== undefined ? <circle cx="20" cy="20" r="16" pathLength={100} strokeDasharray={`${Math.max(1, Math.round(insight.ratio * 100))} 100`} transform="rotate(-90 20 20)" /> : null}
+                </svg>
+                <span><small>{insight.label}</small><b>{insight.value}</b></span>
+            </article>)}
+        </div> : null}
+        {!hasDetailedRounds && !singleRound ? <p className={rr.note}>Objective timeline only. Buys and damage need a refresh while connected.</p> : null}
+
+        {roundPicker}
+
+        <div className={rr.hero} data-win={(!singleRound && roundWon) || undefined}>
+            {yourAgent?.full ? <Image className={rr.agent} src={yourAgent.full} alt="" width={290} height={290} unoptimized /> : null}
+            <div className={rr.title}>
+                {singleRound ? <>
+                    <h3>Whole match</h3>
+                    <p>No rounds in this mode, so every fight is in one timeline</p>
+                </> : <>
+                <h3>Round {round.roundNum + 1} <em>· {roundWon ? "won" : "lost"}</em></h3>
+                <p>{outcome ? <>{outcome}{outcomeTime}</> : "Round recorded"}{selectedFact ? <> · score {selectedFact.yourScore}–{selectedFact.enemyScore}</> : null}{roundTags.map((tag) => <b key={tag}> · {tag}</b>)}</p>
+                </>}
+            </div>
+            <dl className={rr.stats}>
+                <div><dt>Kills</dt><dd>{localKills.length}</dd></div>
+                <div><dt>Deaths</dt><dd>{localDeaths.length}</dd></div>
+                <div><dt>Assists</dt><dd>{localAssists.length}</dd></div>
+                {!singleRound ? <div><dt>Damage</dt><dd>{selectedStat ? damageDone : "—"}</dd></div> : null}
+                {selectedStat && !singleRound ? <div className={rr.gun}>
+                    <dt>{weapon?.displayName || "No weapon"}{selectedStat.economy.armor ? "" : " · no armor"}{headshots ? ` · ${headshots} HS` : ""}</dt>
+                    <dd>{weapon?.displayIcon ? <Image src={weapon.displayIcon} alt="" width={110} height={34} unoptimized /> : null}</dd>
+                </div> : null}
+            </dl>
+        </div>
+
+        <div className={rr.frame} data-full={showFullRound || isReplayLoading || undefined}>
+            {replaySection}
 
             <section className={rr.cell}>
                 <header className={rr.label}><b>02</b><span>Kill feed</span><small>{selectedKills.length} kill{selectedKills.length === 1 ? "" : "s"} · click one to see it</small>{activeKill && onInspectFight ? <button type="button" className={rr.inspect} onClick={() => onInspectFight(activeKill)}>Open on Map ↗</button> : null}</header>

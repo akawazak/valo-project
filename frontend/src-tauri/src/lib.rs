@@ -816,7 +816,9 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
                     | "/v1/profile/insights"
                     | "/v1/profile/sync-status"
                     | "/v1/profile/leaderboard"
+                    | "/v1/replays"
             ) || single_backend_segment(route, "/v1/profile/match-details/", "")
+                || single_backend_segment(route, "/v1/replays/", "")
                 || single_backend_segment(route, "/v1/chat/conversations/", "/messages")
         }
         "POST" => {
@@ -838,8 +840,11 @@ fn is_allowed_backend_request(path: &str, method: &reqwest::Method) -> bool {
             ) || single_backend_segment(route, "/v1/social/requests/", "")
                 || single_backend_segment(route, "/v1/chat/conversations/", "/snapshot")
                 || single_backend_segment(route, "/v1/chat/conversations/", "/read")
+                || single_backend_segment(route, "/v1/replays/", "/import")
         }
-        "DELETE" => route == "/v1/chat/history",
+        "DELETE" => {
+            route == "/v1/chat/history" || single_backend_segment(route, "/v1/replays/", "")
+        }
         _ => false,
     }
 }
@@ -994,8 +999,11 @@ async fn backend_request(
     headers: HashMap<String, String>,
     body: Option<String>,
 ) -> Result<BackendResponse, String> {
+    let use_local_client = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("x-vantavault-local-client") && value == "1"
+    });
     let puuid = selected_backend_account(&headers)?
-        .filter(|_| backend_request_needs_riot_secrets(&path, &method));
+        .filter(|_| !use_local_client && backend_request_needs_riot_secrets(&path, &method));
     let secrets = match puuid {
         Some(puuid) => {
             tauri::async_runtime::spawn_blocking(move || load_windows_account_secrets(&puuid))
@@ -2596,6 +2604,26 @@ mod tests {
             "/v1/party/action",
             &reqwest::Method::GET,
         ));
+        assert!(is_allowed_backend_request(
+            "/v1/replays",
+            &reqwest::Method::GET
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/replays/match-123?round=4",
+            &reqwest::Method::GET,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/replays/match-123/import",
+            &reqwest::Method::POST,
+        ));
+        assert!(is_allowed_backend_request(
+            "/v1/replays/match-123",
+            &reqwest::Method::DELETE,
+        ));
+        assert!(!is_allowed_backend_request(
+            "/v1/replays/match-123/import",
+            &reqwest::Method::DELETE,
+        ));
         assert!(!is_allowed_backend_request(
             "/v1/bootstrap-proof",
             &reqwest::Method::GET,
@@ -3004,7 +3032,11 @@ async fn send_usage_ping(app_handle: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let platform = if cfg!(target_os = "android") { "android" } else { "windows" };
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else {
+        "windows"
+    };
     // Regular use: this install also checked in within the last 8 days
     let returning = state.last_sent > 0 && now.saturating_sub(state.last_sent) <= 8 * 24 * 60 * 60;
     let body = serde_json::json!({

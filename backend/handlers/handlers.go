@@ -134,6 +134,14 @@ func (h *Handler) RestartTicker(newVal *valclient.ValClient) {
 	go ticker.Start()
 }
 
+func (h *Handler) StartLocalTicker() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.Val != nil && h.Ticker != nil {
+		h.Ticker.Start()
+	}
+}
+
 // trackingDB returns the lazily-initialized tracking DB handle. The
 // DB lives at <os.UserConfigDir()>/valovault/tracking.db per the
 // design doc §0. On first call it creates the dir + opens the DB.
