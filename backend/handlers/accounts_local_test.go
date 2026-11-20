@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,13 +11,25 @@ import (
 	"github.com/truearken/valclient/valclient"
 )
 
+type unavailableLocalAccountNameLookup struct{}
+
+func (unavailableLocalAccountNameLookup) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("name service unavailable")
+}
+
 func TestGetLocalAccountFollowsRiotClientSession(t *testing.T) {
+	defaultClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: unavailableLocalAccountNameLookup{}}
+	t.Cleanup(func() { http.DefaultClient = defaultClient })
+
 	for _, tc := range []struct {
-		name, subject string
-		status        int
+		name, subject, gameName, tag string
+		wantName                     string
+		status                       int
 	}{
-		{"matching Riot session", "test-account", http.StatusOK},
-		{"Riot switching accounts", "other-account", http.StatusConflict},
+		{"matching Riot session", "test-account", "Live Riot name", "TEST", "Live Riot name", http.StatusOK},
+		{"no Riot ID available", "test-account", "", "", "Unknown", http.StatusOK},
+		{"Riot switching accounts", "other-account", "Live Riot name", "TEST", "", http.StatusConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			riot := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +38,7 @@ func TestGetLocalAccountFollowsRiotClientSession(t *testing.T) {
 					return
 				}
 				json.NewEncoder(w).Encode(map[string]string{
-					"puuid": tc.subject, "game_name": "Live Riot name", "game_tag": "TEST",
+					"puuid": tc.subject, "game_name": tc.gameName, "game_tag": tc.tag,
 				})
 			}))
 			defer riot.Close()
@@ -49,7 +62,7 @@ func TestGetLocalAccountFollowsRiotClientSession(t *testing.T) {
 				if err := json.NewDecoder(response.Body).Decode(&account); err != nil {
 					t.Fatal(err)
 				}
-				if account.Puuid != tc.subject || account.GameName != "Live Riot name" || account.TagLine != "TEST" {
+				if account.Puuid != tc.subject || account.Region != "eu" || account.GameName != tc.wantName || account.TagLine != tc.tag {
 					t.Fatal("identity does not match the active Riot session")
 				}
 			}

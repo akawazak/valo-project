@@ -116,9 +116,12 @@ describe('saved account session migration', () => {
         expect(mocks.activate).toHaveBeenCalledWith(mocks.accounts[0]);
     });
 
-    it('preserves an existing renewable login when choosing the same account locally', async () => {
+    it.each([
+        { gameName: renewalAccount.gameName, tagLine: renewalAccount.tagLine },
+        { gameName: 'Unknown', tagLine: '' },
+    ])('preserves the renewable login and known Riot ID when the local name is $gameName', async (localIdentity) => {
         const data = captureProvider();
-        await data.handleAddNewAccount({ ...renewalAccount, accessToken: '', entitlementsToken: '', sessionId: undefined, ssid: undefined, authSource: 'lockfile', expiresAt: 0 });
+        await data.handleAddNewAccount({ ...renewalAccount, ...localIdentity, accessToken: '', entitlementsToken: '', sessionId: undefined, ssid: undefined, authSource: 'lockfile', expiresAt: 0 });
         expect(mocks.accounts).toEqual([renewalAccount]);
         expect(mocks.activate).toHaveBeenCalledWith(renewalAccount);
     });

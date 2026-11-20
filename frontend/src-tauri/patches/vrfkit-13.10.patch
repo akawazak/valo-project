@@ -1,0 +1,9 @@
+diff --git a/crates/vrf-transform/src/lib.rs b/crates/vrf-transform/src/lib.rs
+index 5c360b5..5e5a404 100644
+--- a/crates/vrf-transform/src/lib.rs
++++ b/crates/vrf-transform/src/lib.rs
+@@ -329,2 +329,4 @@ transforms! {
+     V1308 V13_08 "13.08" 0x3c17_a9fa -0x06: add 8, rev, rotl 6, sbox, rotr 4, sbox, sbox, rev;
++    // Based on ValorantReplayParser's MIT-licensed 13.10 transform.
++    V1310 V13_10 "13.10" 0x2c24_9eb3  0x33: sub 8, rotl 6, swap, xor 3, sub 1;
+ }

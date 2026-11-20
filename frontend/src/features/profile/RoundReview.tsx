@@ -6,6 +6,7 @@ import rr from "./RoundReview.module.css";
 import type { Weapon } from "@/lib/types";
 import { type ProfileMatchDetails, type ReplayRound, type ReplaySummary } from "@/services/api";
 import { FullRoundReplay, type ReplayHeldLabel } from "./FullRoundReplay";
+import { replayAbilityIcon } from "./abilityCoverage";
 import { ReplayTheater } from "./ReplayTheater";
 import { useMatchReplay } from "./useMatchReplay";
 import s from "./ProfilePanel.module.css";
@@ -32,6 +33,7 @@ export function RoundReview({
     onInspectFight?: (event: MatchKillEvent) => void;
 }) {
     const rounds = useMemo(() => detail.rounds || [], [detail.rounds]);
+    const abilityIcon = useCallback((name: string, subject?: string) => replayAbilityIcon(name, subject, detail.players, agents), [detail.players, agents]);
     const local = detail.players.find((player) => player.isLocal);
     const localSubject = local?.subject.toLowerCase() || "";
     const localTeam = local?.teamId.toLowerCase() || "";
@@ -554,6 +556,7 @@ export function RoundReview({
                     localSubject={localSubject}
                     localTeam={localTeam}
                     agentIcon={agentIcon}
+                    abilityIcon={abilityIcon}
                     playerName={playerName}
                     moments={replayMoments}
                     activeMomentId={activeMomentId}

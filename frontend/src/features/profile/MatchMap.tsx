@@ -3,14 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
 import type { Weapon } from "@/lib/types";
-import { type ProfileMatchDetails } from "@/services/api";
+import { type ProfileMatchDetails, type ReplayRound } from "@/services/api";
 import s from "./ProfilePanel.module.css";
+import { ReplayMapLayer, buildReplayMoments, replayPoses, replayRange, type ReplaySide } from "./FullRoundReplay";
+import { ReplayTheater } from "./ReplayTheater";
+import { useMatchReplay } from "./useMatchReplay";
+import { replayAbilityIcon } from "./abilityCoverage";
 import { type AgentMeta, type MapMeta, mapCalloutLabel, mapZoneLabel, mapCalloutPlotPosition, fmtLength, fmtRatio, statCount, type MatchKillEvent, TRADE_RANGE_METRES, MAP_MAX_ZOOM, gameUnitsToMetres, type DuelFocus, type DuelFinisher, fightEventKey, riotAbilitySlotKey, MapDuelMarker } from "./profileShared";
 
 export function MatchMapAnalytics({
     detail,
     kills,
     map,
+    maps,
     agents,
     weapons,
     loading,
@@ -21,6 +26,7 @@ export function MatchMapAnalytics({
     detail: ProfileMatchDetails;
     kills: MatchKillEvent[];
     map?: MapMeta;
+    maps?: Record<string, MapMeta>;
     agents: Record<string, AgentMeta>;
     weapons: Weapon[];
     loading: boolean;
@@ -34,6 +40,12 @@ export function MatchMapAnalytics({
     const [focusedZone, setFocusedZone] = useState<string | null>(null);
     const [hoveredZone, setHoveredZone] = useState<string | null>(null);
     const [duelFocus, setDuelFocus] = useState<DuelFocus | null>(initialFight ? { id: fightEventKey(initialFight), label: `Round ${initialFight.roundNum + 1} · ${fmtLength(initialFight.roundTime)}`, events: [initialFight], index: 0 } : null);
+    const replay = useMatchReplay(detail.matchId);
+    const summary = replay.state.phase === "ready" && replay.state.summary.matchId.toLowerCase() === detail.matchId.toLowerCase() ? replay.state.summary : null;
+    const [theater, setTheater] = useState<{ index: number; time: number } | null>(null);
+    const [replayPositions, setReplayPositions] = useState(false);
+    const [replayOffset, setReplayOffset] = useState(0);
+    const [loadedReplay, setLoadedReplay] = useState<{ summary: typeof summary; index: number; round: ReplayRound | null } | null>(null);
     const analysis = useMemo(() => {
         const localPlayer = detail.players.find((player) => player.isLocal);
         const localSubject = localPlayer?.subject.toLowerCase() || "";
@@ -296,6 +308,42 @@ export function MatchMapAnalytics({
         setDuelFocus((current) => current?.id === id ? null : { id, label, events: uniqueEvents, index: 0 });
     }, []);
     const selectedFight = duelFocus?.events[duelFocus.index] || null;
+    const replayIndex = (event: MatchKillEvent) => {
+        const index = detail.rounds?.findIndex(round => round.roundNum === event.roundNum) ?? -1;
+        return canPlot && index >= 0 && summary?.rounds[index] ? index : -1;
+    };
+    const selectedReplayIndex = selectedFight ? replayIndex(selectedFight) : -1;
+    const selectedReplay = loadedReplay?.summary === summary && loadedReplay.index === selectedReplayIndex ? loadedReplay.round : null;
+    const replayPositionsFailed = loadedReplay?.summary === summary && loadedReplay.index === selectedReplayIndex && loadedReplay.round === null;
+    const { loadRound } = replay;
+    useEffect(() => {
+        if (!summary || selectedReplayIndex < 0) return;
+        let current = true;
+        void loadRound(selectedReplayIndex).then(
+            round => { if (current) setLoadedReplay({ summary, index: selectedReplayIndex, round }); },
+            () => { if (current) setLoadedReplay({ summary, index: selectedReplayIndex, round: null }); },
+        );
+        return () => { current = false; };
+    }, [loadRound, selectedReplayIndex, summary]);
+    const teamOf = (subject: string) => playerBySubject.get(subject.toLowerCase())?.teamId.toLowerCase() || "";
+    const side = (subject: string): ReplaySide => teamOf(subject) === analysis.localTeam ? "ally" : "enemy";
+    const agentIcon = (subject?: string) => agents[playerBySubject.get(subject?.toLowerCase() || "")?.characterId.toLowerCase() || ""]?.icon;
+    const playerName = (subject?: string) => playerBySubject.get(subject?.toLowerCase() || "")?.gameName || "Player";
+    const abilityIcon = (name: string, subject?: string) => replayAbilityIcon(name, subject, detail.players, agents);
+    const plot = (x: number, y: number) => ({
+        left: (y * map!.xMultiplier! + map!.xScalarToAdd!) * 100,
+        top: (x * map!.yMultiplier! + map!.yScalarToAdd!) * 100,
+    });
+    const showRecordedPositions = replayPositions && selectedFight && selectedReplay && canPlot;
+    const selectedRound = selectedReplayIndex >= 0 ? detail.rounds?.[selectedReplayIndex] : undefined;
+    const replayTime = selectedReplay && selectedFight
+        ? Math.max(replayRange(selectedReplay).firstMs, Math.min(replayRange(selectedReplay).lastMs, selectedFight.roundTime + replayOffset))
+        : 0;
+    const recordedMoments = selectedReplay ? buildReplayMoments(detail, selectedReplayIndex, side, playerName) : [];
+    const watchFight = (event: MatchKillEvent) => {
+        const index = replayIndex(event);
+        if (index >= 0) setTheater({ index, time: event.roundTime - 5_000 });
+    };
     const duelData = useMemo(() => {
         if (!selectedFight || !canPlot || !map) return null;
         const toPlotPoint = (x: number, y: number) => ({
@@ -304,7 +352,11 @@ export function MatchMapAnalytics({
         });
         const killerSubject = selectedFight.killer.toLowerCase();
         const victimSubject = selectedFight.victim.toLowerCase();
-        const killerLocation = selectedFight.playerLocations?.find((location) => location.subject?.toLowerCase() === killerSubject);
+        const recordedPositions = selectedReplay ? replayPoses(selectedReplay, selectedFight.roundTime - 1) : null;
+        const fightLocations = recordedPositions?.size
+            ? [...recordedPositions].filter(([, pose]) => !pose.dead).map(([subject, pose]) => ({ subject, x: pose.x, y: pose.y }))
+            : selectedFight.playerLocations || [];
+        const killerLocation = fightLocations.find((location) => location.subject?.toLowerCase() === killerSubject);
         const killerPlayer = playerBySubject.get(killerSubject);
         const victimPlayer = playerBySubject.get(victimSubject);
         const damageItemKey = selectedFight.damageItem?.trim().toLowerCase() || "";
@@ -324,7 +376,7 @@ export function MatchMapAnalytics({
         // Nearest living teammate of the player who died, and whether their killer was traded within 5 seconds.
         const victimSpot = { x: selectedFight.victimX, y: selectedFight.victimY };
         const victimTeam = victimPlayer?.teamId.toLowerCase() || "";
-        const nearestMate = (selectedFight.playerLocations || [])
+        const nearestMate = fightLocations
             .filter((location) => {
                 const subject = location.subject?.toLowerCase();
                 return subject && subject !== victimSubject && playerBySubject.get(subject)?.teamId.toLowerCase() === victimTeam;
@@ -363,9 +415,10 @@ export function MatchMapAnalytics({
                 metres: nearestMate.metres,
             } : null,
             traded,
+            positionsAvailable: fightLocations.length > 0,
             tradeRingRadius: Math.abs(TRADE_RANGE_METRES * 100 * map.xMultiplier!),
         };
-    }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, kills, map, playerBySubject, selectedFight, weaponById]);
+    }, [agents, analysis.localSubject, analysis.localTeam, analysis.points, canPlot, detail.rounds, kills, map, playerBySubject, selectedFight, selectedReplay, weaponById]);
 
     const zoneRegions = useMemo(() => {
         if (!canPlot || !map) return [];
@@ -626,7 +679,7 @@ export function MatchMapAnalytics({
                         <div className={s.mapPlot} ref={attachPlot} data-zoomed={plotView.scale > 1 || undefined} onPointerDown={startPlotDrag} onPointerMove={movePlotDrag} onPointerUp={endPlotDrag} onPointerCancel={endPlotDrag} onClickCapture={swallowDragClick}>
                             <div
                                 className={s.mapPlotStage}
-                                style={{ "--map-zoom": plotView.scale, transform: `translate(${plotView.x}px, ${plotView.y}px) scale(${plotView.scale})` } as CSSProperties}
+                                style={{ "--map-zoom": plotView.scale, "--z": plotView.scale, transform: `translate(${plotView.x}px, ${plotView.y}px) scale(${plotView.scale})` } as CSSProperties}
                             >
                             <Image src={map!.displayIcon} alt={`${map!.name} minimap`} width={640} height={640} unoptimized className={s.mapPlotImage} draggable={false} />
                             {!selectedFight && zoneRegions.map((region) => {
@@ -680,7 +733,23 @@ export function MatchMapAnalytics({
                                     </button>
                                 );
                             })}
-                            {selectedFight && duelData ? (
+                            {showRecordedPositions ? <ReplayMapLayer
+                                round={selectedReplay}
+                                time={replayTime}
+                                plot={plot}
+                                side={side}
+                                localSubject={analysis.localSubject}
+                                agentIcon={agentIcon}
+                                abilityIcon={abilityIcon}
+                                playerName={playerName}
+                                moments={recordedMoments}
+                                plant={selectedRound?.plantLocation && (selectedRound.plantLocation.x || selectedRound.plantLocation.y)
+                                    ? { time: selectedRound.plantRoundTime || 0, ...selectedRound.plantLocation } : undefined}
+                                vision={false}
+                                focus={selectedFight.victim.toLowerCase()}
+                                size="theater"
+                            /> : null}
+                            {selectedFight && duelData && !showRecordedPositions ? (
                                 <>
                                     {duelData.localDeath ? (
                                         <>
@@ -791,6 +860,13 @@ export function MatchMapAnalytics({
                             <button type="button" className={s.mapDuelClear} onClick={() => setDuelFocus(null)}>Exit detail</button>
                         </div>
                     ) : null}
+                    {showRecordedPositions ? <div className={s.mapReplayClock} aria-label="Fight replay snapshot">
+                        <span>Recorded positions · {replayTime < 0 ? "Buy " : ""}{fmtLength(Math.abs(replayTime))}</span>
+                        <div>{([-5_000, 0, 5_000] as const).map(offset => <button key={offset} type="button"
+                            aria-pressed={replayOffset === offset} onClick={() => setReplayOffset(offset)}>
+                            {offset < 0 ? "5s before" : offset > 0 ? "5s after" : "At fight"}
+                        </button>)}</div>
+                    </div> : null}
                     {!selectedFight ? (
                         <div className={s.mapLegend}>
                             <>
@@ -803,15 +879,23 @@ export function MatchMapAnalytics({
                 <section className={s.mapInsights} aria-label="Map performance breakdown">
                     {selectedFight && duelData ? <section className={s.mapFightDetail} aria-label="Selected fight receipt">
                         <header><strong>Round {selectedFight.roundNum + 1} · {fmtLength(selectedFight.roundTime)}</strong><small>Recorded elimination</small></header>
+                        {selectedReplayIndex >= 0 ? <div className={s.mapReplayActions}>
+                            <button type="button" onClick={() => watchFight(selectedFight)}>▶ Watch this fight</button>
+                            {selectedReplay
+                                ? <button type="button" aria-pressed={replayPositions} onClick={() => setReplayPositions(value => !value)}>Replay positions</button>
+                                : replayPositionsFailed
+                                    ? <button type="button" onClick={() => { void replay.check(); }}>Retry recorded positions</button>
+                                    : <span role="status">Loading recorded positions…</span>}
+                        </div> : null}
                         <p><strong>{duelData.killerPlayer?.isLocal ? "You" : duelData.killerPlayer?.gameName || "Unknown player"}</strong><span aria-label="eliminated">→</span><strong>{duelData.victimPlayer?.isLocal ? "You" : duelData.victimPlayer?.gameName || "Unknown player"}</strong></p>
-                        <dl><div><dt>Location</dt><dd>{duelData.area}</dd></div><div><dt>Finisher</dt><dd>{duelData.finisherName || "Unavailable"}</dd></div><div><dt>Your team</dt><dd>{duelData.roundWon === null ? "Outcome unavailable" : duelData.roundWon ? "Round won" : "Round lost"}</dd></div>{duelData.localDeath ? <><div><dt>Killer distance</dt><dd>{duelData.killDistance === null ? "Unavailable" : `${duelData.killDistance} m`}</dd></div><div><dt>Nearest teammate</dt><dd>{duelData.mate ? `${duelData.mate.player?.gameName || "Teammate"} · ${duelData.mate.metres} m` : "None alive"}</dd></div><div><dt>Traded</dt><dd className={duelData.traded ? s.mapKillText : s.mapDeathText}>{duelData.traded ? "Yes, within 5 s" : "No"}</dd></div></> : null}</dl>
+                        <dl><div><dt>Location</dt><dd>{duelData.area}</dd></div><div><dt>Finisher</dt><dd>{duelData.finisherName || "Unavailable"}</dd></div><div><dt>Your team</dt><dd>{duelData.roundWon === null ? "Outcome unavailable" : duelData.roundWon ? "Round won" : "Round lost"}</dd></div>{duelData.localDeath ? <><div><dt>Killer distance</dt><dd>{duelData.killDistance === null ? "Unavailable" : `${duelData.killDistance} m`}</dd></div><div><dt>Nearest teammate</dt><dd>{duelData.mate ? `${duelData.mate.player?.gameName || "Teammate"} · ${duelData.mate.metres} m` : duelData.positionsAvailable ? "None alive" : "Unavailable"}</dd></div><div><dt>Traded</dt><dd className={duelData.traded ? s.mapKillText : s.mapDeathText}>{duelData.traded ? "Yes, within 5 s" : "No"}</dd></div></> : null}</dl>
                         {duelData.localDeath ? <p className={s.mapTradeVerdict} data-tone={duelData.traded ? "good" : duelData.mate && duelData.mate.metres <= TRADE_RANGE_METRES ? "neutral" : "danger"}>{duelData.traded
                             ? "Your team traded this death, so the fight still paid off."
                             : duelData.mate && duelData.mate.metres <= TRADE_RANGE_METRES
                                 ? `${duelData.mate.player?.gameName || "A teammate"} was ${duelData.mate.metres} m away and could have traded, but didn't.`
                                 : duelData.mate
                                     ? `Your nearest teammate was ${duelData.mate.metres} m away, too far to trade. Take this fight closer to your team.`
-                                    : "No teammate was alive to trade this fight."}</p> : null}
+                                    : duelData.positionsAvailable ? "No teammate was alive to trade this fight." : "Teammate positions were not recorded for this fight."}</p> : null}
                     </section> : null}
                     <header className={s.mapInsightsHeader}>
                         <div>
@@ -912,6 +996,7 @@ export function MatchMapAnalytics({
                                 const markerTop = canPlot ? Math.max(0, Math.min(1, note.x * map!.yMultiplier! + map!.yScalarToAdd!)) : 0.5;
                                 const isDuelFocused = duelFocus?.id === note.id;
                                 return (
+                                <div key={note.id} className={s.mapReviewEntry}>
                                 <button
                                     key={`${note.label}-${note.copy}`}
                                     type="button"
@@ -931,12 +1016,42 @@ export function MatchMapAnalytics({
                                         <em>{note.chips.map((chip) => <i key={chip}>{chip}</i>)}</em>
                                     </p>
                                 </button>
+                                {summary && note.events.some(event => replayIndex(event) >= 0) ? <div className={s.mapReplayExamples} aria-label={`Replay examples for ${note.label}`}>
+                                    <span>Watch rounds</span>
+                                    {[...new Map(note.events.filter(event => replayIndex(event) >= 0).map(event => [event.roundNum, event])).values()]
+                                        .sort((a, b) => a.roundNum - b.roundNum).slice(0, 3).map(event => <button key={event.roundNum} type="button"
+                                            onClick={() => watchFight(event)}
+                                            aria-label={`Watch round ${event.roundNum + 1} at ${fmtLength(event.roundTime)} for ${note.label}`}>
+                                            ▶ R{event.roundNum + 1} · {fmtLength(event.roundTime)}
+                                        </button>)}
+                                </div> : null}
+                                </div>
                                 );
                             })}
                         </div>
                     </div>
                 </section>
             </div>
+            {theater && summary && map && canPlot ? <ReplayTheater
+                detail={detail} map={map} maps={maps} agents={agents} plot={plot}
+                localSubject={analysis.localSubject} localTeam={analysis.localTeam}
+                teamOf={teamOf} agentIcon={agentIcon} playerName={playerName}
+                heldLabel={(subject, item) => {
+                    if (item.startsWith("gun:") || item === "melee") {
+                        const weapon = weapons.find(entry => item === "melee" ? entry.category === "EEquippableCategory::Melee" : entry.uuid.toLowerCase() === item.slice(4).toLowerCase());
+                        return weapon && { name: weapon.displayName, icon: weapon.displayIcon, gun: true };
+                    }
+                    if (item.startsWith("ability:")) {
+                        const agent = agents[playerBySubject.get(subject.toLowerCase())?.characterId.toLowerCase() || ""];
+                        const ability = agent?.abilities?.[item.slice(8)];
+                        return { name: ability?.name || "Ability", icon: ability?.icon, gun: false };
+                    }
+                    return { name: item === "spike" ? "Spike" : "Defuser kit", gun: false };
+                }}
+                roundCount={Math.min(summary.rounds.length, detail.rounds?.length || 0)}
+                loadRound={loadRound} initialIndex={theater.index} initialTime={theater.time}
+                onClose={() => setTheater(null)}
+            /> : null}
         </section>
     );
 }

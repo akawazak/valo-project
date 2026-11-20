@@ -38,25 +38,100 @@
 .smoke[data-effect="Ruse"] { background-color: #ad76b5a6; }
 .smoke[data-effect="Cloudburst"] { background-color: #91b3cbd9; }
 .smoke[data-effect="Cyber Cage"] { background-color: #548693bb; }
+.smoke[data-effect="Waveform"] { background: repeating-radial-gradient(circle, #8869c9bb 0 12%, #554681bd 14% 20%); }
+.smoke[data-effect="Cove"] {
+    background-color: #196c77ba;
+    background-image: radial-gradient(ellipse at 33% 32%, #79d9d972, transparent 56%), repeating-radial-gradient(ellipse, transparent 0 6px, #a4dfe847 8px 9px);
+}
+.smoke[data-kind="molly"] {
+    --smoke-rim: #ffcb86;
+    background-color: #7131129e;
+    box-shadow: inset 0 0 0 calc(1.5px / var(--z, 1)) var(--smoke-rim), inset 0 0 11px #29110a88;
+}
+.smoke[data-effect="Hot Hands"] {
+    background-image: radial-gradient(ellipse at 24% 70%, #ffb451bf, transparent 40%), radial-gradient(ellipse at 73% 35%, #f5a43ec7, transparent 45%), repeating-conic-gradient(from 35deg at 53% 61%, #9c44107d 0 12deg, #e88e3252 22deg 38deg);
+}
+.smoke[data-effect="Nanoswarm"] {
+    background-color: #5c2865b8;
+    background-image: radial-gradient(circle, #f8a4ecb0 1px, transparent 1.8px), radial-gradient(circle, #ad66dde0 1px, transparent 1.8px), radial-gradient(ellipse at 45% 43%, #903d9e, #32173ba9 75%);
+    background-size: 8px 8px, 8px 8px, 100% 100%;
+    background-position: 0 0, 4px 4px, center;
+    background-repeat: repeat;
+}
+.smoke[data-effect="Snake Bite"] { background-color: #78872fb3; background-image: radial-gradient(circle, #b6d262bf, #617d3aaa 60%, #344618aa); }
+.smoke[data-effect="Mosh Pit"] { background: radial-gradient(circle, #5a9b38b7 0 82%, #bedb79a8 88% 91%, #55672c70 93%), repeating-conic-gradient(#79a94e80 0 12deg, #4e863580 13deg 29deg); }
+.smoke[data-effect="Orbital Strike"] { background-color: #9b532e85; background-image: repeating-radial-gradient(circle, #ffc88e40 0 4px, #b45b2030 5px 10px); }
+.smoke[data-kind="slow"] { background-color: #3779888c; background-image: repeating-linear-gradient(132deg, transparent 0 5px, #a0deef38 5px 6px); }
+.smoke[data-effect="Seize"] { background-color: #50333bae; background-image: repeating-conic-gradient(from 6deg,#a674a953 0 3deg, transparent 3deg 19deg); }
+.smoke[data-effect="Razorvine"] { background-color: #695c2b94; background-image: repeating-linear-gradient(138deg, transparent 0 5px, #cfb75f64 5px 6px), repeating-linear-gradient(47deg, transparent 0 9px, #a0894264 9px 10px); }
+.smoke[data-kind="heal"] { background-color: #3477728c; background-image: repeating-radial-gradient(circle, #9debd750 0 1px, transparent 2px 6px); }
+.smoke[data-kind="pulse"] {
+    background: transparent;
+    transform: translate(-50%, -50%) scale(var(--pulse, 1));
+    box-shadow: inset 0 0 0 calc(1px / var(--z, 1)) #a6dce9, 0 0 0 calc(3px / var(--z, 1)) #84bde942;
+    opacity: calc(0.95 - var(--pulse, 0) * 0.63);
+}
 .smoke[data-side="ally"] { --smoke-rim: #77f5d6; }
 .smoke[data-side="enemy"] { --smoke-rim: #ffd084; }
 .smoke[data-selected] { --smoke-rim: #f1e5ff; }
-.utilityPoint[data-effect], .track > button[data-kind="utility"] { --effect-color: #b49dff; }
-.utilityPoint[data-effect="molly"], .track > button[data-effect="molly"] { --effect-color: #ff885e; }
-.utilityPoint[data-effect="slow"], .track > button[data-effect="slow"] { --effect-color: #7bddfd; }
-.utilityPoint[data-effect="flash"], .track > button[data-effect="flash"] { --effect-color: #ffe694; }
-.utilityPoint[data-effect="impact"], .track > button[data-effect="impact"] { --effect-color: #f394a6; }
-.utilityPoint[data-effect="teleport"], .track > button[data-effect="teleport"] { --effect-color: #77ead4; }
-.utilityPoint {
-    fill: var(--effect-color);
-    stroke: #151922;
-    stroke-width: 2px;
-    vector-effect: non-scaling-stroke;
+.track > button[data-kind="utility"] { --effect-color: #b49dff; }
+.track > button[data-effect="molly"] { --effect-color: #ff885e; }
+.track > button[data-effect="slow"] { --effect-color: #7bddfd; }
+.track > button[data-effect="flash"] { --effect-color: #ffe694; }
+.track > button[data-effect="impact"] { --effect-color: #f394a6; }
+.track > button[data-effect="teleport"] { --effect-color: #77ead4; }
+.utilityPin {
+    --rim: #c6a6ff;
+    position: absolute;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: calc(var(--token) * 0.85);
+    height: calc(var(--token) * 0.85);
+    padding: calc(var(--token) * 0.12);
+    border: calc(1.5px / var(--z, 1)) solid var(--rim);
+    border-radius: 25%;
+    background: #111921f2;
+    box-shadow: 0 0 0 calc(1.5px / var(--z, 1)) #080d12;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    box-sizing: border-box;
 }
-.utilityPoint[data-side="ally"] { stroke: #54ebc0; }
-.utilityPoint[data-side="enemy"] { stroke: #ffc46f; }
+.utilityPin[data-side="ally"] { --rim: #54ebc0; }
+.utilityPin[data-side="enemy"] { --rim: #ffc46f; }
+.utilityPin[data-effect="trap"], .utilityPin[data-state="placed"] {
+    width: calc(var(--token) * 0.66);
+    height: calc(var(--token) * 0.66);
+    border-style: dashed;
+    border-radius: 50%;
+}
+.utilityPin[data-activated] { border-style: solid; background: #5e397a; }
+.utilityPin[data-effect="projectile"] { width: calc(var(--token) * 0.65); height: calc(var(--token) * 0.65); border-radius: 50%; }
+.utilityPin[data-effect="pulse"], .utilityPin[data-effect="flash"], .utilityPin[data-effect="impact"] {
+    border-radius: 50%;
+    outline: 1px dashed color-mix(in srgb, var(--rim) 75%, transparent);
+    outline-offset: calc(3px / var(--z, 1));
+}
+.utilityPin[data-effect="wall"] { border-radius: 3px; background: repeating-linear-gradient(140deg, #24374a 0 3px, #13202b 4px 7px); }
+.utilityPin[data-effect="summon"] { border-radius: 50% 50% 35% 35%; }
+.utilityPin[data-effect="heal"], .utilityPin[data-effect="buff"] { border-radius: 50%; background: #255659; }
+.utilityPin[data-effect="slow"] { border-radius: 50%; background: #1d4956; border-style: dotted; }
+.utilityPin img { width: 100%; height: 100%; object-fit: contain; }
+.utilityPin b { color: #fff; font: 700 calc(var(--token) * 0.32)/1 "Segoe UI", sans-serif; }
 .teleportLine { stroke: #9fffe8; stroke-width: 0.52; stroke-dasharray: 1.25 0.6; }
 .teleportOrigin { fill: #152626; stroke: #9fffe8; stroke-width: 0.27; }
+.trapwire, .trapAnchor, .utilityTrail { --utility-side: #c6a6ff; stroke: var(--utility-side); }
+.svg [data-side="ally"] :is(.trapwire, .trapAnchor, .utilityTrail) { --utility-side: var(--ally); }
+.svg [data-side="enemy"] :is(.trapwire, .trapAnchor, .utilityTrail) { --utility-side: var(--enemy); }
+.trapwire { stroke-width: 0.36; stroke-dasharray: 0.8 0.45; }
+.trapwire[data-activated] { stroke-width: 0.62; stroke-dasharray: none; }
+.trapAnchor { stroke-width: 0.24; fill: #131d29; }
+.wallSegment { stroke: #a0edf0; stroke-width: 1.08; }
+.wallEdge { stroke: #417d82; stroke-width: 0.4; stroke-dasharray: 0.7 0.16; }
+.utilityTrail { fill: none; stroke-width: 0.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.79; }
+.svg [data-ability="Paranoia"] .utilityTrail { stroke: #b099ed; stroke-width: 0.75; }
+.svg :is([data-ability="Curveball"], [data-ability="Blindside"], [data-ability="Flashbulb"], [data-ability="FLASH/drive"]) .utilityTrail { stroke: #f6e8ad; stroke-dasharray: 0.52 0.28; }
+.svg :is([data-ability="Paint Shells"], [data-ability="Showstopper"], [data-ability="FRAG/ment"]) .utilityTrail { stroke: #f0a46b; }
 
 .token {
     --c: var(--enemy);

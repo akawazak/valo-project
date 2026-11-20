@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import rt from "./ReplayTheater.module.css";
 import { type ProfileMatchDetails, type ReplayRound } from "@/services/api";
 import { fmtLength, mapCalloutLabel, mapCalloutPlotPosition, type AgentMeta, type MapMeta } from "./profileShared";
-import { ReplayMapLayer, ReplayTimeline, buildReplayMoments, currentMomentId, isReplayUtilityVisible, replayClockLabel, replayHeldAt, replayMomentTime, replayPoses, replayUtilityMoments, smokeMoments, smokeTime, useReplayClock, type PlotFn, type ReplayHeldLabel, type ReplayMoment, type ReplaySide } from "./FullRoundReplay";
+import { ReplayMapLayer, ReplayTimeline, buildReplayMoments, currentMomentId, isReplayUtilityVisible, replayClockLabel, replayHeldAt, replayMomentTime, replayPoses, replayUtilityMoments, replayUtilityPosition, smokeMoments, smokeTime, useReplayClock, type PlotFn, type ReplayHeldLabel, type ReplayMoment, type ReplaySide } from "./FullRoundReplay";
 import { TacticsBoard, tacticsMaps } from "./TacticsBoard";
 import { blankBoard, boardId, type BoardPiece, type BoardPlan } from "./tacticsBoardModel";
+import { replayAbilityIcon } from "./abilityCoverage";
 
 interface TheaterProps {
     detail: ProfileMatchDetails;
@@ -25,14 +26,16 @@ interface TheaterProps {
     loadRound: (index: number) => Promise<ReplayRound>;
     initialIndex: number;
     initialTime?: number;
+    defaultRoundTime?: number;
     initialCallouts?: boolean;
     focusOnOpen?: boolean;
-    onClose: (index: number) => void;
+    inline?: boolean;
+    onClose?: (index: number) => void;
 }
 
 /** The big replay view: the map as large as the window allows, both rosters and the round's moments. */
 export function ReplayTheater(props: TheaterProps) {
-    const { detail, map, localTeam, roundCount, loadRound, initialIndex, initialTime, onClose } = props;
+    const { detail, map, localTeam, roundCount, loadRound, initialIndex, initialTime, inline, onClose } = props;
     const [index, setIndex] = useState(initialIndex);
     const [round, setRound] = useState<{ index: number; data: ReplayRound | null } | null>(null);
     const [vision, setVision] = useState(true);
@@ -46,7 +49,7 @@ export function ReplayTheater(props: TheaterProps) {
         void loadRound(index).then(finish, () => finish(null));
         return () => { current = false; };
     }, [index, loadRound]);
-    const focusOnOpen = props.focusOnOpen ?? true;
+    const focusOnOpen = props.focusOnOpen ?? !inline;
     useEffect(() => { if (focusOnOpen) rootRef.current?.focus(); }, [focusOnOpen]);
 
     const rounds = (detail.rounds || []).slice(0, roundCount);
@@ -58,29 +61,31 @@ export function ReplayTheater(props: TheaterProps) {
         return { position, won, number: entry.roundNum + 1, score: `${ally}–${enemy}` };
     });
     const tile = tiles[index];
-    const close = useCallback(() => onClose(index), [index, onClose]);
+    const close = useCallback(() => onClose?.(index), [index, onClose]);
     const step = (delta: number) => setIndex((value) => Math.max(0, Math.min(roundCount - 1, value + delta)));
 
     const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
         // The match popup behind this view must not see these keys (its Escape and focus trap).
-        event.stopPropagation();
-        if (event.key === "Escape") { event.preventDefault(); close(); }
+        if (!inline) event.stopPropagation();
+        if (event.key === "Escape" && !inline) { event.preventDefault(); close(); }
         else if (event.key === "v" || event.key === "V") setVision((value) => !value);
         else if (event.key === "n" || event.key === "N") setAllNames((value) => !value);
-        else if (event.key === "PageDown" || event.key === ".") step(1);
-        else if (event.key === "PageUp" || event.key === ",") step(-1);
+        else if (event.key === "." || (!inline && event.key === "PageDown")) { event.preventDefault(); step(1); }
+        else if (event.key === "," || (!inline && event.key === "PageUp")) { event.preventDefault(); step(-1); }
     };
 
-    return createPortal(
+    const theater = (
         <div
             ref={rootRef}
             className={rt.root}
-            role="dialog"
-            aria-modal="true"
+            data-replay-theater
+            data-inline={inline || undefined}
+            role={inline ? "region" : "dialog"}
+            aria-modal={inline ? undefined : true}
             aria-label={`Round ${tile?.number ?? index + 1} replay on ${map.name}`}
             tabIndex={-1}
             onKeyDown={onKey}
-            onMouseDown={(event) => event.stopPropagation()}
+            onMouseDown={inline ? undefined : (event) => event.stopPropagation()}
             style={{ "--rt-map": map.splash ? `url("${map.splash}")` : "none" } as CSSProperties}
         >
             <header className={rt.top}>
@@ -103,9 +108,9 @@ export function ReplayTheater(props: TheaterProps) {
                     <button type="button" aria-pressed={allNames} onClick={() => setAllNames((value) => !value)} title="Every player's name (N)">Names</button>
                     <button type="button" aria-pressed={callouts} onClick={() => setCallouts((value) => !value)}>Callouts</button>
                 </div>
-                <button type="button" className={rt.close} onClick={close} aria-label="Close the big replay view" title="Close (Esc)">
+                {!inline && <button type="button" className={rt.close} onClick={close} aria-label="Close the big replay view" title="Close (Esc)">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                </button>
+                </button>}
             </header>
             {round?.index === index && round.data ? (
                 <TheaterRound
@@ -113,7 +118,7 @@ export function ReplayTheater(props: TheaterProps) {
                     {...props}
                     round={round.data}
                     roundIndex={index}
-                    initialTime={index === initialIndex ? initialTime : undefined}
+                    initialTime={index === initialIndex ? initialTime ?? props.defaultRoundTime : props.defaultRoundTime}
                     vision={vision}
                     allNames={allNames}
                     callouts={callouts}
@@ -122,13 +127,14 @@ export function ReplayTheater(props: TheaterProps) {
             ) : (
                 <div className={rt.loading} role="status">{round?.index === index && round.data === null ? "This round could not be loaded." : <><span aria-hidden="true" />Loading round…</>}</div>
             )}
-        </div>,
-        document.body,
+        </div>
     );
+    return inline ? theater : createPortal(theater, document.body);
 }
 
 function TheaterRound({
     detail,
+    inline,
     map,
     maps,
     agents,
@@ -148,6 +154,7 @@ function TheaterRound({
     onNextRound,
 }: TheaterProps & { round: ReplayRound; roundIndex: number; vision: boolean; allNames: boolean; callouts: boolean; onNextRound?: () => void }) {
     const clock = useReplayClock(round, initialTime);
+    const abilityIcon = useCallback((name: string, subject?: string) => replayAbilityIcon(name, subject, detail.players, agents), [detail.players, agents]);
     const { time, toggle, seek } = clock;
     const [focus, setFocus] = useState<string | null>(null);
     const [pinned, setPinned] = useState<string | null>(null);
@@ -189,7 +196,10 @@ function TheaterRound({
             const player = detail.players.find((entry) => entry.subject.toLowerCase() === effect.subject);
             const agentId = player?.characterId?.toLowerCase() || "";
             const ability = Object.entries(agents[agentId]?.abilities ?? {}).find(([, entry]) => entry.name.toLowerCase() === effect.name.toLowerCase())?.[0];
-            if (ability) pieces.push({ ...place(effect.x, effect.y), kind: "utility", side: side(effect.subject), agentId, ability });
+            if (ability) {
+                const position = replayUtilityPosition(effect, time);
+                pieces.push({ ...place(position.x, position.y), kind: "utility", side: side(effect.subject), agentId, ability });
+            }
         }
         if (plant && plant.time <= time && (!riotRound?.bombDefuser || time < (riotRound.defuseRoundTime || 0))) {
             pieces.push({ ...place(plant.x, plant.y), kind: "spike", side: side(riotRound?.bombPlanter?.toLowerCase() || ""), agentId: "" });
@@ -219,7 +229,7 @@ function TheaterRound({
     }, [clampView]);
     useEffect(() => {
         const board = boardRef.current;
-        if (!board) return;
+        if (!board || inline) return;
         const onWheel = (event: WheelEvent) => {
             event.preventDefault();
             const rect = board.getBoundingClientRect();
@@ -227,7 +237,7 @@ function TheaterRound({
         };
         board.addEventListener("wheel", onWheel, { passive: false });
         return () => board.removeEventListener("wheel", onWheel);
-    }, [zoomAt]);
+    }, [inline, zoomAt]);
     const onBoardDown = (event: ReactPointerEvent<HTMLDivElement>) => {
         if (view.scale === 1 || (event.target as HTMLElement).closest("button")) return;
         drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, vx: view.x, vy: view.y };
@@ -239,18 +249,18 @@ function TheaterRound({
         setView(clampView(view.scale, start.vx + event.clientX - start.x, start.vy + event.clientY - start.y));
     };
 
-    // Space and arrows drive the clock anywhere in the view, except on a focused control.
+    // Capture before the dialog stops key events from reaching the match popup.
     useEffect(() => {
         const onKey = (event: globalThis.KeyboardEvent) => {
-            if (board) return;
-            const target = event.target as HTMLElement | null;
-            if (target?.closest("button, [role=slider]")) return;
+            const target = event.target;
+            if (board || !(target instanceof HTMLElement) || !boardRef.current?.closest("[data-replay-theater]")?.contains(target)) return;
+            if (target.closest("button, a, input, select, textarea, [contenteditable], [role=slider]")) return;
             if (event.key === " ") { event.preventDefault(); toggle(); }
             else if (event.key === "ArrowRight") { event.preventDefault(); seek(time + (event.shiftKey ? 10_000 : 5_000)); }
             else if (event.key === "ArrowLeft") { event.preventDefault(); seek(time - (event.shiftKey ? 10_000 : 5_000)); }
         };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
+        window.addEventListener("keydown", onKey, true);
+        return () => window.removeEventListener("keydown", onKey, true);
     }, [board, seek, time, toggle]);
 
     const kills = new Map<string, number>();
@@ -303,8 +313,29 @@ function TheaterRound({
         </section>
     );
 
+    const controls = (
+        <footer className={rt.bottom}>
+            {comparison ? <div className={rt.smokeComparison}>
+                <strong>Dark Cover <time>{smokeTime(comparison.smokeTime)}</time></strong>
+                <span aria-live="polite">{entryDelta === undefined ? "Scrub to a teammate’s entry to compare timing." : Math.abs(entryDelta) < 50
+                    ? "Entry as smoke opened"
+                    : `Entry ${smokeTime(entryDelta < 0 ? -entryDelta : entryDelta)} ${entryDelta < 0 ? "before" : "after"} smoke opened`}</span>
+                <button type="button" onClick={() => {
+                    clock.setPlaying(false);
+                    setComparison({ ...comparison, entryTime: time });
+                }}>Mark entry</button>
+            </div> : null}
+            <ReplayTimeline clock={clock} moments={moments} current={current} onPickSmoke={pickSmoke}>
+                <button type="button" className={rt.plan} onClick={openBoard} title="Open this replay position as an editable play">Plan from here</button>
+                {onNextRound && time >= clock.lastMs ? <button type="button" className={rt.next} onClick={onNextRound}>Next round</button> : null}
+            </ReplayTimeline>
+            <p className={rt.keys}>Space play · ←/→ seek · V vision · N names{inline ? "" : " · Esc close"}</p>
+        </footer>
+    );
+
     return (
         <>
+            {inline && controls}
             <div className={rt.body}>
                 <aside className={rt.side}>{renderRoster("ally")}</aside>
                 <div className={rt.stage}>
@@ -331,6 +362,7 @@ function TheaterRound({
                             side={side}
                             localSubject={localSubject}
                             agentIcon={agentIcon}
+                            abilityIcon={abilityIcon}
                             playerName={playerName}
                             moments={moments}
                             plant={plant}
@@ -363,7 +395,11 @@ function TheaterRound({
                                     seek(replayMomentTime(moment));
                                 }} aria-pressed={moment.kind === "smoke" ? moment.id === comparison?.smokeId : undefined} aria-label={moment.kind === "smoke" ? `${smokeTime(moment.time)} · ${moment.label}` : undefined} title={moment.label}>
                                     <time>{moment.kind === "smoke" || moment.utility ? smokeTime(moment.time) : fmtLength(moment.time)}</time>
-                                    {moment.kind === "smoke" || moment.utility ? <span className={rt.smokeDot} data-effect={moment.utility?.kind} aria-hidden="true" /> : <i style={{ backgroundImage: agentIcon(moment.actor) ? `url("${agentIcon(moment.actor)}")` : undefined }} />}
+                                    {moment.kind === "smoke" || moment.utility ? <span className={rt.abilityIcon} aria-hidden="true">
+                                        {abilityIcon(moment.utility?.name ?? "Dark Cover", moment.actor)
+                                            ? <img src={abilityIcon(moment.utility?.name ?? "Dark Cover", moment.actor)} alt="" />
+                                            : <b>{(moment.utility?.name ?? "Dark Cover").slice(0, 2)}</b>}
+                                    </span> : <i style={{ backgroundImage: agentIcon(moment.actor) ? `url("${agentIcon(moment.actor)}")` : undefined }} />}
                                     {moment.target ? <>
                                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h12M13 7l5 5-5 5" /></svg>
                                         <i data-victim style={{ backgroundImage: agentIcon(moment.target) ? `url("${agentIcon(moment.target)}")` : undefined }} />
@@ -378,24 +414,8 @@ function TheaterRound({
                     </section>
                 </aside>
             </div>
-            <footer className={rt.bottom}>
-                {comparison ? <div className={rt.smokeComparison}>
-                    <strong>Dark Cover <time>{smokeTime(comparison.smokeTime)}</time></strong>
-                    <span aria-live="polite">{entryDelta === undefined ? "Scrub to a teammate’s entry to compare timing." : Math.abs(entryDelta) < 50
-                        ? "Entry as smoke opened"
-                        : `Entry ${smokeTime(entryDelta < 0 ? -entryDelta : entryDelta)} ${entryDelta < 0 ? "before" : "after"} smoke opened`}</span>
-                    <button type="button" onClick={() => {
-                        clock.setPlaying(false);
-                        setComparison({ ...comparison, entryTime: time });
-                    }}>Mark entry</button>
-                </div> : null}
-                <ReplayTimeline clock={clock} moments={moments} current={current} onPickSmoke={pickSmoke}>
-                    <button type="button" className={rt.plan} onClick={openBoard} title="Open this replay position as an editable play">Plan from here</button>
-                    {onNextRound && time >= clock.lastMs ? <button type="button" className={rt.next} onClick={onNextRound}>Next round</button> : null}
-                </ReplayTimeline>
-                <p className={rt.keys}>Space play · ←/→ 5 s · V vision · N names · Esc close</p>
-            </footer>
-            {board ? <TacticsBoard maps={tacticsMaps(maps || {}, map)} agents={agents} seed={board} onClose={() => setBoard(null)} /> : null}
+            {!inline && controls}
+            {board ? <TacticsBoard maps={tacticsMaps(maps || {}, map)} agents={agents} seed={board} confirmUntouchedSeed={!inline} onClose={() => setBoard(null)} /> : null}
         </>
     );
 }

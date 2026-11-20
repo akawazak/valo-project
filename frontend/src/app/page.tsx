@@ -148,6 +148,7 @@ function HomeApp() {
     const accountOwnerRef = useRef(accountOwner);
     accountOwnerRef.current = accountOwner;
     const initialRequestRef = useRef(0);
+    const initialRetryDelayRef = useRef(2_000);
     const scopedInitialData = initialData.owner === accountOwner ? initialData : EMPTY_ACCOUNT_DATA;
     const [dataRevision, setDataRevision] = useState(0);
     const [autoSelectAgent, setAutoSelectAgent] = useState<boolean | undefined>(undefined);
@@ -728,6 +729,10 @@ function HomeApp() {
             try {
                 const full = await getPlayerLoadoutData(owner);
                 if (!isCurrent()) return;
+                if (!Object.keys(full.loadout).length) {
+                    throw new AppRequestError({ code: "VV-LOADOUT-INCOMPLETE", message: "Your equipped loadout is still loading. VantaVault will retry automatically." });
+                }
+                initialRetryDelayRef.current = 2_000;
                 loadoutAvailable = true;
                 playerLoadout = full.loadout;
                 gameMeta = {
@@ -801,6 +806,17 @@ function HomeApp() {
         }
         return () => { initialRequestRef.current += 1; };
     }, [isBackendOnline, isClientHealthy, storefrontRefreshKey, loadInitialData]);
+
+    useEffect(() => {
+        initialRetryDelayRef.current = 2_000;
+    }, [accountOwner]);
+
+    useEffect(() => {
+        if (!accountOwner || !isBackendOnline || !isClientHealthy || isLoading || scopedInitialData.loadoutAvailable) return;
+        const timer = window.setTimeout(() => { void loadInitialData(); }, initialRetryDelayRef.current);
+        initialRetryDelayRef.current = Math.min(initialRetryDelayRef.current * 2, 30_000);
+        return () => window.clearTimeout(timer);
+    }, [accountOwner, initialData, isBackendOnline, isClientHealthy, isLoading, loadInitialData, scopedInitialData.loadoutAvailable]);
 
     const prevSettingsRef = useRef<Settings | null>(null);
 

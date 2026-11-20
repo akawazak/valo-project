@@ -35,8 +35,8 @@ import (
 // Version 3: players who stand still at spawn are shown there before their first move.
 // Version 4: what each player is holding.
 // Version 5: deployed Omen smokes.
-// Version 6: additional deployed utility and recorded teleport events.
-const replayFormatVersion = 6
+// Version 7: utility trajectories, trap anchors, and device activation.
+const replayFormatVersion = 7
 
 // replaySampleMs is the stored position step: 8 per second is smooth once the
 // player interpolates, and keeps a whole match near one megabyte.
@@ -390,6 +390,9 @@ type replayField struct {
 	Name   *string `parquet:"field_name"`
 	Group  string  `parquet:"group_path"`
 	I64    *int64  `parquet:"value_i64"`
+	Bool   *bool   `parquet:"value_bool"`
+	Text   *string `parquet:"value_str"`
+	Raw    []byte  `parquet:"raw_bits"`
 }
 
 type replayActor struct {
@@ -399,6 +402,7 @@ type replayActor struct {
 	Event  string   `parquet:"event"`
 	X      *float32 `parquet:"spawn_x"`
 	Y      *float32 `parquet:"spawn_y"`
+	Yaw    *float32 `parquet:"spawn_yaw"`
 }
 
 type replayHeldChange struct {
@@ -508,6 +512,17 @@ func readReplayFields(path string) ([]replayField, error) {
 			return field.I64 != nil && (field.Group == omenSmokeClass || replayUtilityClass(field.Group).Name != "")
 		case "TeleporterUsed":
 			return replayUtilityClass(field.Group).Kind == "teleport"
+		case "ReplicatedMovement":
+			spec := replayUtilityClass(field.Group)
+			return field.Text != nil && (spec.Kind == "projectile" || spec.Kind == "summon" || spec.Kind == "landed")
+		case "MulticastStopProjectile":
+			return replayUtilityClass(field.Group).Kind == "landed"
+		case "IsActivated":
+			return field.Group == replayActivationComponent && field.Bool != nil && *field.Bool
+		case replayWireMarkerOne, replayWireMarkerTwo, "SetEnemyInTrap.PairedWire":
+			return len(field.Raw) != 0 && replayUtilityClass(field.Group).Kind == "trap"
+		case "RuntimeRadius":
+			return len(field.Raw) == 4 && replayUtilityClass(field.Group).Name != ""
 		case "MulticastSetPhase.NewPhase", "CurrentEquippable", "NewCurrentEquippable":
 			return field.I64 != nil
 		}
@@ -734,6 +749,16 @@ func convertReplayExport(dir, id string) (*ReplayFile, error) {
 				if ability.EndMs != nil {
 					end := *ability.EndMs - round.StartMs
 					ability.EndMs = &end
+				}
+				if ability.ActivationMs != nil {
+					when := *ability.ActivationMs - round.StartMs
+					ability.ActivationMs = &when
+				}
+				if len(ability.Path) > 0 {
+					ability.Path = append([]replayUtilitySample(nil), ability.Path...)
+					for index := range ability.Path {
+						ability.Path[index].Ms -= round.StartMs
+					}
 				}
 				round.Utility = append(round.Utility, ability)
 			}

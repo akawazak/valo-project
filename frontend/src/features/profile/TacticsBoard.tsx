@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { mapCalloutLabel, mapCalloutPlotPosition, type AgentMeta, type MapMeta } from "./profileShared";
 import { blankBoard, boardId, clampPercent, loadPlaybook, PLAYBOOK_KEY, validBoardPlan, type BoardPhase, type BoardPiece, type BoardPlan, type BoardRoute, type BoardSide } from "./tacticsBoardModel";
@@ -7,15 +7,17 @@ import css from "./TacticsBoard.module.css";
 import coverage from "./AbilityCoverage.module.css";
 import { abilityCoverageRadii } from "./abilityCoverage";
 
-type Tool = "move" | "route" | "spike" | "agent" | "utility";
+type Tool = "move" | "route" | "spike" | "pan" | "agent" | "utility";
 type Point = Pick<BoardPiece, "x" | "y">;
-type Stroke = { pointer: number; piece?: BoardPiece; points: Point[] };
+type Stroke = { pointer: number; piece?: BoardPiece; route?: BoardRoute; points: Point[] };
 type Placement = Pick<BoardPiece, "kind" | "agentId" | "ability">;
-const PALETTE_DRAG = "application/x-vantavault-tactic-piece";
+type PaletteDrag = { pointer: number; start: Point; placement: Placement; moved: boolean };
+const PREVIEW_ID = "palette-preview";
 const tools = [
     ["move", "Move", "V", "M5 3l14 9-7 1-3 7z"],
     ["route", "Route", "R", "M4 19l6-7 4 2 6-9m-6 0h6v6"],
     ["spike", "Spike", "P", "M12 3l8 9-8 9-8-9zM12 8v8"],
+    ["pan", "Pan", "H", "M12 3v18M3 12h18M9 6l3-3 3 3m-6 12 3 3 3-3M6 9l-3 3 3 3m12-6 3 3-3 3"],
 ] as const;
 
 export function tacticsMaps(maps: Record<string, MapMeta>, replayMap?: MapMeta) {
@@ -25,13 +27,18 @@ export function tacticsMaps(maps: Record<string, MapMeta>, replayMap?: MapMeta) 
     return [...new Map(available.map(map => [map.uuid, map])).values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function TacticsBoard({ maps, agents, seed, onClose }: {
-    maps: MapMeta[]; agents: Record<string, AgentMeta>; seed?: BoardPlan; onClose: () => void;
+export function TacticsBoard({ maps, agents, seed, confirmUntouchedSeed = true, onClose }: {
+    maps: MapMeta[]; agents: Record<string, AgentMeta>; seed?: BoardPlan; confirmUntouchedSeed?: boolean; onClose: () => void;
 }) {
     const dialog = useRef<HTMLDialogElement>(null);
     const input = useRef<HTMLInputElement>(null);
+    const mapRef = useRef<HTMLDivElement>(null);
+    const viewportRef = useRef<HTMLDivElement>(null);
+    const zoomAnchor = useRef<{ screen: Point; map: Point } | null>(null);
     const stroke = useRef<Stroke | null>(null);
-    const paletteDrag = useRef<Placement | null>(null);
+    const pan = useRef<{ pointer: number; start: Point; scroll: Point } | null>(null);
+    const paletteDrag = useRef<PaletteDrag | null>(null);
+    const suppressPaletteClick = useRef(false);
     const paletteFilter = useId();
     const [playbook, setPlaybook] = useState(loadPlaybook);
     const [history, setHistory] = useState(() => ({
@@ -51,6 +58,8 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
     const [tool, setTool] = useState<Tool>("move");
     const [selected, setSelected] = useState<string>();
     const [draft, setDraft] = useState<Stroke | null>(null);
+    const [palettePreview, setPalettePreview] = useState<BoardPiece | null>(null);
+    const [panning, setPanning] = useState(false);
     const [callouts, setCallouts] = useState(false);
     const [showPlaybook, setShowPlaybook] = useState(false);
     const [gameColors, setGameColors] = useState(false);
@@ -59,7 +68,9 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
     const [message, setMessage] = useState("");
     const [importedId, setImportedId] = useState("");
     const saved = playbook.find(entry => entry.id === plan.id);
-    const dirty = saved ? JSON.stringify(plan) !== JSON.stringify(saved) : seed?.id === plan.id || importedId === plan.id || history.past.length > 0;
+    const dirty = saved
+        ? JSON.stringify(plan) !== JSON.stringify(saved)
+        : (confirmUntouchedSeed && seed?.id === plan.id) || importedId === plan.id || history.past.length > 0;
     const mayDiscard = () => {
         const focused = document.activeElement;
         const pending = (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) && focused.value !== focused.defaultValue;
@@ -80,6 +91,33 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
         }, phase.seconds * 1000);
         return () => window.clearTimeout(timer);
     }, [phase.seconds, plan.phases.length, playing, step]);
+    useEffect(() => {
+        const viewport = viewportRef.current;
+        if (!viewport) return;
+        const onWheel = (event: WheelEvent) => {
+            const board = mapRef.current;
+            if (!board || event.ctrlKey || !event.deltaY) return;
+            event.preventDefault();
+            const next = Math.min(2, Math.max(1, zoom - Math.sign(event.deltaY) * 0.25));
+            if (next === zoom) return;
+            const rect = board.getBoundingClientRect();
+            zoomAnchor.current = {
+                screen: { x: event.clientX, y: event.clientY },
+                map: { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height },
+            };
+            setZoom(next);
+        };
+        viewport.addEventListener("wheel", onWheel, { passive: false });
+        return () => viewport.removeEventListener("wheel", onWheel);
+    }, [zoom]);
+    useLayoutEffect(() => {
+        const anchor = zoomAnchor.current;
+        zoomAnchor.current = null;
+        const viewport = viewportRef.current;
+        const rect = mapRef.current?.getBoundingClientRect();
+        if (!anchor || !viewport || !rect) return;
+        viewport.scrollBy(rect.left + rect.width * anchor.map.x - anchor.screen.x, rect.top + rect.height * anchor.map.y - anchor.screen.y);
+    }, [zoom]);
 
     const commit = (next: BoardPlan) => {
         setHistory(previous => ({ past: [...previous.past.slice(-39), previous.now], now: next, future: [] }));
@@ -158,55 +196,100 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
         setSelected(piece.id);
     };
     const addPiece = (position: Point) => {
-        if (tool === "move" || tool === "route") return;
+        if (tool === "move" || tool === "route" || tool === "pan") return;
         place(position, { kind: tool, agentId: tool === "spike" ? "" : agentId, ability: tool === "utility" ? ability : undefined });
     };
-    const dragPiece = (event: DragEvent<HTMLButtonElement>, placement: Placement) => {
-        paletteDrag.current = placement;
-        event.dataTransfer.setData(PALETTE_DRAG, placement.kind);
-        event.dataTransfer.effectAllowed = "copy";
+    const palettePosition = (event: PointerEvent<HTMLButtonElement>) => {
+        const board = mapRef.current;
+        return board?.contains(document.elementFromPoint(event.clientX, event.clientY)) ? locate(event, board) : null;
     };
-    const dropPiece = (event: DragEvent<HTMLDivElement>) => {
-        const placement = paletteDrag.current;
-        if (!placement || playing || !event.dataTransfer.types.includes(PALETTE_DRAG)) return;
-        event.preventDefault();
+    const finishPalette = (event: PointerEvent<HTMLButtonElement>, cancel = false) => {
+        const drag = paletteDrag.current;
+        if (!drag || drag.pointer !== event.pointerId) return;
         paletteDrag.current = null;
+        setPalettePreview(null);
+        if (!drag.moved) return;
+        suppressPaletteClick.current = true;
+        const position = !cancel && !playing && palettePosition(event);
+        if (!position) return;
         setTool("move");
-        setAgent(placement.agentId);
-        place(locate(event), placement);
+        setAgent(drag.placement.agentId);
+        place(position, drag.placement);
     };
+    const paletteHandlers = (placement: Placement, select: () => void) => ({
+        onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+            if (playing || paletteDrag.current || stroke.current || pan.current || !event.isPrimary || event.button !== 0) return;
+            suppressPaletteClick.current = false;
+            paletteDrag.current = { pointer: event.pointerId, start: { x: event.clientX, y: event.clientY }, placement, moved: false };
+            event.currentTarget.setPointerCapture(event.pointerId);
+        },
+        onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
+            const drag = paletteDrag.current;
+            if (!drag || drag.pointer !== event.pointerId) return;
+            drag.moved ||= Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y) > 5;
+            if (!drag.moved) return;
+            const position = palettePosition(event);
+            setPalettePreview(position ? { ...position, ...drag.placement, id: PREVIEW_ID, side } : null);
+        },
+        onPointerUp: (event: PointerEvent<HTMLButtonElement>) => finishPalette(event),
+        onPointerCancel: (event: PointerEvent<HTMLButtonElement>) => finishPalette(event, true),
+        onLostPointerCapture: (event: PointerEvent<HTMLButtonElement>) => finishPalette(event, true),
+        onClick: (event: MouseEvent<HTMLButtonElement>) => {
+            if (!suppressPaletteClick.current || event.detail === 0) select();
+            suppressPaletteClick.current = false;
+        },
+    });
     const movePiece = (piece: BoardPiece, position: Point) => update({ ...phase, pieces: phase.pieces.map(entry => entry.id === piece.id ? { ...entry, ...position } : entry) });
+    const moveRoute = (route: BoardRoute, start: Point, end: Point) => {
+        const moved = shiftRoute(route, start, end);
+        if (moved !== route) update({ ...phase, routes: phase.routes.map(entry => entry.id === route.id ? moved : entry) });
+    };
     const removeSelected = () => {
         if (!selected) return;
         update({ ...phase, pieces: phase.pieces.filter(piece => piece.id !== selected), routes: phase.routes.filter(route => route.id !== selected) });
         setSelected(undefined);
     };
-    const locate = (event: PointerEvent<HTMLDivElement> | DragEvent<HTMLDivElement>): Point => {
-        const rect = event.currentTarget.getBoundingClientRect();
+    const locate = (event: { clientX: number; clientY: number }, target: HTMLElement): Point => {
+        const rect = target.getBoundingClientRect();
         return { x: clampPercent((event.clientX - rect.left) / rect.width * 100), y: clampPercent((event.clientY - rect.top) / rect.height * 100) };
     };
     const down = (event: PointerEvent<HTMLDivElement>) => {
-        if (playing || stroke.current || event.button !== 0) return;
-        const position = locate(event);
-        if (tool !== "move" && tool !== "route") { addPiece(position); return; }
-        const route = (event.target as Element).closest<SVGElement>("[data-route]")?.dataset.route;
-        const id = (event.target as Element).closest<HTMLElement>("[data-piece]")?.dataset.piece;
-        const piece = tool === "move" ? phase.pieces.find(entry => entry.id === id) : undefined;
-        if (tool === "move") {
-            setSelected(piece?.id || route);
-            if (piece?.agentId && agents[piece.agentId]) setAgent(piece.agentId);
+        if (!event.isPrimary || stroke.current || pan.current || paletteDrag.current) return;
+        const viewport = viewportRef.current;
+        if (viewport && (event.button === 1 || (event.button === 0 && tool === "pan"))) {
+            event.preventDefault();
+            pan.current = { pointer: event.pointerId, start: { x: event.clientX, y: event.clientY }, scroll: { x: viewport.scrollLeft, y: viewport.scrollTop } };
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setPanning(true);
+            return;
         }
-        if (tool === "move" && !piece || tool === "route" && phase.routes.length >= 60) return;
-        stroke.current = { pointer: event.pointerId, piece, points: [position] };
+        if (playing || event.button !== 0 || tool === "pan") return;
+        const position = locate(event, event.currentTarget);
+        const routeId = (event.target as Element).closest<SVGElement>("[data-route]")?.dataset.route;
+        const route = tool === "move" ? phase.routes.find(entry => entry.id === routeId) : undefined;
+        const id = (event.target as Element).closest<HTMLElement>("[data-piece]")?.dataset.piece;
+        const piece = tool !== "route" ? phase.pieces.find(entry => entry.id === id) : undefined;
+        if (!piece && tool !== "move" && tool !== "route") { addPiece(position); return; }
+        if (tool !== "route") {
+            setSelected(piece?.id || route?.id);
+            if (tool === "move" && piece?.agentId && agents[piece.agentId]) setAgent(piece.agentId);
+        }
+        if (tool === "move" && !piece && !route || tool === "route" && phase.routes.length >= 60) return;
+        stroke.current = { pointer: event.pointerId, piece, route, points: [position] };
         event.currentTarget.setPointerCapture(event.pointerId);
     };
     const move = (event: PointerEvent<HTMLDivElement>) => {
+        const activePan = pan.current;
+        if (activePan?.pointer === event.pointerId) {
+            viewportRef.current?.scrollTo(activePan.scroll.x + activePan.start.x - event.clientX, activePan.scroll.y + activePan.start.y - event.clientY);
+            return;
+        }
         const active = stroke.current;
         if (!active || active.pointer !== event.pointerId) return;
-        const position = locate(event);
+        const position = locate(event, event.currentTarget);
         const last = active.points[active.points.length - 1];
         if (Math.hypot(position.x - last.x, position.y - last.y) < 0.6) return;
-        const next = { ...active, points: [...active.points.slice(0, active.piece ? 1 : 98), position] };
+        const next = { ...active, points: [...active.points.slice(0, active.piece || active.route ? 1 : 98), position] };
         stroke.current = next;
         setDraft(next);
     };
@@ -214,15 +297,22 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
         x: clampPercent(piece.x + end.x - start.x), y: clampPercent(piece.y + end.y - start.y),
     });
     const finish = (event: PointerEvent<HTMLDivElement>, cancel = false) => {
+        if (pan.current?.pointer === event.pointerId) {
+            pan.current = null;
+            setPanning(false);
+            return;
+        }
         const active = stroke.current;
         if (!active || active.pointer !== event.pointerId) return;
         stroke.current = null;
         setDraft(null);
         if (cancel) return;
-        const end = locate(event);
+        const end = locate(event, event.currentTarget);
         const start = active.points[0];
         if (active.piece) {
             if (Math.hypot(end.x - start.x, end.y - start.y) > 0.35) movePiece(active.piece, shift(active.piece, start, end));
+        } else if (active.route) {
+            if (Math.hypot(end.x - start.x, end.y - start.y) > 0.35) moveRoute(active.route, start, end);
         } else {
             const last = active.points[active.points.length - 1];
             const points = end.x === last.x && end.y === last.y ? active.points : [...active.points, end];
@@ -249,10 +339,27 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
             {index !== undefined && tool === "move" && !playing ? <polyline className={css.routeHit} points={points} data-route={route.id}
                 role="button" tabIndex={0} aria-label={(route.side === "ally" ? "Ally" : "Enemy") + " route " + (index + 1)}
                 aria-pressed={selected === route.id} onClick={() => setSelected(route.id)}
-                onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(route.id); } }} /> : null}
+                onKeyDown={event => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelected(route.id);
+                    }
+                    const delta = arrowDelta(event);
+                    if (delta) {
+                        setSelected(route.id);
+                        moveRoute(route, { x: 0, y: 0 }, delta);
+                    }
+                }} /> : null}
         </g>;
     };
-    const hint = tool === "move" ? "Drag a portrait or ability onto the map." : tool === "route" ? "Drag on the map to draw." : "Place " + (tool === "agent" ? agent?.name || "agent" : tool === "utility" ? agent?.abilities?.[ability]?.name || "utility" : "spike");
+    const hint = {
+        move: "Drag items onto the map, or drag pieces and routes to move them.",
+        route: "Drag on the map to draw.",
+        pan: zoom <= 1 ? "Zoom in, then drag to pan." : "Drag to pan the map.",
+        agent: "Click to place " + (agent?.name || "an agent") + ".",
+        utility: "Click to place " + (agent?.abilities?.[ability]?.name || "an ability") + ".",
+        spike: "Click to place the spike.",
+    }[tool];
 
     return createPortal(<dialog ref={dialog} className={css.shell} aria-labelledby="tactics-title" onKeyDown={onKey}
         onCancel={event => { event.preventDefault(); close(); }} onClick={event => event.stopPropagation()}>
@@ -282,12 +389,10 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
                     <button type="button" aria-pressed={gameColors} onClick={() => setGameColors(value => !value)}>Game colors</button>
                     </div>
                 </div>
-                <div className={css.mapScroll}>
-                    {map ? <div className={css.map} data-tool={tool} data-playing={playing || undefined} tabIndex={0} aria-label={map.name + " tactics map"}
+                <div ref={viewportRef} className={css.mapScroll}>
+                    {map ? <div ref={mapRef} className={css.map} data-tool={tool} data-panning={panning || undefined} data-playing={playing || undefined} tabIndex={0} aria-label={map.name + " tactics map"}
                         style={{ "--zoom": zoom, "--map-palette": `url("#${paletteFilter}")` } as CSSProperties} onPointerDown={down} onPointerMove={move}
                         onPointerUp={event => finish(event)} onPointerCancel={event => finish(event, true)} onLostPointerCapture={event => finish(event, true)}
-                        onDragOver={event => { if (paletteDrag.current && !playing) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
-                        onDrop={dropPiece}
                         onKeyDown={event => { if (event.key === "Enter" && event.target === event.currentTarget && !playing) addPiece({ x: 50, y: 50 }); }}>
                         <img className={css.mapImage} data-tactical={!gameColors || undefined} src={map.displayIcon} alt={map.name + " minimap"} draggable={false} />
                         {map.callouts.map((item, index) => {
@@ -305,10 +410,13 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
                                 </feComponentTransfer></filter>
                                 {(["ally", "enemy"] as const).map(team => <marker key={team} id={"tactics-arrow-" + team} markerWidth="4" markerHeight="4" refX="3.3" refY="2" orient="auto" viewBox="0 0 4 4"><path data-side={team} d="M0 0l4 2-4 2 1-2z" /></marker>)}
                             </defs>
-                            {phase.routes.map(drawRoute)}
-                            {draft && !draft.piece ? drawRoute({ id: "draft", side, points: draft.points }) : null}
+                            {phase.routes.map((route, index) => drawRoute(draft?.route?.id === route.id
+                                ? shiftRoute(route, draft.points[0], draft.points[draft.points.length - 1])
+                                : route, index))}
+                            {draft && !draft.piece && !draft.route ? drawRoute({ id: "draft", side, points: draft.points }) : null}
                         </svg>
-                        {phase.pieces.map(piece => {
+                        {(palettePreview ? [...phase.pieces, palettePreview] : phase.pieces).map(piece => {
+                            const preview = piece === palettePreview;
                             const meta = agents[piece.agentId];
                             const utility = piece.kind === "utility" ? meta?.abilities?.[piece.ability || ""] : undefined;
                             const name = piece.kind === "spike" ? "Spike" : piece.kind === "agent" ? meta?.name || "Agent" : utility?.name || (piece.ability === "dark-cover" ? "Dark Cover" : "Utility");
@@ -319,17 +427,15 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
                                 "--coverage-width": Math.abs(map.xMultiplier || 0) * radius * 200 + "cqw",
                                 "--coverage-height": Math.abs(map.yMultiplier || 0) * radius * 200 + "cqw",
                             } : undefined;
-                            return <div key={piece.id} className={css.pin} data-kind={piece.kind} data-side={piece.side} data-coverage={radius ? true : undefined}
+                            return <div key={preview ? "preview:" + piece.id : piece.id} className={css.pin} data-kind={piece.kind} data-side={piece.side} data-coverage={radius ? true : undefined}
+                                data-preview={preview || undefined} aria-hidden={preview || undefined}
                                 style={{ left: position.x + "%", top: position.y + "%", ...coverageStyle } as CSSProperties}>
                                 {radius ? <span aria-hidden="true" className={`${css.abilityCoverage} ${coverage.texture}`} data-effect={name} /> : null}
                                 <button type="button" data-piece={piece.id} title={name} aria-label={name + " · " + (piece.side === "ally" ? "Ally" : "Enemy")}
-                                    aria-pressed={selected === piece.id} disabled={playing} onFocus={() => { if (tool === "move") setSelected(piece.id); }}
+                                    aria-pressed={selected === piece.id} disabled={playing || preview} onFocus={() => { if (tool === "move") setSelected(piece.id); }}
                                     onKeyDown={event => {
-                                        if (!event.key.startsWith("Arrow")) return;
-                                        event.preventDefault();
-                                        const amount = event.shiftKey ? 5 : 1;
-                                        movePiece(piece, shift(piece, { x: 0, y: 0 }, { x: event.key === "ArrowLeft" ? -amount : event.key === "ArrowRight" ? amount : 0,
-                                            y: event.key === "ArrowUp" ? -amount : event.key === "ArrowDown" ? amount : 0 }));
+                                        const delta = arrowDelta(event);
+                                        if (delta) movePiece(piece, shift(piece, { x: 0, y: 0 }, delta));
                                     }}>{radius ? null : icon ? <img src={icon} alt="" draggable={false} /> : piece.kind === "spike" ? "◇" : name.slice(0, 2)}</button>
                             </div>;
                         })}
@@ -402,9 +508,9 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
                     {agent?.abilities ? <div className={css.abilities} aria-label={agent.name + " abilities"}>
                         <strong>{agent.name}</strong>
                         {Object.entries(agent.abilities).filter(([slot]) => slot !== "passive").map(([slot, entry]) =>
-                            <button key={slot} type="button" title={entry.name} aria-label={"Place " + entry.name} disabled={playing} draggable={!playing}
-                                onDragStart={event => dragPiece(event, { kind: "utility", agentId, ability: slot })} onDragEnd={() => { paletteDrag.current = null; }}
-                                aria-pressed={tool === "utility" && ability === slot} onClick={() => { setAbility(slot); chooseTool("utility"); }}>
+                            <button key={slot} type="button" title={"Drag or click to place " + entry.name} aria-label={"Place " + entry.name} disabled={playing}
+                                aria-pressed={tool === "utility" && ability === slot}
+                                {...paletteHandlers({ kind: "utility", agentId, ability: slot }, () => { setAbility(slot); chooseTool("utility"); })}>
                                 {entry.icon ? <span className={`${css.abilitySwatch} ${coverage.texture}`} data-effect={abilityCoverageRadii.has(entry.name) ? entry.name : undefined}>
                                     <img src={entry.icon} alt="" draggable={false} />
                                 </span> : null}<span>{entry.name}</span>
@@ -418,13 +524,32 @@ export function TacticsBoard({ maps, agents, seed, onClose }: {
                     {["Controller", "Duelist", "Initiator", "Sentinel"].map(option => <option key={option}>{option}</option>)}
                 </select>
                 <div className={css.agents}>{palette.filter(([, entry]) => !role || entry.role === role).map(([id, entry]) =>
-                    <button key={id} type="button" title={entry.name} aria-label={"Place " + entry.name} disabled={playing} draggable={!playing}
-                        aria-pressed={agentId === id} onDragStart={event => dragPiece(event, { kind: "agent", agentId: id })} onDragEnd={() => { paletteDrag.current = null; }}
-                        onClick={() => { setAgent(id); chooseTool("agent"); }}>
+                    <button key={id} type="button" title={"Drag or click to place " + entry.name} aria-label={"Place " + entry.name} disabled={playing}
+                        aria-pressed={agentId === id} {...paletteHandlers({ kind: "agent", agentId: id }, () => { setAgent(id); chooseTool("agent"); })}>
                         {entry.icon ? <img src={entry.icon} alt="" draggable={false} /> : entry.name.slice(0, 2)}
                     </button>)}</div>
             </div>
         </section>
         <div className={css.status} role="status">{message || (dirty ? "Unsaved changes" : saved ? "Saved on this device" : "")}</div>
     </dialog>, document.body);
+}
+
+function shiftRoute(route: BoardRoute, start: Point, end: Point): BoardRoute {
+    const xs = route.points.map(point => point.x);
+    const ys = route.points.map(point => point.y);
+    // Bound the whole translation so the route retains its shape at the edge.
+    const dx = Math.max(-Math.min(...xs), Math.min(100 - Math.max(...xs), end.x - start.x));
+    const dy = Math.max(-Math.min(...ys), Math.min(100 - Math.max(...ys), end.y - start.y));
+    return dx || dy ? { ...route, points: route.points.map(({ x, y }) => ({ x: x + dx, y: y + dy })) } : route;
+}
+
+function arrowDelta(event: KeyboardEvent): Point | undefined {
+    const amount = event.shiftKey ? 5 : 1;
+    const delta: Record<string, Point> = {
+        ArrowLeft: { x: -amount, y: 0 }, ArrowRight: { x: amount, y: 0 },
+        ArrowUp: { x: 0, y: -amount }, ArrowDown: { x: 0, y: amount },
+    };
+    if (!event.key.startsWith("Arrow") || !delta[event.key]) return;
+    event.preventDefault();
+    return delta[event.key];
 }

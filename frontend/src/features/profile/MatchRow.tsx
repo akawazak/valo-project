@@ -539,6 +539,7 @@ export function MatchRow({
                                         detail={loadedAnalytics ?? detail}
                                         kills={loadedAnalytics?.kills ?? detail.kills ?? []}
                                         map={mapMeta}
+                                        maps={maps}
                                         agents={agents}
                                         weapons={weapons}
                                         loading={analyticsLoading}

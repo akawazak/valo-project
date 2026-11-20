@@ -2153,13 +2153,20 @@ export interface ReplayRound {
 
 export interface ReplayUtility {
     name: string;
-    kind: "molly" | "slow" | "smoke" | "flash" | "device" | "teleport" | "impact";
+    kind: "molly" | "slow" | "smoke" | "flash" | "device" | "teleport" | "impact"
+        | "trap" | "projectile" | "summon" | "wall" | "heal" | "buff" | "pulse";
     subject?: string;
     startMs: number;
     endMs?: number;
     x: number;
     y: number;
     origin?: { x: number; y: number };
+    anchor?: { x: number; y: number };
+    segment?: [{ x: number; y: number }, { x: number; y: number }];
+    activationMs?: number;
+    radius?: number;
+    state?: "placed" | "damage";
+    path?: Array<{ ms: number; x: number; y: number }>;
 }
 
 export interface ReplaySummary {

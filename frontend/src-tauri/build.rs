@@ -110,33 +110,66 @@ fn watch_backend_sources(directory: &Path) -> Option<SystemTime> {
 // player. It ships as a second sidecar, built once from a pinned commit.
 const VRFKIT_GIT: &str = "https://github.com/SunkenInTime/vrfkit";
 const VRFKIT_REV: &str = "4dfdd2137808b5a0cc6c35d7d0e178ec421b4110";
+const VRFKIT_PATCH_FILENAME: &str = "patches/vrfkit-13.10.patch";
 
 fn ensure_replay_parser(project_dir: &Path, target_dir: &Path) {
     println!("cargo:rerun-if-env-changed=VANTAVAULT_VRFKIT_EXE");
+    println!("cargo:rerun-if-changed={VRFKIT_PATCH_FILENAME}");
     let binary_path = target_dir.join("vrfkit-x86_64-pc-windows-msvc.exe");
     let stamp_path = target_dir.join("vrfkit.rev");
+    let revision = format!("{VRFKIT_REV}+13.10.1");
     let current = binary_path.exists()
-        && fs::read_to_string(&stamp_path).is_ok_and(|rev| rev.trim() == VRFKIT_REV);
+        && fs::read_to_string(&stamp_path).is_ok_and(|rev| rev.trim() == revision);
     if current {
         return;
     }
     if let Ok(prebuilt) = std::env::var("VANTAVAULT_VRFKIT_EXE") {
         fs::copy(&prebuilt, &binary_path).expect("failed to copy VANTAVAULT_VRFKIT_EXE");
-        fs::write(&stamp_path, VRFKIT_REV).expect("failed to record the replay parser revision");
+        fs::write(&stamp_path, revision).expect("failed to record the replay parser revision");
         return;
     }
 
     println!("cargo:warning=Building the replay parser (vrfkit) once; this takes a few minutes...");
     let install_root = project_dir.join("target").join("vrfkit");
+    let source = install_root.join("source").join(&revision);
+    if !source.join(".git").is_dir() {
+        fs::create_dir_all(source.parent().unwrap())
+            .expect("failed to prepare replay parser directory");
+        let status = Command::new("git")
+            .args(["clone", "--no-checkout", VRFKIT_GIT])
+            .arg(&source)
+            .status()
+            .expect("failed to start git clone for vrfkit");
+        assert!(status.success(), "failed to fetch vrfkit");
+    }
+    let status = Command::new("git")
+        .args(["checkout", "--detach", VRFKIT_REV])
+        .current_dir(&source)
+        .status()
+        .expect("failed to select the pinned vrfkit source");
+    assert!(status.success(), "failed to check out vrfkit");
+    let patch = project_dir.join(VRFKIT_PATCH_FILENAME);
+    let already_patched = Command::new("git")
+        .args(["apply", "--reverse", "--check"])
+        .arg(&patch)
+        .current_dir(&source)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !already_patched {
+        let status = Command::new("git")
+            .arg("apply")
+            .arg(&patch)
+            .current_dir(&source)
+            .status()
+            .expect("failed to apply the vrfkit compatibility update");
+        assert!(status.success(), "failed to patch vrfkit for 13.10");
+    }
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut command = Command::new(cargo);
     command.args([
         "install",
-        "vrfkit",
-        "--git",
-        VRFKIT_GIT,
-        "--rev",
-        VRFKIT_REV,
+        "--path",
+        source.join("crates").join("vrfkit").to_str().unwrap(),
         "--locked",
         "--force",
         "--root",
@@ -158,7 +191,7 @@ fn ensure_replay_parser(project_dir: &Path, target_dir: &Path) {
     }
     fs::copy(install_root.join("bin").join("vrfkit.exe"), &binary_path)
         .expect("failed to place the replay parser sidecar");
-    fs::write(&stamp_path, VRFKIT_REV).expect("failed to record the replay parser revision");
+    fs::write(&stamp_path, revision).expect("failed to record the replay parser revision");
 }
 
 fn main() {

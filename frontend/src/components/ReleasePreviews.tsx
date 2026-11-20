@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 
-export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot" | "notifications" | "recordedreplay" | "recordedtactics" | "recordedutility";
+export type ReleasePreviewKind = "insights" | "compare" | "badges" | "replay" | "trade" | "takeaways" | "accounts" | "killspot" | "notifications" | "recordedreplay" | "recordedtactics" | "recordedutility" | "utilitystates" | "fightreplay" | "localaccount";
 
 type RecordedExample = { asset: string; caption: string; alt: string };
 
@@ -37,6 +37,35 @@ const CARD = (id: string) => `url("https://media.valorant-api.com/playercards/${
 export default function ReleasePreview({ kind }: { kind: ReleasePreviewKind }) {
     const example = getRecordedExample(kind);
     if (example) return <div className="release-notes-example-image" style={{ backgroundImage: "url(" + example.asset + "-preview.webp)" }} />;
+
+    if (kind === "utilitystates") return <div className="rn-preview rn-replay">
+        <svg viewBox="0 0 200 100" aria-hidden="true">
+            <path className="rn-map" d="M20 20h57v13h47V14h53v35h-22v34H97V68H58v15H20z" />
+            <path d="M47 35v32" stroke="#a990fd" strokeWidth="2.6" strokeDasharray="4 3" />
+            <circle cx="47" cy="35" r="3.5" fill="#cbb8ff" /><circle cx="47" cy="67" r="3.5" fill="#cbb8ff" />
+            <circle cx="113" cy="57" r="15" fill="#7d3c9e" stroke="#ecacfd" strokeWidth="1.5" />
+            <path d="M104 57h18m-9-9v18m-5-14 10 10m0-10-10 10" stroke="#e3a8f6" strokeWidth="1.2" strokeDasharray="1 3" />
+            <path d="M71 90h60" stroke="#64708b" strokeWidth="2" />
+            <circle cx="84" cy="90" r="3" fill="#9282c2" /><circle cx="104" cy="90" r="4.5" fill="#d8bbff" /><circle cx="119" cy="90" r="3" fill="#be7ee7" />
+        </svg>
+    </div>;
+
+    if (kind === "fightreplay") return <div className="rn-preview rn-replay rn-fight">
+        <svg viewBox="0 0 200 100" aria-hidden="true">
+            <path className="rn-map" d="M20 15h58v18h22V20h68v20h-17v35h-29V58H78v23H37V63H20z" />
+            <path d="M44 60l26-13 27 6 24-15" fill="none" stroke="#5eab9f" strokeWidth="1.6" strokeDasharray="4 3" />
+            <circle cx="45" cy="60" r="3.5" fill="#54a493" /><circle cx="70" cy="47" r="4" fill="#74cebb" />
+            <circle cx="99" cy="53" r="4.5" fill="#98f4df" /><circle cx="99" cy="53" r="9" fill="none" stroke="#98f4df" strokeWidth="1" />
+            <circle cx="146" cy="49" r="13" fill="#153c36" stroke="#72e0cb" strokeWidth="1.5" />
+            <path d="M142 43l9 6-9 6z" fill="#8bf4df" />
+        </svg>
+        <div className="rn-rounds"><i>−5s</i><i data-on>Fight</i><i>+5s</i></div>
+    </div>;
+
+    if (kind === "localaccount") return <div className="rn-preview rn-accounts">
+        <span className="rn-pill"><b /> Riot Client</span>
+        <ul><li data-state="connected"><b>Unknown</b><span>Shop connected</span></li></ul>
+    </div>;
 
     if (kind === "insights") return <div className="rn-preview rn-insights">
         <svg viewBox="0 0 120 120" aria-hidden="true">

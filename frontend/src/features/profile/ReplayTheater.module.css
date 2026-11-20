@@ -86,11 +86,13 @@
 .moments li button { --c: var(--enemy); display: grid; grid-template-columns: 34px 24px auto 24px minmax(0, 1fr); align-items: center; gap: 6px; width: 100%; padding: 5px 8px; border: 0; border-radius: 8px; background: none; color: inherit; text-align: left; cursor: pointer; opacity: 0.45; }
 .moments li button[data-side="ally"] { --c: var(--ally); }
 .moments li button[data-kind="plant"], .moments li button[data-kind="defuse"] { --c: #fff; }
-.moments li button[data-kind="smoke"] { --c: #c6a6ff; grid-template-columns: 44px 10px minmax(0, 1fr); }
+.moments li button[data-kind="smoke"] { --c: #c6a6ff; grid-template-columns: 44px 24px minmax(0, 1fr); }
 .moments li button[data-kind="smoke"]:not([data-past]) { opacity: 0.8; }
-.moments li button[data-kind="utility"] { grid-template-columns: 44px 10px minmax(0, 1fr); }
+.moments li button[data-kind="utility"] { grid-template-columns: 44px 24px minmax(0, 1fr); }
 .moments li button[data-kind="utility"]:not([data-past]) { opacity: 0.8; }
-.smokeDot { width: 8px; height: 8px; border: 1px solid var(--c); border-radius: 50%; background: #6143ae; }
+.abilityIcon { display: grid; place-items: center; width: 24px; height: 24px; padding: 3px; border: 1px solid var(--c); border-radius: 5px; background: #111921; box-sizing: border-box; }
+.abilityIcon img { width: 100%; height: 100%; object-fit: contain; }
+.abilityIcon b { font-size: 10px; color: #fff; }
 .moments li button[data-past] { opacity: 1; }
 .moments li button[data-active] { background: color-mix(in srgb, var(--c) 15%, transparent); box-shadow: inset 2px 0 0 var(--c); }
 .moments li button:hover { background: rgba(255, 255, 255, 0.06); }
@@ -105,11 +107,7 @@
 .who small { color: var(--dim); font-size: 11px; }
 .moments li button[data-kind="smoke"] .who { display: grid; }
 .moments li button[data-kind="utility"] .who { display: grid; }
-.smokeDot[data-effect="molly"] { background: #ff885e; }
-.smokeDot[data-effect="slow"] { background: #7bddfd; }
-.smokeDot[data-effect="flash"] { background: #ffe694; }
-.smokeDot[data-effect="impact"] { background: #f394a6; }
-.smokeDot[data-effect="teleport"] { background: #77ead4; }
+.moments li button[data-kind="utility"] .who b { white-space: normal; overflow-wrap: anywhere; }
 .moments li button[data-kind="smoke"] .who small { white-space: normal; }
 .smokeComparison { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 8px; color: #d7c5fb; font-size: 12px; }
 .smokeComparison strong { font-weight: 650; }

@@ -26,6 +26,7 @@ const TONE: Record<ReleasePreviewKind, string> = {
     insights: "#4fd6ff", compare: "#ffb03a", badges: "#2fd6a3", replay: "#8b7bff", trade: "#22d3a3",
     takeaways: "#ffb03a", accounts: "#ffb03a", killspot: "#22d3a3", notifications: "#f0c451",
     recordedreplay: "#b6a7ff", recordedtactics: "#73ead0", recordedutility: "#ffc579",
+    utilitystates: "#b6a7ff", fightreplay: "#73ead0", localaccount: "#ffc579",
 };
 
 type Props = {

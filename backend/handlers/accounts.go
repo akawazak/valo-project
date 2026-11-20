@@ -69,8 +69,9 @@ func (h *Handler) GetLocalAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := LocalAccountResponse{
-		Puuid:  val.Player.Uuid,
-		Region: string(val.Region),
+		Puuid:    val.Player.Uuid,
+		Region:   string(val.Region),
+		GameName: "Unknown",
 	}
 	var session struct {
 		Puuid    string `json:"puuid"`
@@ -92,10 +93,8 @@ func (h *Handler) GetLocalAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	names, err := val.GetNames([]string{result.Puuid})
-	if err != nil || len(names) == 0 || names[0] == nil {
-		h.returnError(w, errors.New("local Riot account details are still loading"))
-		return
+	if err == nil && len(names) > 0 && names[0] != nil && names[0].GameName != "" && names[0].TagLine != "" {
+		result.GameName, result.TagLine = names[0].GameName, names[0].TagLine
 	}
-	result.GameName, result.TagLine = names[0].GameName, names[0].TagLine
 	h.returnAny(w, result)
 }

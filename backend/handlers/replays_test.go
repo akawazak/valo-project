@@ -182,6 +182,54 @@ func TestReplayFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReplayUtilitySeparatesPlacementActivationAndTravel(t *testing.T) {
+	class := func(name string) string { return "/Game/Characters/Agent/S0/Ability_4/" + name + "." + name + "_C" }
+	open := func(guid, time uint32, ability string, x, y float32) replayActor {
+		return replayActor{Guid: guid, TimeMs: time, Event: "open", Class: ptr(class(ability)), X: &x, Y: &y}
+	}
+	close := func(guid, time uint32) replayActor { return replayActor{Guid: guid, TimeMs: time, Event: "close"} }
+	const nanoswarm = "Projectile_Killjoy_4_RemoteBees_MultiDetonate"
+	const paranoia = "Projectile_Wraith_Q_NearsightMissile"
+	wall := open(5, 3_000, "GameObject_Thorne_E_Wall_Segment_Fortifying", 400, 500)
+	wall.Yaw = ptr(float32(90))
+	actors := []replayActor{
+		open(1, 1_000, replayWirePrimary, 100, 200), open(2, 1_000, replayWireSecondary, 100, 600),
+		open(3, 2_000, nanoswarm, 50, 50), open(4, 2_400, paranoia, 400, 500),
+		close(4, 2_900), wall, close(1, 4_000), close(2, 4_000), close(3, 4_100), close(5, 4_800),
+	}
+	move := func(guid, at uint32, ability, location string) replayField {
+		return replayField{Actor: guid, TimeMs: at, Group: class(ability), Name: ptr("ReplicatedMovement"), Text: &location}
+	}
+	fields := []replayField{
+		{Actor: 1, Group: class(replayWirePrimary), Name: ptr(replayWireMarkerOne), Raw: []byte{11}},
+		{Actor: 1, Group: class(replayWirePrimary), Name: ptr(replayWireMarkerTwo), Raw: []byte{22}},
+		{Actor: 2, Group: class(replayWireSecondary), Name: ptr(replayWireMarkerOne), Raw: []byte{22}},
+		{Actor: 2, Group: class(replayWireSecondary), Name: ptr(replayWireMarkerTwo), Raw: []byte{11}},
+		{Actor: 1, TimeMs: 3_850, Group: class(replayWirePrimary), Name: ptr("SetEnemyInTrap.PairedWire"), Raw: []byte{2, 0, 0}},
+		move(3, 2_250, nanoswarm, `{"location":{"x":500,"y":550}}`),
+		{Actor: 3, TimeMs: 2_300, Group: class(nanoswarm), Name: ptr("MulticastStopProjectile")},
+		{Actor: 3, TimeMs: 3_800, Group: replayActivationComponent, Name: ptr("IsActivated"), Bool: ptr(true)},
+		move(4, 2_500, paranoia, `{"location":{"x":600,"y":500}}`),
+	}
+	utility := replayDeployedUtility(actors, fields, nil, nil)
+	if len(utility) != 4 {
+		t.Fatalf("got %d effects, want a single wire, the landed device, the moving projectile and the wall", len(utility))
+	}
+	wire, placed, flying := utility[0], utility[1], utility[2]
+	if wire.Anchor == nil || *wire.Anchor != (replayUtilityPoint{X: 100, Y: 600}) || wire.ActivationMs == nil || *wire.ActivationMs != 3_850 {
+		t.Fatalf("wire = %+v", wire)
+	}
+	if placed.State != "placed" || placed.StartMs != 2_300 || placed.X != 500 || placed.Y != 550 || placed.ActivationMs == nil || *placed.ActivationMs != 3_800 {
+		t.Fatalf("placed grenade = %+v", placed)
+	}
+	if len(flying.Path) != 1 || flying.Path[0].Ms != 2_500 || flying.Path[0].X != 600 {
+		t.Fatalf("moving projectile = %+v", flying)
+	}
+	if wall := utility[3]; wall.Segment == nil || *wall.Segment != [2]replayUtilityPoint{{X: 530, Y: 500}, {X: 270, Y: 500}} {
+		t.Fatalf("oriented wall = %+v", wall)
+	}
+}
+
 func TestReplayIDPatternRejectsPaths(t *testing.T) {
 	for _, id := range []string{"../x", "85a51a8d-9a60-4167-b4c7-3ab7933426b6/../x", "", "abc"} {
 		if replayIDPattern.MatchString(id) {

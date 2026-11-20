@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import rr from "./RoundReview.module.css";
 import rm from "./ReplayMap.module.css";
 import coverage from "./AbilityCoverage.module.css";
-import { abilityCoverageRadii } from "./abilityCoverage";
+import { replayCoverageRadii } from "./abilityCoverage";
 import { REPLAY_FRAME_MS, type ProfileMatchDetails, type ReplayRound, type ReplayUtility } from "@/services/api";
 import { fmtLength } from "./profileShared";
 
@@ -128,20 +128,64 @@ export function smokeMoments(round: ReplayRound, moments: ReplayMoment[], side: 
 }
 
 export function replayMomentTime(moment: ReplayMoment) {
-    return moment.kind === "smoke" || moment.utility ? moment.time : moment.time - 2_000;
+    return moment.kind === "kill" ? moment.time - 2_000 : moment.time;
 }
 
 export function replayUtilityMoments(round: ReplayRound, side: (subject: string) => ReplaySide, playerName: (subject?: string) => string): Array<ReplayMoment & { utility: ReplayUtility }> {
-    return (round.utility ?? []).map((ability, index) => ({
-        id: `utility-${index}`, time: ability.startMs, kind: "utility", utility: ability,
-        actor: ability.subject, ally: ability.subject ? side(ability.subject) === "ally" : undefined,
-        label: ability.kind === "teleport" ? `${ability.name} teleport` : ability.name,
-        note: ability.subject ? playerName(ability.subject) : undefined,
-    }));
+    const seen = new Set<string>();
+    const moments = (round.utility ?? []).flatMap((ability, index) => {
+        const moment: ReplayMoment & { utility: ReplayUtility } = {
+            id: `utility-${index}`, time: ability.startMs, kind: "utility", utility: ability,
+            actor: ability.subject, ally: ability.subject ? side(ability.subject) === "ally" : undefined,
+            label: replayUtilityLabel(ability, ability.startMs),
+            note: ability.subject ? playerName(ability.subject) : undefined,
+        };
+        const activation = ability.activationMs;
+        return activation != null && activation > ability.startMs && activation < (ability.endMs ?? Infinity)
+            ? [moment, { ...moment, id: `${moment.id}-activation`, time: activation, label: replayUtilityLabel(ability, activation) }]
+            : [moment];
+    });
+    return moments.filter(moment => {
+        // One cast can spawn multiple wall blocks or grenades at the same time.
+        const key = JSON.stringify([moment.time, moment.label, moment.actor]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 
 export function isReplayUtilityVisible(ability: ReplayUtility, time: number) {
     return time >= ability.startMs && time < (ability.endMs ?? ability.startMs + 1_600);
+}
+
+function replayUtilityLabel(ability: ReplayUtility, time: number) {
+    if (ability.activationMs != null && time >= ability.activationMs) {
+        return `${ability.name} ${ability.kind === "trap" ? "triggered" : "activated"}`;
+    }
+    if (ability.state === "placed" || ability.kind === "trap") return `${ability.name} placed`;
+    if (ability.state === "damage") return `${ability.name} damage zone`;
+    if (ability.kind === "teleport") return `${ability.name} teleport`;
+    return ability.name;
+}
+
+export function replayUtilityPosition(ability: ReplayUtility, time: number) {
+    const track = ability.path;
+    if (!track?.length || time < track[0].ms) return ability;
+    let lo = 0, hi = track.length - 1;
+    while (lo < hi) {
+        const middle = Math.ceil((lo + hi) / 2);
+        if (track[middle].ms <= time) lo = middle;
+        else hi = middle - 1;
+    }
+    const previous = track[lo], next = track[lo + 1];
+    if (!next || next.ms - previous.ms > 350) return previous;
+    const fraction = (time - previous.ms) / (next.ms - previous.ms);
+    return { x: previous.x + (next.x - previous.x) * fraction, y: previous.y + (next.y - previous.y) * fraction };
+}
+
+function replayUtilityRadius(ability: ReplayUtility) {
+    if (ability.kind === "device" || ability.kind === "trap") return undefined;
+    return ability.radius || replayCoverageRadii.get(ability.name);
 }
 
 export function smokeTime(time: number) {
@@ -198,7 +242,7 @@ export function useReplayClock(round: ReplayRound, initialTime?: number) {
 export type ReplayClock = ReturnType<typeof useReplayClock>;
 
 export function replayClockLabel(time: number) {
-    return time < 0 ? `Buy ${fmtLength(-time)}` : fmtLength(time);
+    return time < 0 ? `Buy ${fmtLength(-time)}` : time === 0 ? "0:00" : fmtLength(time);
 }
 
 /** Players, vision cones, deaths, tracers and the spike over a map backdrop. */
@@ -209,6 +253,7 @@ export function ReplayMapLayer({
     side,
     localSubject,
     agentIcon,
+    abilityIcon,
     playerName,
     moments,
     plant,
@@ -224,6 +269,7 @@ export function ReplayMapLayer({
     side: (subject: string) => ReplaySide;
     localSubject: string;
     agentIcon: (subject?: string) => string | undefined;
+    abilityIcon: (name: string, subject?: string) => string | undefined;
     playerName: (subject?: string) => string;
     moments: ReplayMoment[];
     plant?: { time: number; x: number; y: number };
@@ -246,25 +292,30 @@ export function ReplayMapLayer({
     };
     const alive = [...poses.entries()].filter(([, pose]) => !pose.dead);
     const defuse = moments.find((moment) => moment.kind === "defuse");
-    const smokeZones = [
-        ...(round.smokes ?? []).map((effect, i) => ({ ...effect, name: "Dark Cover", id: `smoke-${i}` })),
-        ...(round.utility ?? []).flatMap((effect, i) => effect.kind === "smoke"
-            ? [{ ...effect, id: `utility-${i}` }] : []),
+    const visibleUtility = (round.utility ?? []).flatMap((ability, index) => {
+        if (!isReplayUtilityVisible(ability, time)) return [];
+        const position = replayUtilityPosition(ability, time);
+        return [{ ability, id: `utility-${index}`, position, spot: plot(position.x, position.y), radius: replayUtilityRadius(ability) }];
+    });
+    const zones = [
+        ...(round.smokes ?? []).flatMap((smoke, i) => time >= smoke.startMs && time < smoke.endMs
+            ? [{ ...smoke, kind: "smoke", name: "Dark Cover", id: `smoke-${i}`, radius: replayCoverageRadii.get("Dark Cover")! }] : []),
+        ...visibleUtility.flatMap(({ ability, id, position, radius }) => radius
+            ? [{ ...ability, ...position, id, radius }] : []),
     ];
 
     return (
         <div className={rm.layer} data-size={size} data-focus={focus ? true : undefined}>
-            {smokeZones.map((smoke) => {
-                const radius = abilityCoverageRadii.get(smoke.name);
-                if (!radius || time < smoke.startMs || time >= (smoke.endMs ?? smoke.startMs)) return null;
-                const center = plot(smoke.x, smoke.y);
-                const edge = plot(smoke.x + radius, smoke.y + radius);
-                return <span key={smoke.id} className={`${rm.smoke} ${coverage.texture}`}
-                    data-effect={smoke.name} data-ability={smoke.name}
-                    data-side={smoke.subject ? side(smoke.subject) : undefined}
-                    data-selected={selectedSmoke === smoke.id || undefined}
-                    style={{ left: `${center.left}%`, top: `${center.top}%`, width: `${2 * Math.abs(center.left - edge.left)}%`, height: `${2 * Math.abs(center.top - edge.top)}%` }}
-                    title={smoke.name} aria-hidden="true" />;
+            {zones.map((zone) => {
+                const center = plot(zone.x, zone.y);
+                const edge = plot(zone.x + zone.radius, zone.y + zone.radius);
+                const pulse = zone.kind === "pulse" ? Math.max(0.08, Math.min(1, (time - zone.startMs) / 1150)) : undefined;
+                return <span key={zone.id} className={`${rm.smoke} ${coverage.texture}`}
+                    data-effect={zone.name} data-ability={zone.name} data-kind={zone.kind}
+                    data-side={zone.subject ? side(zone.subject) : undefined}
+                    data-selected={selectedSmoke === zone.id || undefined}
+                    style={{ left: `${center.left}%`, top: `${center.top}%`, width: `${2 * Math.abs(center.left - edge.left)}%`, height: `${2 * Math.abs(center.top - edge.top)}%`, "--pulse": pulse } as CSSProperties}
+                    title={zone.name} aria-hidden="true" />;
             })}
             <svg className={rm.svg} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 {vision ? alive.map(([subject, pose]) => (
@@ -277,20 +328,29 @@ export function ReplayMapLayer({
                         data-focus={subject === focus || undefined}
                     />
                 )) : null}
-                {round.utility?.map((ability, index) => {
-                    if (!isReplayUtilityVisible(ability, time) || (ability.kind === "smoke" && abilityCoverageRadii.has(ability.name))) return null;
-                    const spot = plot(ability.x, ability.y);
+                {visibleUtility.map(({ ability, id, spot }) => {
                     const origin = ability.origin && plot(ability.origin.x, ability.origin.y);
-                    return <g key={`utility-${index}`}>
+                    const anchor = ability.anchor && plot(ability.anchor.x, ability.anchor.y);
+                    const segment = ability.segment?.map(point => plot(point.x, point.y));
+                    const activated = ability.activationMs != null && time >= ability.activationMs;
+                    const trail = ability.kind === "projectile" && ability.path?.filter(sample => sample.ms >= time - 550 && sample.ms <= time);
+                    return <g key={id} data-ability={ability.name} data-side={ability.subject ? side(ability.subject) : undefined}>
                         {origin && <>
                             <line className={rm.teleportLine} x1={origin.left} y1={origin.top} x2={spot.left} y2={spot.top} />
                             <circle className={rm.teleportOrigin} cx={origin.left} cy={origin.top} r={0.72} />
                         </>}
-                        <circle className={rm.utilityPoint} cx={spot.left} cy={spot.top} r={1.12}
-                            data-ability={ability.name} data-effect={ability.kind}
-                            data-side={ability.subject ? side(ability.subject) : undefined}>
-                            <title>{ability.kind === "teleport" ? `${ability.name} destination` : ability.name}</title>
-                        </circle>
+                        {anchor && <>
+                            <line className={rm.trapwire} data-activated={activated || undefined}
+                                x1={spot.left} y1={spot.top} x2={anchor.left} y2={anchor.top} />
+                            <circle className={rm.trapAnchor} cx={anchor.left} cy={anchor.top} r={0.56} />
+                        </>}
+                        {segment && <>
+                            <line className={rm.wallSegment} x1={segment[0].left} y1={segment[0].top} x2={segment[1].left} y2={segment[1].top} />
+                            <line className={rm.wallEdge} x1={segment[0].left} y1={segment[0].top} x2={segment[1].left} y2={segment[1].top} />
+                            <title>{ability.name}</title>
+                        </>}
+                        {trail && trail.length > 0 && <polyline className={rm.utilityTrail}
+                            points={[...trail.map(point => plot(point.x, point.y)), spot].map(point => `${point.left},${point.top}`).join(" ")} />}
                     </g>;
                 })}
                 {recentShots.map((moment) => {
@@ -302,6 +362,17 @@ export function ReplayMapLayer({
                     return <line key={moment.id} className={rm.shot} x1={a.left} y1={a.top} x2={b.left} y2={b.top} data-side={moment.ally ? "ally" : "enemy"} style={{ opacity: 1 - (time - moment.time) / SHOT_MS }} />;
                 })}
             </svg>
+            {visibleUtility.map(({ ability, id, spot, radius }) => {
+                if (radius || ability.segment) return null;
+                const icon = abilityIcon(ability.name, ability.subject);
+                const label = replayUtilityLabel(ability, time);
+                return <span key={id} className={rm.utilityPin} data-ability={ability.name} data-effect={ability.kind}
+                    data-state={ability.state} data-activated={ability.activationMs != null && time >= ability.activationMs || undefined}
+                    data-side={ability.subject ? side(ability.subject) : undefined}
+                    style={{ left: `${spot.left}%`, top: `${spot.top}%` }} title={label} aria-label={label}>
+                    {icon ? <img src={icon} alt="" draggable={false} /> : <b>{ability.name.slice(0, 2)}</b>}
+                </span>;
+            })}
             {plant && time >= plant.time && (!defuse || time < defuse.time) ? (() => {
                 const spot = plot(plant.x, plant.y);
                 return <i className={rm.spike} style={{ left: `${spot.left}%`, top: `${spot.top}%` }} title={`Spike planted at ${fmtLength(plant.time)}`} />;
@@ -340,6 +411,7 @@ export function ReplayTimeline({ clock, moments, current, compact = false, onPic
         seek(firstMs + Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * (lastMs - firstMs));
     };
     const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.target !== event.currentTarget) return;
         const jump = event.shiftKey ? 10_000 : 3_000;
         if (event.key === "ArrowRight") seek(time + jump);
         else if (event.key === "ArrowLeft") seek(time - jump);
@@ -431,6 +503,7 @@ export function FullRoundReplay({
     localSubject,
     localTeam,
     agentIcon,
+    abilityIcon,
     playerName,
     moments,
     activeMomentId,
@@ -445,6 +518,7 @@ export function FullRoundReplay({
     localSubject: string;
     localTeam: string;
     agentIcon: (subject?: string) => string | undefined;
+    abilityIcon: (name: string, subject?: string) => string | undefined;
     playerName: (subject?: string) => string;
     moments: ReplayMoment[];
     activeMomentId: string | null;
@@ -496,7 +570,7 @@ export function FullRoundReplay({
             <div className={rr.mapWrap}>
                 <div className={rr.map} data-replay data-full>
                     {children}
-                    <ReplayMapLayer round={round} time={time} plot={plot} side={side} localSubject={localSubject} agentIcon={agentIcon} playerName={playerName} moments={moments} plant={plant} />
+                    <ReplayMapLayer round={round} time={time} plot={plot} side={side} localSubject={localSubject} agentIcon={agentIcon} abilityIcon={abilityIcon} playerName={playerName} moments={moments} plant={plant} />
                     <button type="button" className={rm.expand} onClick={() => { clock.setPlaying(false); onExpand(time); }} aria-label="Open the big replay view" title="Big replay view">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
                     </button>

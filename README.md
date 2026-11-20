@@ -129,14 +129,14 @@ Android cannot use the Windows Riot lockfile, tray, desktop overlay, local game 
 
 For the current architecture, supported API surface, and security boundaries, read the [Android security and Riot API plan](docs/ANDROID_SECURITY_AND_RIOT_API_PLAN.md).
 
-## What's new in 0.5.33
+## What's new in 0.5.34
 
-- Download a replay from VALORANT and play full rounds in Replay Theater.
-- See recorded utility on the map, including smoke coverage and Chamber’s teleport.
-- Use **Plan from here** to turn a replay moment into an editable Tactics Board play.
-- Local Client mode follows the account signed in to Riot Client.
+- Open VALORANT 13.10 recordings in Replay Theater and see more recorded utility, including Cypher wires, Killjoy activations, and moving projectiles.
+- Jump from fights and takeaways in the Map tab into the saved replay.
+- Place and move pieces directly on the Tactics Board, or start a play from the current replay frame.
+- Use the shop on a signed-in Riot Client account while its Riot ID is unavailable. Renew eligible saved accounts with **Renew all**.
 
-[Read the release notes](.github/release-notes/v0.5.33.md) · [Try a recorded round in your browser](https://vanta-vault-app.vercel.app/#replay)
+[Read the release notes](.github/release-notes/v0.5.34.md) · [Try a recorded round in your browser](https://vanta-vault-app.vercel.app/#replay)
 
 ## Development
 

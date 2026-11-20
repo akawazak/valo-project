@@ -7931,3 +7931,36 @@ button.mapEvent .mapPoint { left: 50%; top: 50%; transform: translate(-50%, -50%
     background: rgba(4, 10, 16, 0.68);
     border-color: rgba(255, 255, 255, 0.18);
 }
+
+.mapReplayActions, .mapReplayExamples, .mapReplayClock, .mapReplayClock > div {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.mapReplayActions { margin-top: 12px; }
+.mapReplayActions button, .mapReplayExamples button, .mapReplayClock button {
+    padding: 5px 9px;
+    border: 1px solid #355064;
+    border-radius: 5px;
+    background: #101c26;
+    color: #d4e5ef;
+    font: 600 11px/1.3 var(--match-font);
+    cursor: pointer;
+}
+.mapReplayActions button:first-child, .mapReplayActions button[aria-pressed="true"], .mapReplayClock button[aria-pressed="true"] {
+    border-color: #2b9d82;
+    background: #102d28;
+    color: #7ff3d3;
+}
+.mapReplayActions button:hover, .mapReplayExamples button:hover, .mapReplayClock button:hover { border-color: #8bc8df; }
+.mapReplayActions button:focus-visible, .mapReplayExamples button:focus-visible, .mapReplayClock button:focus-visible {
+    outline: 2px solid #7ff3d3;
+    outline-offset: 2px;
+}
+.mapReplayActions > span, .mapReplayClock > span, .mapReplayExamples > span { color: #92a9b8; font-size: 11px; }
+.mapReplayClock { justify-content: space-between; padding-top: 8px; }
+.mapReviewEntry { min-width: 0; }
+.mapReviewEntry:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.mapReviewEntry > .mapReviewCard { width: 100%; }
+.mapReplayExamples { padding: 7px 8px; }

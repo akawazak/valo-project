@@ -793,9 +793,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
         // into a saved OAuth login, or erase a real saved login for it.
         let stableAcc: RiotAccount;
         if (isLockfileAccount(acc)) {
+            const { gameName, tagLine } = !acc.tagLine && existing?.tagLine ? existing : acc;
             stableAcc = existing && !isLockfileAccount(existing)
-                ? { ...existing, gameName: acc.gameName, tagLine: acc.tagLine, region: acc.region }
-                : { ...acc, authSource: "lockfile", sessionId: undefined, ssid: undefined };
+                ? { ...existing, gameName, tagLine, region: acc.region }
+                : { ...acc, gameName, tagLine, authSource: "lockfile", sessionId: undefined, ssid: undefined };
         } else {
             stableAcc = {
                 ...existing,
@@ -1684,8 +1685,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
                     }
                 }
             }).catch(() => {
-                // Riot may expose entitlements before name lookup is ready. Keep
-                // trying without requiring a client restart or another login.
+                // Riot can briefly be between sessions while switching accounts.
                 if (!cancelled) retryTimer = window.setTimeout(discover, 3_000);
             });
         };

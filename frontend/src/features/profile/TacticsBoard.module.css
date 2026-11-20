@@ -66,6 +66,8 @@
 .abilities { min-width: 0; overflow-x: auto; padding: 3px; scrollbar-width: thin; }
 .abilities strong { flex: none; margin: 0 6px; color: #c8d9e2; }
 .abilities button { flex: none; display: flex; align-items: center; gap: 6px; text-align: left; }
+.shell .agents button:not(:disabled), .shell .abilities button:not(:disabled) { cursor: grab; touch-action: pan-x; user-select: none; }
+.shell .agents button:active, .shell .abilities button:active { cursor: grabbing; }
 .abilities img { width: 16px; height: 16px; object-fit: contain; }
 .abilitySwatch { position: relative; display: grid; flex: none; place-items: center; width: 21px; height: 21px; border-radius: 50%; }
 .abilitySwatch[data-effect] img { position: relative; z-index: 1; width: 13px; height: 13px; filter: drop-shadow(0 1px 2px #06101b); }
@@ -88,6 +90,8 @@
     aspect-ratio: 1; isolation: isolate; touch-action: none; user-select: none;
 }
 .map:not([data-tool="move"]) { cursor: crosshair; }
+.map[data-tool="pan"] { cursor: grab; }
+.map[data-panning] { cursor: grabbing; }
 .mapImage, .routes { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .mapImage { object-fit: contain; filter: drop-shadow(0 6px 14px #0008); }
 .mapImage[data-tactical] { filter: var(--map-palette) drop-shadow(0 6px 14px #0008); }
@@ -103,7 +107,7 @@
 .routes path { fill: var(--ally); }
 .routes path[data-side="enemy"] { fill: var(--enemy); }
 .routes polyline[data-selected] { stroke: #fff; stroke-width: 0.67; }
-.routes .routeHit { stroke: transparent; stroke-width: 2; pointer-events: stroke; cursor: pointer; }
+.routes .routeHit { stroke: transparent; stroke-width: 2; pointer-events: stroke; cursor: grab; }
 .routes .routeHit:focus-visible { stroke: #eef4f754; outline: 0; }
 .pin { --team: var(--ally); position: absolute; z-index: 3; width: 0; height: 0; pointer-events: none; }
 .pin[data-side="enemy"] { --team: var(--enemy); }
@@ -129,7 +133,8 @@
 .pin[data-kind="spike"] > button { border-color: #f8f0b7; color: #f8f0b7; font-size: 18px; }
 .pin > button[aria-pressed="true"] { border-color: #fff; box-shadow: 0 0 0 2px var(--team), 0 3px 10px #07101699; }
 .pin > button:disabled { opacity: 1; }
-.map:not([data-tool="move"]) .pin > button { pointer-events: none; }
+.map[data-tool="route"] .pin > button, .map[data-tool="pan"] .pin > button, .map .pin[data-preview] > button { pointer-events: none; }
+.pin[data-preview] { opacity: 0.75; }
 .map[data-playing] .pin { transition: left 0.42s ease-out, top 0.42s ease-out; }
 .abilityCoverage {
     position: absolute; width: var(--coverage-width); height: var(--coverage-height);
